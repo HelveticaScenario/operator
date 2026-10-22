@@ -37,6 +37,7 @@ paste = "1.0"
 profiling = { workspace = true }
 rustfft = "6.2"
 bumpalo = { version = "3.16", features = ["collections"] }
+wide = "1.7.1"
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
@@ -55,6 +56,10 @@ harness = false
 
 [[bench]]
 name = "patch_bench"
+harness = false
+
+[[bench]]
+name = "drums_bench"
 harness = false
 
 [dependencies.napi]

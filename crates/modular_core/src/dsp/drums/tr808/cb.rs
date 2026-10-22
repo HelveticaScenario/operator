@@ -9,15 +9,19 @@
 //! trigger pulse and drains through the VCAs, and R82 with C34 across it
 //! pulls the envelope down quickly at first, for a sharp attack.
 
+use std::ops::Range;
+
 use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{Timing, pulse_volts};
+use super::levels;
 use crate::dsp::drums::analog::{high_pass, one_pole_coeff, rc_hz};
+use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Pulse, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices, rails};
 use crate::dsp::utils::voct_to_hz;
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal};
 
 // Network unknowns: the envelope on C9, the R82/C34 junction, the two VCA
 // nodes, the junctions of R26/C30 and R27/C31, IC2's summing node M, its
@@ -78,10 +82,7 @@ const SPENT_ABOVE_CLAMP: f32 = 1.0e-3;
 const SETTLED_OUT: f32 = 1.0e-3;
 
 /// Scales the output so an unaccented hit peaks near 5 V.
-const OUTPUT_GAIN: f32 = 0.87;
-
-/// The stock low oscillator's pitch in V/Oct.
-const DEFAULT_FREQ: f32 = 1.0454;
+const OUTPUT_GAIN: f32 = 0.883;
 
 fn network() -> MnaBuilder<UNKNOWNS> {
     let mut b = MnaBuilder::<UNKNOWNS>::default();
@@ -137,14 +138,23 @@ fn osc_high((phase, inc): (f32, f32), frac: f32) -> bool {
     (phase + inc * frac).fract() < DUTY
 }
 
-impl Circuit for Bell {
-    type Shared = BellShared;
-    type Controls = BellControls;
+/// Brings a fully accented hit to twice the level of an unaccented one.
+const ACCENT_TRIM: f32 = 1.253;
+
+impl Fire for Bell {
+    fn accent_trim(_: &BellShared) -> f32 {
+        ACCENT_TRIM
+    }
 
     fn fire(&mut self, accent: f32, shared: &BellShared) {
         let volts = pulse_volts(accent);
         self.pulse.fire(volts, shared.timing.pulse_samples);
     }
+}
+
+impl Circuit for Bell {
+    type Shared = BellShared;
+    type Controls = BellControls;
 
     fn settled(&self) -> bool {
         // C9 drains toward the clamp, where the swing it can give the VCAs,
@@ -192,7 +202,7 @@ impl Circuit for Bell {
     }
 }
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct Cb808Params {
@@ -214,7 +224,7 @@ struct Cb808Params {
     /// the hardware (default false)
     #[serde(default)]
     #[deserr(default)]
-    choke: bool,
+    restart: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -235,9 +245,9 @@ struct Cb808Outputs {
 /// **±10 V**.
 ///
 /// ```js
-/// $tr808.cb($clock.beatTrigger).out()
+/// $tr808.cowbell($clock.beatTrigger).out()
 /// ```
-#[module(name = "$tr808.cb", has_init, args(trigger))]
+#[module(name = "$tr808.cowbell", has_init, args(trigger), block)]
 pub struct Cb808 {
     outputs: Cb808Outputs,
     params: Cb808Params,
@@ -250,6 +260,9 @@ struct Channel {
     voices: Voices<Bell>,
     /// The oscillators' phases, in cycles.
     phases: [f32; 2],
+    /// Their steps per sample at the channel's `freq`, and the output gain
+    /// levelling it.
+    tuning: Cached<f32, ([f32; 2], f32)>,
 }
 
 impl Cb808 {
@@ -287,30 +300,92 @@ impl Cb808 {
     }
 
     fn update(&mut self, sample_rate: f32) {
-        let sh = &self.state;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-            let r = voct_to_hz(p.freq.value_or(ch, DEFAULT_FREQ)) / OSC_LOW_HZ;
+        let channels = self.channel_count();
+        let p = &self.params;
+        let inputs = [
+            Live::new(&p.trigger),
+            Live::or(&p.accent, Cb808Params::ACCENT_DEFAULT),
+            Live::or(&p.freq, Cb808Params::FREQ_DEFAULT),
+        ];
+        let out = &mut self.outputs.sample;
+        tick(
+            &self.state,
+            &mut self.channel_state[..channels],
+            p.restart,
+            sample_rate,
+            inputs,
+            |ch, v| out.set(ch, v),
+        );
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut Cb808BlockOutputs,
+        range: Range<usize>,
+        sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch = Default::default();
+        let Cb808ParamsBlockInputs {
+            trigger,
+            accent,
+            freq,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
+        let channel_state = &mut self.channel_state[..channels];
+        each_slot(
+            &mut outputs.sample,
+            range,
+            [trigger, accent, freq],
+            |inputs, mut slot| {
+                tick(
+                    &self.state,
+                    channel_state,
+                    p.restart,
+                    sample_rate,
+                    inputs,
+                    |ch, v| slot.set(ch, v),
+                )
+            },
+        );
+        Some(())
+    }
+}
+
+/// Runs one sample of every channel on its `[trigger, accent, freq]`,
+/// handing `out` each one's output.
+#[inline(always)]
+fn tick<I: Input>(
+    sh: &BellShared,
+    channels: &mut [Channel],
+    restart: bool,
+    sample_rate: f32,
+    [trigger, accent, freq]: [I; 3],
+    mut out: impl FnMut(usize, f32),
+) {
+    for (ch, cs) in channels.iter_mut().enumerate() {
+        let (inc, level) = cs.tuning.get(freq.at(ch), |freq| {
+            let r = voct_to_hz(freq) / OSC_LOW_HZ;
             let inc = [OSC_LOW_HZ * r / sample_rate, OSC_HIGH_HZ * r / sample_rate];
-            let phases = &mut cs.phases;
-            let controls = BellControls {
-                low: (phases[0], inc[0]),
-                high: (phases[1], inc[1]),
-            };
-            let out = cs.voices.process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                sh.timing.choke_samples,
-                sh,
-                &controls,
-            );
-            phases[0] = (phases[0] + inc[0]).fract();
-            phases[1] = (phases[1] + inc[1]).fract();
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
-        }
+            (inc, levels::COWBELL.gain(freq))
+        });
+        let phases = &mut cs.phases;
+        let controls = BellControls {
+            low: (phases[0], inc[0]),
+            high: (phases[1], inc[1]),
+        };
+        let v = cs.voices.process(
+            trigger.at(ch),
+            accent,
+            ch,
+            restart,
+            sh.timing.fade_samples,
+            sh,
+            &controls,
+        );
+        phases[0] = (phases[0] + inc[0]).fract();
+        phases[1] = (phases[1] + inc[1]).fract();
+        out(ch, rails(v * OUTPUT_GAIN * level));
     }
 }
 

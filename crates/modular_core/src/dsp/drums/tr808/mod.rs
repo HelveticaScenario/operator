@@ -7,14 +7,13 @@ use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
 pub mod bd;
 pub mod cb;
-pub mod ch;
 mod circuit;
 mod cp;
 pub mod cy;
-mod hh;
+pub mod hh;
+mod levels;
 mod ma;
 mod metal;
-pub mod oh;
 pub mod rs;
 pub mod sd;
 mod swing;
@@ -29,8 +28,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     cp::Cp808::install_constructor(map);
     ma::Ma808::install_constructor(map);
     cy::Cy808::install_constructor(map);
-    oh::Oh808::install_constructor(map);
-    ch::Ch808::install_constructor(map);
+    hh::Hh808::install_constructor(map);
     tom::Lt808::install_constructor(map);
     tom::Mt808::install_constructor(map);
     tom::Ht808::install_constructor(map);
@@ -48,8 +46,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     cp::Cp808::install_params_deserializer(map);
     ma::Ma808::install_params_deserializer(map);
     cy::Cy808::install_params_deserializer(map);
-    oh::Oh808::install_params_deserializer(map);
-    ch::Ch808::install_params_deserializer(map);
+    hh::Hh808::install_params_deserializer(map);
     tom::Lt808::install_params_deserializer(map);
     tom::Mt808::install_params_deserializer(map);
     tom::Ht808::install_params_deserializer(map);
@@ -68,8 +65,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         cp::Cp808::get_schema(),
         ma::Ma808::get_schema(),
         cy::Cy808::get_schema(),
-        oh::Oh808::get_schema(),
-        ch::Ch808::get_schema(),
+        hh::Hh808::get_schema(),
         tom::Lt808::get_schema(),
         tom::Mt808::get_schema(),
         tom::Ht808::get_schema(),

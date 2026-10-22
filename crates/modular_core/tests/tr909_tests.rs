@@ -4,6 +4,7 @@
 //!
 //! A constant 5 V trigger strikes each drum on its first sample.
 
+use modular_core::Patch;
 use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
 use modular_core::types::{ProcessingMode, Sampleable};
@@ -11,13 +12,13 @@ use serde_json::{Value, json};
 
 const SR: f32 = 48_000.0;
 
-const BD: &str = "$tr909.bd";
-const SD: &str = "$tr909.sd";
-const LT: &str = "$tr909.lt";
-const MT: &str = "$tr909.mt";
-const HT: &str = "$tr909.ht";
-const RS: &str = "$tr909.rs";
-const CP: &str = "$tr909.cp";
+const BD: &str = "$tr909.kick";
+const SD: &str = "$tr909.snare";
+const LT: &str = "$tr909.lowTom";
+const MT: &str = "$tr909.midTom";
+const HT: &str = "$tr909.highTom";
+const RS: &str = "$tr909.rimShot";
+const CP: &str = "$tr909.clap";
 const ALL: [&str; 7] = [BD, SD, LT, MT, HT, RS, CP];
 
 fn make(module_type: &str, params: Value, sample_rate: f32) -> Box<dyn Sampleable> {
@@ -51,6 +52,68 @@ fn render_at(module_type: &str, mut params: Value, secs: f32, sample_rate: f32) 
 
 fn render(module_type: &str, params: Value, secs: f32) -> Vec<f32> {
     render_at(module_type, params, secs, SR)
+}
+
+/// The median peak of hits on a voice at rest: one on each of `channels`
+/// channels, which each draw their own noise, struck once and again after
+/// the first hit has settled.
+fn median_hit_peak(module_type: &str, mut params: Value, channels: usize) -> f32 {
+    const BLOCK: usize = 64;
+    let clock = json!({ "type": "cable", "module": "clock", "port": "output", "channel": 0 });
+    params["trigger"] = json!(vec![clock; channels]);
+    let modules = [
+        (
+            "clock",
+            "$pulse",
+            json!({ "freq": (1.0f32 / 261.625_58).log2() }),
+        ),
+        ("drum", module_type, params),
+    ];
+    let deserializers = get_params_deserializers();
+    let mut patch = Patch::new();
+    patch
+        .insert_modules(
+            modules.into_iter().map(|(id, module_type, params)| {
+                let cached = deserializers[module_type](params).unwrap();
+                (
+                    id.to_string(),
+                    module_type.to_string(),
+                    DeserializedParams {
+                        params: cached.params,
+                        channel_count: cached.channel_count,
+                    },
+                    ProcessingMode::Block,
+                )
+            }),
+            SR,
+            BLOCK,
+        )
+        .unwrap();
+    patch.connect_all();
+    for m in patch.sampleables.values() {
+        m.on_patch_update();
+    }
+    let (clock, drum) = (&patch.sampleables["clock"], &patch.sampleables["drum"]);
+    let mut peaks = vec![0.0f32; channels];
+    let (mut edges, mut prev) = (0, 0.0);
+    for _ in 0..(1.3 * SR) as usize / BLOCK {
+        clock.start_block();
+        drum.start_block();
+        clock.ensure_processed_to(BLOCK);
+        drum.ensure_processed_to(BLOCK);
+        for i in 0..BLOCK {
+            let gate = clock.get_value_at("output", 0, i);
+            edges += (prev < 1.0 && gate >= 1.0) as usize;
+            prev = gate;
+            if edges == 2 {
+                for (ch, p) in peaks.iter_mut().enumerate() {
+                    *p = p.max(drum.get_value_at("output", ch, i).abs());
+                }
+            }
+        }
+    }
+    peaks.sort_by(f32::total_cmp);
+    peaks[channels / 2]
 }
 
 fn peak(x: &[f32]) -> f32 {
@@ -111,10 +174,12 @@ fn voices_are_silent_until_struck() {
 #[test]
 fn accent_doubles_the_level() {
     for voice in ALL {
-        let soft = peak(&render(voice, json!({ "accent": 0.0 }), 0.3));
-        let hard = peak(&render(voice, json!({ "accent": 5.0 }), 0.3));
-        assert!((soft - 5.0).abs() < 1.0, "{voice} {soft}");
-        assert!((1.7..2.4).contains(&(hard / soft)), "{voice} {soft} {hard}");
+        // Noise makes each kick, snare and clap peak differently.
+        let channels = if [BD, SD, CP].contains(&voice) { 8 } else { 1 };
+        let soft = median_hit_peak(voice, json!({ "accent": 0.0 }), channels);
+        let hard = median_hit_peak(voice, json!({ "accent": 5.0 }), channels);
+        assert!((soft - 5.0).abs() < 0.75, "{voice} {soft}");
+        assert!((hard - 10.0).abs() < 1.5, "{voice} {hard}");
     }
 }
 

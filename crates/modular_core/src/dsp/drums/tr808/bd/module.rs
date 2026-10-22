@@ -1,6 +1,10 @@
-use super::*;
+use std::ops::Range;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+use super::*;
+use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::voice::rails;
+
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct Bd808Params {
@@ -34,7 +38,7 @@ struct Bd808Params {
     /// hardware (default false)
     #[serde(default)]
     #[deserr(default)]
-    choke: bool,
+    restart: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -53,22 +57,29 @@ struct Bd808Outputs {
 /// attack click comes through, and **accent**, sampled at each strike, drives
 /// the circuit harder. Retriggering a ringing drum adds to its current state
 /// rather than restarting it, as on the hardware, so long decays at fast
-/// tempos swing in level from hit to hit; **choke** starts every hit from rest
-/// instead.
+/// tempos swing in level from hit to hit; **restart** starts every hit from
+/// rest instead.
 ///
-/// An unaccented hit peaks near **±5 V** and a fully accented one near
-/// **±10 V**; higher **freq** and **tone** run hotter, up to where the
-/// circuit's op-amp clips.
+/// An unaccented hit peaks near **±5 V** at any **freq**, and a fully
+/// accented one near **±10 V**; toward the top of the **freq** range the
+/// circuit's op-amp clips, so accent adds less there.
 ///
 /// ```js
-/// $tr808.bd($clock.beatTrigger, { decay: 2 }).out()
+/// $tr808.kick($clock.beatTrigger, { decay: 2 }).out()
 /// ```
-#[module(name = "$tr808.bd", has_init, args(trigger))]
+#[module(name = "$tr808.kick", has_init, patch_update, args(trigger), block)]
 pub struct Bd808 {
     outputs: Bd808Outputs,
     params: Bd808Params,
-    state: Bd808State,
+    state: BdModule,
     channel_state: Box<[ChannelState]>,
+}
+
+/// The bass drum's per-sample-rate constants and its channel groups.
+#[derive(Default)]
+struct BdModule {
+    st: Bd808State,
+    groups: Groups<BassDrum>,
 }
 
 #[derive(Clone, Copy)]
@@ -94,7 +105,8 @@ impl Default for ChannelState {
 
 impl Bd808 {
     fn init(&mut self, sample_rate: f32) {
-        let st = &mut self.state;
+        self.state.groups = Groups::new();
+        let st = &mut self.state.st;
         let dt = 1.0 / sample_rate;
         st.timing = Timing::new(sample_rate);
         st.dt = dt;
@@ -110,35 +122,129 @@ impl Bd808 {
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let st = &self.state;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-            let freq = p.freq.value_or(ch, DEFAULT_FREQ);
-            let decay = p.decay.value_or(ch, DEFAULT_DECAY);
-            if freq != cs.network.freq || decay != cs.network.decay {
-                cs.network = Network::new(freq, decay, st.rest_hz);
-            }
-            let tone = p.tone.value_or(ch, DEFAULT_TONE);
-            if tone != cs.tone {
-                cs.tone = tone;
-                cs.tone_coeff = one_pole_coeff(tone_hz(tone), st.sample_rate);
-            }
-            let controls = Controls {
-                network: cs.network,
-                tone_coeff: cs.tone_coeff,
-            };
-            let out = cs.voices.process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                st.timing.choke_samples,
-                st,
-                &controls,
-            );
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
+        let channels = self.channel_count();
+        let p = &self.params;
+        let inputs = [
+            Live::new(&p.trigger),
+            Live::or(&p.accent, Bd808Params::ACCENT_DEFAULT),
+            Live::or(&p.freq, Bd808Params::FREQ_DEFAULT),
+            Live::or(&p.decay, Bd808Params::DECAY_DEFAULT),
+            Live::or(&p.tone, Bd808Params::TONE_DEFAULT),
+        ];
+        let out = &mut self.outputs.sample;
+        self.state.tick(
+            &mut self.channel_state[..channels],
+            p.restart,
+            inputs,
+            |ch, v| out.set(ch, v),
+        );
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut Bd808BlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch = Default::default();
+        let Bd808ParamsBlockInputs {
+            trigger,
+            accent,
+            freq,
+            decay,
+            tone,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
+        let channel_state = &mut self.channel_state[..channels];
+        each_slot(
+            &mut outputs.sample,
+            range,
+            [trigger, accent, freq, decay, tone],
+            |inputs, mut slot| {
+                self.state
+                    .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
+            },
+        );
+        Some(())
+    }
+}
+
+impl BdModule {
+    /// Runs one sample of every channel on its `[trigger, accent, freq, decay,
+    /// tone]`, handing `out` each one's output.
+    #[inline(always)]
+    fn tick<I: Input>(
+        &mut self,
+        channels: &mut [ChannelState],
+        restart: bool,
+        [trigger, accent, freq, decay, tone]: [I; 5],
+        mut out: impl FnMut(usize, f32),
+    ) {
+        let run = Run {
+            accent,
+            restart,
+            fade_samples: self.st.timing.fade_samples,
+            shared: &self.st,
+        };
+        let inputs = BdInputs {
+            st: &self.st,
+            trigger,
+            freq,
+            decay,
+            tone,
+        };
+        self.groups.run(&inputs, channels, &run, |ch, v| {
+            out(ch, rails(v * OUTPUT_GAIN))
+        });
+    }
+}
+
+/// The inputs every channel of the bass drum reads.
+struct BdInputs<'a, I> {
+    st: &'a Bd808State,
+    trigger: I,
+    freq: I,
+    decay: I,
+    tone: I,
+}
+
+impl<I: Input> Channels<BassDrum> for BdInputs<'_, I> {
+    type Channel = ChannelState;
+
+    fn voices(channel: &mut ChannelState) -> &mut Voices<Voice> {
+        &mut channel.voices
+    }
+
+    #[inline(always)]
+    fn inputs(&self, ch: usize, cs: &mut ChannelState) -> (f32, Controls) {
+        let freq = self.freq.at(ch);
+        let decay = self.decay.at(ch);
+        if freq != cs.network.freq || decay != cs.network.decay {
+            cs.network = Network::new(freq, decay, self.st.rest_hz);
         }
+        let tone = self.tone.at(ch);
+        if tone != cs.tone {
+            cs.tone = tone;
+            cs.tone_coeff = one_pole_coeff(tone_hz(tone), self.st.sample_rate);
+        }
+        let controls = Controls {
+            c: cs.network.c,
+            a: cs.network.a,
+            g: cs.network.g,
+            tone_coeff: cs.tone_coeff,
+            level: cs.network.level,
+        };
+        (self.trigger.at(ch), controls)
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Bd808 {
+    fn on_patch_update(&mut self) {
+        let count = self.channel_count();
+        self.state
+            .groups
+            .layout::<BdInputs<&[f32]>>(&mut self.channel_state, count);
     }
 }
 

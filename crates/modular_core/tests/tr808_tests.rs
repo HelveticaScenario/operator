@@ -72,8 +72,19 @@ fn render_clocked(
 /// first clock.
 fn render_clocks(
     module_type: &str,
+    params: Value,
+    clocks: &[(&str, f32)],
+    secs: f32,
+) -> (Vec<f32>, Vec<usize>) {
+    render_clocks_from(module_type, params, clocks, "output", secs)
+}
+
+/// [`render_clocks`], from the drum's `output`.
+fn render_clocks_from(
+    module_type: &str,
     mut params: Value,
     clocks: &[(&str, f32)],
+    output: &str,
     secs: f32,
 ) -> (Vec<f32>, Vec<usize>) {
     const BLOCK: usize = 64;
@@ -124,7 +135,7 @@ fn render_clocks(
                 strikes.push(x.len());
             }
             prev = gate;
-            x.push(drum.get_value_at("output", 0, i));
+            x.push(drum.get_value_at(output, 0, i));
         }
     }
     (x, strikes)
@@ -133,6 +144,16 @@ fn render_clocks(
 /// Peak level between consecutive strikes.
 fn hit_peaks(x: &[f32], strikes: &[usize]) -> Vec<f32> {
     strikes.windows(2).map(|w| peak(&x[w[0]..w[1]])).collect()
+}
+
+/// The median peak of hits struck from rest by a 4 Hz clock, which holds
+/// still where the noise in a voice makes each hit's peak differ.
+fn median_hit_peak(module_type: &str, mut params: Value) -> f32 {
+    params["restart"] = json!(true);
+    let (x, strikes) = render_retriggered(module_type, params, 4.0, 6.0);
+    let mut peaks = hit_peaks(&x, &strikes);
+    peaks.sort_by(f32::total_cmp);
+    peaks[peaks.len() / 2]
 }
 
 /// Largest change between neighbouring samples.
@@ -224,7 +245,7 @@ fn energy_above(x: &[f32], hz: f32) -> f32 {
     y.iter().map(|v| v * v).sum::<f32>() / x.iter().map(|v| v * v).sum::<f32>()
 }
 
-const BD: &str = "$tr808.bd";
+const BD: &str = "$tr808.kick";
 /// The stock bridged-T's centre frequency at rest.
 const BD_REST_HZ: f32 = 49.45;
 
@@ -279,14 +300,6 @@ fn bd_accent_doubles_the_level() {
     let hard = peak(&render(BD, json!({ "accent": 5.0 }), 0.1));
     assert!((soft - 5.0).abs() < 0.3, "{soft}");
     assert!((hard - 10.0).abs() < 0.6, "{hard}");
-}
-
-#[test]
-fn bd_op_amp_clips_at_its_rails() {
-    // 13.5 V of op-amp swing, scaled to the output.
-    let x = render(BD, json!({ "freq": 1.0, "tone": 5.0, "accent": 5.0 }), 0.1);
-    let top = peak(&x);
-    assert!((15.0..17.0).contains(&top), "{top}");
 }
 
 #[test]
@@ -368,8 +381,8 @@ fn bd_retriggers_add_to_the_ring() {
 }
 
 #[test]
-fn bd_choke_makes_every_hit_alike() {
-    let (x, strikes) = render_retriggered(BD, json!({ "decay": 5.0, "choke": true }), 4.0, 4.0);
+fn bd_restart_makes_every_hit_alike() {
+    let (x, strikes) = render_retriggered(BD, json!({ "decay": 5.0, "restart": true }), 4.0, 4.0);
     let single = peak(&render(BD, json!({ "decay": 5.0 }), 0.25));
     for p in hit_peaks(&x, &strikes) {
         assert!((p / single - 1.0).abs() < 0.02, "{p} vs {single}");
@@ -377,9 +390,9 @@ fn bd_choke_makes_every_hit_alike() {
 }
 
 #[test]
-fn bd_choke_fades_without_a_click() {
-    // Steps at a choked strike stay within those of a hit from rest.
-    let (x, _) = render_retriggered(BD, json!({ "decay": 5.0, "choke": true }), 4.0, 2.0);
+fn bd_restart_fades_without_a_click() {
+    // Steps at a restarting strike stay within those of a hit from rest.
+    let (x, _) = render_retriggered(BD, json!({ "decay": 5.0, "restart": true }), 4.0, 2.0);
     let single = render(BD, json!({ "decay": 5.0 }), 0.25);
     assert!(
         max_step(&x) < 1.1 * max_step(&single),
@@ -391,14 +404,14 @@ fn bd_choke_fades_without_a_click() {
 
 /// Each tom and conga with its stock resting pitch, Hz.
 const TOMS: [(&str, f32); 3] = [
-    ("$tr808.lt", 86.55),
-    ("$tr808.mt", 134.27),
-    ("$tr808.ht", 182.24),
+    ("$tr808.lowTom", 86.55),
+    ("$tr808.midTom", 134.27),
+    ("$tr808.highTom", 182.24),
 ];
 const CONGAS: [(&str, f32); 3] = [
-    ("$tr808.lc", 191.91),
-    ("$tr808.mc", 276.39),
-    ("$tr808.hc", 404.59),
+    ("$tr808.lowConga", 191.91),
+    ("$tr808.midConga", 276.39),
+    ("$tr808.highConga", 404.59),
 ];
 
 fn toms_and_congas() -> impl Iterator<Item = (&'static str, f32)> {
@@ -547,20 +560,20 @@ fn toms_match_across_sample_rates() {
 }
 
 #[test]
-fn toms_choke_makes_every_hit_alike() {
+fn toms_restart_makes_every_hit_alike() {
     let (x, strikes) = render_retriggered(
-        "$tr808.lc",
-        json!({ "decay": 3.0, "choke": true }),
+        "$tr808.lowConga",
+        json!({ "decay": 3.0, "restart": true }),
         4.0,
         3.0,
     );
-    let single = peak(&render("$tr808.lc", json!({ "decay": 3.0 }), 0.25));
+    let single = peak(&render("$tr808.lowConga", json!({ "decay": 3.0 }), 0.25));
     for p in hit_peaks(&x, &strikes) {
         assert!((p / single - 1.0).abs() < 0.02, "{p} vs {single}");
     }
 }
 
-const SD: &str = "$tr808.sd";
+const SD: &str = "$tr808.snare";
 /// The snare's two resonators as built, Hz.
 const SD_LOW_HZ: f32 = 249.6;
 const SD_HIGH_HZ: f32 = 499.0;
@@ -641,8 +654,8 @@ fn sd_matches_across_sample_rates() {
     }
 }
 
-const RS: &str = "$tr808.rs";
-const CL: &str = "$tr808.cl";
+const RS: &str = "$tr808.rimShot";
+const CL: &str = "$tr808.claves";
 /// The claves' resonator as built, Hz.
 const CL_HZ: f32 = 2529.0;
 
@@ -732,7 +745,7 @@ fn cl_settles_to_silence() {
     assert!(x[(1.9 * SR) as usize..].iter().all(|&v| v == 0.0));
 }
 
-const CB: &str = "$tr808.cb";
+const CB: &str = "$tr808.cowbell";
 
 #[test]
 fn cb_is_silent_until_struck() {
@@ -799,7 +812,7 @@ fn cb_matches_across_sample_rates() {
     }
 }
 
-const CY: &str = "$tr808.cy";
+const CY: &str = "$tr808.cymbal";
 
 /// Energy of `x` between `from` and `to` seconds.
 fn energy(x: &[f32], from: f32, to: f32) -> f32 {
@@ -868,53 +881,116 @@ fn cy_matches_across_sample_rates() {
     }
 }
 
-const OH: &str = "$tr808.oh";
-const CH: &str = "$tr808.ch";
+const HH: &str = "$tr808.hiHat";
+
+/// The hats' `output`s, each with the params that strike it alone.
+const HATS: [(&str, &str); 2] = [("closed", "open"), ("open", "closed")];
+
+/// Render `secs` of the hi-hat's `output` with `params`, which name the
+/// hat inputs to strike.
+fn render_hat(params: Value, output: &str, secs: f32) -> Vec<f32> {
+    render_hat_at(params, output, secs, SR)
+}
+
+fn render_hat_at(mut params: Value, output: &str, secs: f32, sample_rate: f32) -> Vec<f32> {
+    if params.get("closed").is_none() {
+        params["closed"] = json!(0.0);
+    }
+    let m = make(HH, params, sample_rate);
+    (0..(secs * sample_rate) as usize)
+        .map(|_| {
+            m.start_block();
+            m.ensure_processed();
+            m.get_value_at(output, 0, 0)
+        })
+        .collect()
+}
+
+/// `hat` struck by a held trigger, the other hat idle, with `params`.
+fn one_hat(hat: &str, mut params: Value) -> Value {
+    params[hat] = json!(5.0);
+    params
+}
+
+/// The median peak of `hat`'s hits struck from rest by a 4 Hz clock.
+fn median_hat_peak(hat: &str, mut params: Value) -> f32 {
+    params["restart"] = json!(true);
+    if hat == "open" {
+        params["closed"] = json!(0.0);
+    }
+    let (x, strikes) = render_clocks_from(HH, params, &[(hat, 4.0)], hat, 6.0);
+    let mut peaks = hit_peaks(&x, &strikes);
+    peaks.sort_by(f32::total_cmp);
+    peaks[peaks.len() / 2]
+}
 
 #[test]
 fn hats_are_silent_until_struck() {
-    for voice in [OH, CH] {
-        let m = make(voice, json!({ "trigger": 0.0 }), SR);
-        for _ in 0..4800 {
-            m.start_block();
-            m.ensure_processed();
-            assert_eq!(m.get_value_at("output", 0, 0), 0.0, "{voice}");
+    let m = make(HH, json!({ "closed": 0.0, "open": 0.0 }), SR);
+    for _ in 0..4800 {
+        m.start_block();
+        m.ensure_processed();
+        for output in ["output", "closed", "open"] {
+            assert_eq!(m.get_value_at(output, 0, 0), 0.0, "{output}");
         }
     }
 }
 
 #[test]
+fn each_hat_sounds_on_its_own_output() {
+    for (hat, other) in HATS {
+        let x = render_hat(one_hat(hat, json!({})), hat, 0.1);
+        let quiet = render_hat(one_hat(hat, json!({})), other, 0.1);
+        assert!(peak(&x) > 1.0 && peak(&quiet) == 0.0, "{hat}");
+    }
+}
+
+#[test]
+fn the_output_is_both_hats() {
+    let params = json!({ "closed": 5.0, "open": 5.0, "cut": -5.0 });
+    let (both, closed, open) = (
+        render_hat(params.clone(), "output", 0.2),
+        render_hat(params.clone(), "closed", 0.2),
+        render_hat(params, "open", 0.2),
+    );
+    for ((b, c), o) in both.iter().zip(&closed).zip(&open) {
+        assert_eq!(*b, c + o);
+    }
+    assert!(peak(&closed) > 1.0 && peak(&open) > 1.0);
+}
+
+#[test]
 fn hats_accent_doubles_the_level() {
-    for voice in [OH, CH] {
-        let soft = peak(&render(voice, json!({ "accent": 0.0 }), 0.1));
-        let hard = peak(&render(voice, json!({ "accent": 5.0 }), 0.1));
-        assert!((soft - 5.0).abs() < 0.5, "{voice} {soft}");
-        assert!((8.0..12.0).contains(&hard), "{voice} {hard}");
+    for (hat, _) in HATS {
+        let soft = median_hat_peak(hat, json!({ "accent": 0.0 }));
+        let hard = median_hat_peak(hat, json!({ "accent": 5.0 }));
+        assert!((soft - 5.0).abs() < 0.5, "{hat} {soft}");
+        assert!((9.0..11.0).contains(&hard), "{hat} {hard}");
     }
 }
 
 #[test]
 fn hats_are_bright() {
     // The upper band sits near 6.9 kHz, and the high-passes cut below 8 kHz.
-    for voice in [OH, CH] {
-        let dark = energy_below(&render(voice, json!({}), 0.1), 2000.0);
-        assert!(dark < 0.01, "{voice} {dark}");
+    for (hat, _) in HATS {
+        let dark = energy_below(&render_hat(one_hat(hat, json!({})), hat, 0.1), 2000.0);
+        assert!(dark < 0.01, "{hat} {dark}");
     }
 }
 
 #[test]
-fn ch_is_short() {
+fn closed_hat_is_short() {
     // The service notes put the closed hat's decay near 50 ms.
-    let x = render(CH, json!({}), 0.3);
+    let x = render_hat(one_hat("closed", json!({})), "closed", 0.3);
     assert!(peak(&x[(0.1 * SR) as usize..]) < 0.01 * peak(&x));
     assert!(peak(&x[(0.02 * SR) as usize..(0.03 * SR) as usize]) > 0.1 * peak(&x));
 }
 
 #[test]
-fn oh_decay_sets_how_long_it_holds() {
+fn decay_sets_how_long_the_open_hat_holds() {
     // The service notes give 90 ms to 600 ms over the decay pot's travel.
     let end = |decay: f32| {
-        let x = render(OH, json!({ "decay": decay }), 1.5);
+        let x = render_hat(one_hat("open", json!({ "decay": decay })), "open", 1.5);
         let p = peak(&x);
         x.iter().rposition(|v| v.abs() > 0.01 * p).unwrap() as f32 / SR
     };
@@ -924,29 +1000,62 @@ fn oh_decay_sets_how_long_it_holds() {
     assert!((0.5..0.9).contains(&long), "{long}");
 }
 
-#[test]
-fn oh_close_chokes_the_hat() {
-    // A close edge at the strike leaves C63 up long enough for Q23 to empty
-    // the open hat's envelope.
-    let open = render(OH, json!({}), 0.4);
-    let (closed, edges) = render_clocked(OH, json!({ "trigger": 5.0 }), "close", 1.0, 0.4);
+/// The open hat struck at 0 s with a closed hit at once, at `cut`.
+fn cut_open_hat(cut: f32) -> Vec<f32> {
+    let params = json!({ "open": 5.0, "decay": 5.0, "cut": cut });
+    let (x, edges) = render_clocks_from(HH, params, &[("closed", 1.0)], "open", 0.4);
     assert_eq!(edges.first(), Some(&0));
+    x
+}
+
+#[test]
+fn a_closed_hit_cuts_off_the_open_hat() {
+    // A closed hit at the strike leaves C63 up long enough for Q23 to empty
+    // the open hat's envelope.
+    let open = render_hat(one_hat("open", json!({})), "open", 0.4);
+    let closed = cut_open_hat(0.0);
     let tail = |x: &[f32]| peak(&x[(0.1 * SR) as usize..]);
     assert!(tail(&open) > 0.5 * peak(&open), "{}", tail(&open));
     assert!(tail(&closed) < 0.01 * peak(&open), "{}", tail(&closed));
 }
 
 #[test]
-fn oh_close_lets_go_of_later_hits() {
-    // A close edge at 0 s chokes that hit; by the open hit at 0.5 s, C63 has
-    // emptied below Q23's turn-on and the hat rings as if never closed.
+fn cut_bends_how_hard_a_closed_hit_cuts() {
+    let ring = |x: &[f32]| rms(&x[(0.1 * SR) as usize..(0.2 * SR) as usize]);
+    let open = ring(&render_hat(
+        one_hat("open", json!({ "decay": 5.0 })),
+        "open",
+        0.4,
+    ));
+    let (none, partial, stock) = (
+        ring(&cut_open_hat(-5.0)),
+        ring(&cut_open_hat(-2.5)),
+        ring(&cut_open_hat(0.0)),
+    );
+    assert!((none / open - 1.0).abs() < 0.1, "{none} {open}");
+    assert!((0.05..0.8).contains(&(partial / open)), "{partial} {open}");
+    assert!(stock < 0.001 * open, "{stock} {open}");
+    // Above stock the cut is sharper.
+    let gone_by = |x: &[f32]| {
+        let p = peak(x);
+        x.iter().rposition(|v| v.abs() > 0.01 * p).unwrap() as f32 / SR
+    };
+    let (stock, sharp) = (gone_by(&cut_open_hat(0.0)), gone_by(&cut_open_hat(5.0)));
+    assert!(sharp < 0.01 && stock > 0.03, "{sharp} {stock}");
+}
+
+#[test]
+fn a_closed_hit_lets_go_of_later_open_hits() {
+    // A closed hit at 0 s cuts that open hit; by the open hit at 0.5 s, C63
+    // has emptied below Q23's turn-on and the hat rings as if never cut.
     let hits = |clocks: &[(&str, f32)]| {
-        let (x, edges) = render_clocks(OH, json!({ "decay": 5.0 }), clocks, 0.95);
+        let params = json!({ "closed": 0.0, "decay": 5.0 });
+        let (x, edges) = render_clocks_from(HH, params, clocks, "open", 0.95);
         assert!(edges[0] == 0 && edges[1].abs_diff((0.5 * SR) as usize) <= 1);
         x[edges[1]..].to_vec()
     };
-    let open = hits(&[("trigger", 2.0)]);
-    let closed = hits(&[("trigger", 2.0), ("close", 1.0)]);
+    let open = hits(&[("open", 2.0)]);
+    let closed = hits(&[("open", 2.0), ("closed", 1.0)]);
     let ring = |x: &[f32]| rms(&x[(0.1 * SR) as usize..(0.4 * SR) as usize]);
     let (open, closed) = (ring(&open), ring(&closed));
     assert!((closed / open - 1.0).abs() < 0.1, "{closed} {open}");
@@ -954,31 +1063,29 @@ fn oh_close_lets_go_of_later_hits() {
 
 #[test]
 fn hats_settle_to_silence() {
-    for (voice, params) in [(OH, json!({ "decay": 5.0 })), (CH, json!({}))] {
-        let x = render(voice, params, 2.0);
-        assert!(
-            x[(1.9 * SR) as usize..].iter().all(|&v| v == 0.0),
-            "{voice}"
-        );
+    for (hat, _) in HATS {
+        let x = render_hat(one_hat(hat, json!({ "decay": 5.0 })), "output", 2.0);
+        assert!(x[(1.9 * SR) as usize..].iter().all(|&v| v == 0.0), "{hat}");
     }
 }
 
 #[test]
 fn hats_match_across_sample_rates() {
-    for voice in [OH, CH] {
-        let at48 = rms(&render(voice, json!({}), 0.1));
+    for (hat, _) in HATS {
+        let params = one_hat(hat, json!({}));
+        let at48 = rms(&render_hat(params.clone(), hat, 0.1));
         for sample_rate in [44_100.0, 96_000.0] {
-            let r = rms(&render_at(voice, json!({}), 0.1, sample_rate));
+            let r = rms(&render_hat_at(params.clone(), hat, 0.1, sample_rate));
             assert!(
                 (r / at48 - 1.0).abs() < 0.15,
-                "{voice} {sample_rate}: {r} vs {at48}"
+                "{hat} {sample_rate}: {r} vs {at48}"
             );
         }
     }
 }
 
-const CP: &str = "$tr808.cp";
-const MA: &str = "$tr808.ma";
+const CP: &str = "$tr808.clap";
+const MA: &str = "$tr808.maracas";
 
 /// Peak of `x` in each millisecond.
 fn peaks_per_ms(x: &[f32]) -> Vec<f32> {
@@ -1083,14 +1190,15 @@ fn cp_and_ma_match_across_sample_rates() {
 #[test]
 fn channels_added_by_a_patch_update_get_their_own_noise() {
     let toms = TOMS.map(|(voice, _)| voice);
-    for voice in [SD, CP, MA, CY, OH, CH].into_iter().chain(toms) {
-        let old = make(voice, json!({ "trigger": 5.0 }), SR);
+    for voice in [SD, CP, MA, CY, HH].into_iter().chain(toms) {
+        let trigger = if voice == HH { "closed" } else { "trigger" };
+        let old = make(voice, json!({ trigger: 5.0 }), SR);
         old.on_patch_update();
         for _ in 0..480 {
             old.start_block();
             old.ensure_processed();
         }
-        let new = make(voice, json!({ "trigger": [5.0, 5.0, 5.0] }), SR);
+        let new = make(voice, json!({ trigger: [5.0, 5.0, 5.0] }), SR);
         new.transfer_state_from(old.as_ref());
         new.on_patch_update();
         let (mut a, mut b) = (Vec::new(), Vec::new());
@@ -1103,5 +1211,54 @@ fn channels_added_by_a_patch_update_get_their_own_noise() {
         assert!(peak(&a) > 0.1, "{voice}");
         let diff: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x - y).collect();
         assert!(peak(&diff) > 0.01 * peak(&a), "{voice} {}", peak(&diff));
+    }
+}
+
+#[test]
+fn pitched_voices_hold_their_level_across_freq() {
+    let ranges = [
+        (BD, -3.5, -1.0),
+        (SD, -1.5, 1.5),
+        ("$tr808.lowTom", -3.1, -0.1),
+        ("$tr808.midTom", -2.46, 0.54),
+        ("$tr808.highTom", -2.02, 0.98),
+        ("$tr808.lowConga", -1.95, 1.05),
+        ("$tr808.midConga", -1.42, 1.58),
+        ("$tr808.highConga", -0.87, 2.13),
+        (RS, 1.5, 4.0),
+        (CL, 1.5, 4.5),
+        (CB, -0.5, 2.5),
+    ];
+    for (voice, lo, hi) in ranges {
+        for freq in [lo, (lo + hi) / 2.0, hi] {
+            let params = json!({ "freq": freq });
+            // Noise in the snare and the cowbell's free-running oscillators
+            // make each of their hits peak differently.
+            let level = if [SD, CB].contains(&voice) {
+                median_hit_peak(voice, params)
+            } else {
+                peak(&render(voice, params, 0.15))
+            };
+            assert!((level - 5.0).abs() < 0.6, "{voice} at {freq}: {level}");
+        }
+    }
+}
+
+#[test]
+fn retriggers_stay_within_the_rails() {
+    let loud = json!({ "accent": 5.0, "decay": 4.0, "tone": 5.0 });
+    let (x, _) = render_retriggered(BD, loud, 16.0, 1.0);
+    let top = peak(&x);
+    assert!((10.0..=12.0).contains(&top), "{top}");
+}
+
+#[test]
+fn a_restarting_hit_peaks_no_higher_than_a_fresh_one() {
+    let voice = "$tr808.lowConga";
+    let params = json!({ "accent": 5.0, "decay": 3.0, "restart": true });
+    let fresh = peak(&render(voice, params.clone(), 0.1));
+    let (x, strikes) = render_retriggered(voice, params, 16.0, 1.0);
+    for p in hit_peaks(&x, &strikes) {
+        assert!(p <= fresh * 1.001, "{p} over {fresh}");
     }
 }

@@ -4,12 +4,14 @@ use super::*;
 const MIN_DECAY: f32 = 0.01;
 const MAX_DECAY: f32 = 10.0;
 
-/// The bridged-T tuned for one `freq` and `decay`.
+/// The bridged-T tuned for one `freq` and `decay`, and the output gain
+/// levelling `freq`.
 #[derive(Clone, Copy)]
 pub(super) struct Network {
     pub(super) freq: f32,
     pub(super) decay: f32,
     pub(super) t: BridgedT,
+    pub(super) level: f32,
 }
 
 impl Default for Network {
@@ -24,6 +26,7 @@ impl Default for Network {
                 r_bridge: R228,
                 g_fb: 0.0,
             },
+            level: 1.0,
         }
     }
 }
@@ -35,6 +38,7 @@ impl Network {
             freq,
             decay,
             t: stock_t(parts).tuned(r, decay.clamp(MIN_DECAY, MAX_DECAY)),
+            level: parts.level.gain(freq),
         }
     }
 }
@@ -86,9 +90,22 @@ fn tuning_current_exact(x: f32) -> f32 {
     ((x - vd - i * pa) / pb) as f32
 }
 
+/// The tuning network's current at `x` and its slope, interpolated, lane by
+/// lane.
+#[inline]
+pub(super) fn tuning_current<L: Lanes>(table: &[f32], x: L::S) -> (L::S, L::S) {
+    let (mut current, mut slope) = (c::<L::S>(0.0), c::<L::S>(0.0));
+    for lane in 0..L::WIDTH {
+        let (i, g) = tuning_current_at(table, x.lane(lane));
+        current.set_lane(lane, &i);
+        slope.set_lane(lane, &g);
+    }
+    (current, slope)
+}
+
 /// The tuning network's current at `x` and its slope, interpolated.
 #[inline]
-pub(super) fn tuning_current(table: &[f32], x: f32) -> (f32, f32) {
+fn tuning_current_at(table: &[f32], x: f32) -> (f32, f32) {
     let pos = x.abs().min(TUNE_MAX) * (TUNE_STEPS as f32 / TUNE_MAX);
     let j = (pos as usize).min(TUNE_STEPS - 1);
     let (lo, hi) = (table[j], table[j + 1]);

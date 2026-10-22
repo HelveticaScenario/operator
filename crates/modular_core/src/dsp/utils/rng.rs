@@ -27,7 +27,18 @@ const U32_TO_UNIT: f32 = 1.0 / 4_294_967_296.0;
 /// distinct between instances should seed from `on_patch_update`.
 #[inline]
 pub fn seed_base<T>(module: &T) -> u64 {
+    #[cfg(test)]
+    if let Some(base) = TEST_SEED_BASE.get() {
+        return base;
+    }
     module as *const T as usize as u64
+}
+
+#[cfg(test)]
+thread_local! {
+    /// While set, every module on this thread seeds from it, so a test can
+    /// build two modules that draw the same random streams.
+    pub static TEST_SEED_BASE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 /// Value in `[-1, 1)` determined only by `seed` and `index` (a SplitMix64

@@ -7,6 +7,7 @@
 //! oscillators at their factory tuning.
 
 use super::circuit::{ACCENT_V, PULSE_V};
+use crate::dsp::drums::lanes::{Lanes, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
 use crate::dsp::utils::rng::LcgRng;
 
@@ -19,9 +20,9 @@ const METAL_REST: f32 = 0.824 * PULSE_V + 3.29;
 const METAL_ACCENT: f32 = 13.5;
 
 /// The trigger buffer's output for a common trigger pulse of `volts`.
-pub fn metal_pulse(volts: f32) -> f32 {
+pub fn metal_pulse<S: Real<Elem = f32>>(volts: S) -> S {
     let accent = (volts - PULSE_V) / ACCENT_V;
-    METAL_REST + (METAL_ACCENT - METAL_REST) * accent
+    accent * (METAL_ACCENT - METAL_REST) + METAL_REST
 }
 
 /// The oscillators' frequencies, Hz.
@@ -90,16 +91,22 @@ impl MetalFilters {
 
 /// One channel's oscillators and filters.
 #[derive(Clone, Copy, Default)]
-pub struct MetalBank {
-    phases: [f32; 6],
-    net: MnaState<CAPS>,
-    seeded: bool,
+pub struct MetalBank<L: Lanes = Mono> {
+    phases: [L::S; 6],
+    net: MnaState<CAPS, L>,
+    seeded: L::SM,
 }
+
+lanewise!(MetalBank {
+    phases,
+    net,
+    seeded
+});
 
 /// Time an oscillator has spent high, in periods, from phase 0 to `x`.
 #[inline]
-fn high_time(x: f32) -> f32 {
-    x.floor() * DUTY + x.fract().min(DUTY)
+fn high_time<S: Real<Elem = f32>>(x: S) -> S {
+    x.floor() * DUTY + x.fract().min(c(DUTY))
 }
 
 impl MetalBank {
@@ -118,21 +125,23 @@ impl MetalBank {
             *phase = rng.next_unit();
         }
     }
+}
 
+impl<L: Lanes> MetalBank<L> {
     /// Advances one sample, returning the upper and lower bands. Each
     /// oscillator drives the sum with its mean voltage over the sample,
     /// which keeps its edges' timing between samples.
     #[inline]
-    pub fn step(&mut self, filters: &MetalFilters) -> (f32, f32) {
-        let mut current = 0.0;
+    pub fn step(&mut self, filters: &MetalFilters) -> (L::S, L::S) {
+        let mut current = c::<L::S>(0.0);
         for (phase, &inc) in self.phases.iter_mut().zip(filters.inc.iter()) {
             let high = (high_time(*phase + inc) - high_time(*phase)) / inc;
-            current += OSC_VOLTS * high / R_MIX;
+            current += high * OSC_VOLTS / R_MIX;
             *phase = (*phase + inc).fract();
         }
-        let mut injected = [0.0; UNKNOWNS];
+        let mut injected = [c(0.0); UNKNOWNS];
         injected[SUM] = current;
-        let x = filters.net.step(&mut self.net, 0, &injected);
+        let x = filters.net.step(&mut self.net, L::closed([]), &injected);
         (x[BAND_HIGH], x[BAND_LOW])
     }
 }

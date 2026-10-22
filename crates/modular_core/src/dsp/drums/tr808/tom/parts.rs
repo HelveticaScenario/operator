@@ -1,3 +1,6 @@
+use super::super::levels;
+use crate::dsp::drums::pitch_level::PitchLevel;
+
 /// Component values that differ between the six voices.
 pub(super) struct Parts {
     /// Input coupling capacitor (C73) and the divider it drives: the series
@@ -14,6 +17,10 @@ pub(super) struct Parts {
     pub(super) noise: Option<NoiseParts>,
     /// Scales the output so an unaccented hit at stock pitch peaks near 5 V.
     pub(super) gain: f32,
+    /// Holds that level across `freq`.
+    pub(super) level: PitchLevel,
+    /// Brings a fully accented hit to twice the level of an unaccented one.
+    pub(super) accent_trim: f32,
 }
 
 /// The tom's noise gate capacitors: C72, C71, C74 and C75.
@@ -42,6 +49,8 @@ pub(super) static LT: Parts = Parts {
         c_lp: 0.018e-6,
     }),
     gain: 1.859,
+    level: levels::LOW_TOM,
+    accent_trim: 0.906,
 };
 
 pub(super) static LC: Parts = Parts {
@@ -53,6 +62,8 @@ pub(super) static LC: Parts = Parts {
     c_out: 0.047e-6,
     noise: None,
     gain: 3.356,
+    level: levels::LOW_CONGA,
+    accent_trim: 0.875,
 };
 
 pub(super) static MT: Parts = Parts {
@@ -69,6 +80,8 @@ pub(super) static MT: Parts = Parts {
         c_lp: 0.015e-6,
     }),
     gain: 2.203,
+    level: levels::MID_TOM,
+    accent_trim: 0.903,
 };
 
 pub(super) static MC: Parts = Parts {
@@ -80,6 +93,8 @@ pub(super) static MC: Parts = Parts {
     c_out: 0.039e-6,
     noise: None,
     gain: 5.102,
+    level: levels::MID_CONGA,
+    accent_trim: 0.858,
 };
 
 pub(super) static HT: Parts = Parts {
@@ -96,6 +111,8 @@ pub(super) static HT: Parts = Parts {
         c_lp: 0.01e-6,
     }),
     gain: 1.938,
+    level: levels::HIGH_TOM,
+    accent_trim: 0.904,
 };
 
 pub(super) static HC: Parts = Parts {
@@ -107,4 +124,6 @@ pub(super) static HC: Parts = Parts {
     c_out: 0.033e-6,
     noise: None,
     gain: 3.125,
+    level: levels::HIGH_CONGA,
+    accent_trim: 0.967,
 };

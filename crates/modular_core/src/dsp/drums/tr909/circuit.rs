@@ -2,9 +2,9 @@
 //! and accent the CPU sends each voice, the shared noise generator, and the
 //! transistor VCAs the voices are built around.
 
-use crate::dsp::drums::analog::VT;
-use crate::dsp::drums::voice::{CHOKE_SECS, quiet_fall, samples};
-use crate::dsp::utils::rng::LcgRng;
+use crate::dsp::drums::analog::{Exp, Junction, VT, converged};
+use crate::dsp::drums::lanes::{Lanes, Mask, Real, c};
+use crate::dsp::drums::voice::{FADE_SECS, quiet_fall, samples};
 
 /// The 909's trigger: a 5 V pulse 2 ms long, which each voice turns into a
 /// 15 V pulse on its own trigger transistors.
@@ -32,7 +32,7 @@ pub fn accent_volts(low: f32, accent: f32) -> f32 {
 #[derive(Clone, Copy, Default)]
 pub struct Timing {
     pub trig_samples: u32,
-    pub choke_samples: u32,
+    pub fade_samples: u32,
     /// [`quiet_fall`] at the sample rate.
     pub quiet_fall: f32,
 }
@@ -41,83 +41,9 @@ impl Timing {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             trig_samples: samples(TRIG_SECS, sample_rate),
-            choke_samples: samples(CHOKE_SECS, sample_rate),
+            fade_samples: samples(FADE_SECS, sample_rate),
             quiet_fall: quiet_fall(sample_rate),
         }
-    }
-}
-
-/// The 909's noise generator: two 4006 shift registers chained into 32
-/// stages with exclusive-or feedback, clocked by an RC oscillator on IC31
-/// (R185 33 kΩ, C47 100 pF), its output swinging the full 15 V.
-#[derive(Clone, Copy)]
-pub struct Noise {
-    register: u32,
-    /// Clock phase, in clock periods.
-    phase: f32,
-    seeded: bool,
-}
-
-impl Default for Noise {
-    fn default() -> Self {
-        Self {
-            register: TOP,
-            phase: 0.0,
-            seeded: false,
-        }
-    }
-}
-
-/// A 31-stage maximal-length register stands in for the 909's 32 stages:
-/// its sequence repeats only after 2^31 clocks, some hours.
-const STAGES_MASK: u32 = (1 << 31) - 1;
-const TOP: u32 = 1 << 30;
-
-/// The shift registers' clock, Hz.
-const NOISE_CLOCK_HZ: f32 = 1.0 / (2.2 * 33.0e3 * 100.0e-12);
-
-impl Noise {
-    /// Seeds the register unless it already is. The register rides patch
-    /// updates with its channel, so a carried-over channel keeps its
-    /// sequence and a channel added by an update gets its own.
-    pub fn seed(&mut self, base: u64, stream: usize) {
-        if self.seeded {
-            return;
-        }
-        self.seeded = true;
-        let mut rng = LcgRng::default();
-        rng.seed(base, stream);
-        // Any state but all zeros runs; the top bit keeps it off zero.
-        self.register = (((rng.next_bipolar() * 1.0e9) as i64 as u32) & STAGES_MASK) | TOP;
-    }
-
-    /// Clock periods per sample at `sample_rate`.
-    pub fn rate(sample_rate: f32) -> f32 {
-        NOISE_CLOCK_HZ / sample_rate
-    }
-
-    /// The register's output averaged over one sample, in volts: the
-    /// filters that follow it are all far below the clock.
-    #[inline]
-    pub fn next(&mut self, rate: f32) -> f32 {
-        let end = self.phase + rate;
-        let mut high = 0.0;
-        let mut t = self.phase;
-        while t < end {
-            let edge = t.floor() + 1.0;
-            let span = edge.min(end) - t;
-            if self.register & 1 != 0 {
-                high += span;
-            }
-            if edge <= end {
-                // Feedback from stages 31 and 28.
-                let bit = (self.register ^ (self.register >> 3)) & 1;
-                self.register = (self.register >> 1) | (bit << 30);
-            }
-            t = edge;
-        }
-        self.phase = end.fract();
-        RAIL * high / rate
     }
 }
 
@@ -137,59 +63,79 @@ pub struct TransistorVca {
 const IS: f64 = 10.0e-15;
 
 /// A [`TransistorVca`]'s currents at one operating point.
-pub struct VcaCurrents {
+pub struct VcaCurrents<L: Lanes> {
     /// Into the collector.
-    pub collector: f64,
+    pub collector: L::D,
     /// Out of the emitter, into the virtual ground.
-    pub emitter: f64,
+    pub emitter: L::D,
     /// d(collector)/d(collector voltage).
-    pub slope: f64,
+    pub slope: L::D,
 }
 
 impl TransistorVca {
     /// The base current drawn through `ohms` from an envelope at `volts`,
-    /// with both junctions conducting, by Newton on the base voltage from
-    /// `guess`.
-    pub fn base_current(&self, volts: f32, ohms: f32, guess: &mut f64) -> f64 {
-        let (v, r, vt) = (volts as f64, ohms as f64, VT as f64);
-        let is_b = IS * (1.0 / self.beta_f + 1.0 / self.beta_r);
-        if v <= 0.0 {
-            *guess = 0.0;
-            return 0.0;
+    /// with both junctions conducting, by Newton on the base-emitter
+    /// junction from its last solution.
+    #[inline]
+    pub fn base_current<L: Lanes>(&self, volts: L::S, ohms: f32, base: &mut Junction<L>) -> L::D {
+        self.base_current_where(!L::DM::default(), volts, ohms, base)
+    }
+
+    /// [`Self::base_current`] in the lanes of `on`; the others draw none
+    /// and keep their junction.
+    #[inline(always)]
+    pub fn base_current_where<L: Lanes>(
+        &self,
+        on: L::DM,
+        volts: L::S,
+        ohms: f32,
+        base: &mut Junction<L>,
+    ) -> L::D {
+        let (v, r) = (L::wide(volts), ohms as f64);
+        let a = r * IS * (1.0 / self.beta_f + 1.0 / self.beta_r);
+        let live = on & v.gt(c(0.0));
+        // An envelope at or below zero leaves the junction off.
+        let off = L::D::select(on, c(0.0), base.v);
+        if !live.any() {
+            base.v = off;
+            return c(0.0);
         }
         // From a cold start, begin near a conducting junction's drop: from
         // zero, Newton would climb the exponential a thermal voltage at a time.
-        let mut vbe = if *guess > 0.3 {
-            guess.clamp(0.0, v)
-        } else {
-            v.min(0.6)
-        };
+        let mut vbe = L::D::select(base.v.gt(c(0.3)), base.v.clamp(c(0.0), v), v.min(c(0.6)));
+        let mut e = base.e.at(vbe, INV_VT);
+        let mut done = !live;
         for _ in 0..30 {
-            let e = (vbe / vt).min(80.0).exp();
-            let f = vbe + r * is_b * (e - 1.0) - v;
-            let df = 1.0 + r * is_b * e / vt;
-            let next = (vbe - f / df).clamp(0.0, v);
-            let moved = (next - vbe).abs();
-            vbe = next;
-            if moved < 1.0e-6 {
+            let f = vbe + (e.value - 1.0) * a - v;
+            let df = e.value * a * INV_VT + 1.0;
+            let next = (vbe - f / df).clamp(c(0.0), v);
+            let moved = next - vbe;
+            vbe = L::D::select(done, vbe, next);
+            done = done | (moved * moved).lt(c(BASE_DONE));
+            if done.all() {
                 break;
             }
+            e = e.at_where(!done, vbe, INV_VT);
         }
-        *guess = vbe;
-        (v - vbe) / r
+        *base = Junction {
+            v: L::D::select(live, vbe, off),
+            e: Exp::select(live, e, base.e),
+        };
+        L::D::select(live, (v - vbe) / r, c(0.0))
     }
 
-    /// The currents with base current `ib` and the collector at `vc`.
+    /// The currents with base current `ib` and the collector at `vc`, given
+    /// as its exponential at scale [`COLLECTOR`].
     #[inline]
-    pub fn currents(&self, ib: f64, vc: f64) -> VcaCurrents {
-        let vt = VT as f64;
-        let (bf, br) = (self.beta_f, self.beta_r);
-        let k = (-vc / vt).clamp(-80.0, 80.0).exp();
-        let d = 1.0 / bf + k / br;
-        let x = (ib + IS / bf + IS / br) / (IS * d);
-        let collector = IS * x * (1.0 - k - k / br) + IS / br;
-        let dx = x * k / (vt * br * d);
-        let slope = IS * dx * (1.0 - k - k / br) + IS * x * (k / vt + k / (br * vt));
+    pub fn currents<L: Lanes>(&self, ib: L::D, k: Exp<L>) -> VcaCurrents<L> {
+        let k = k.value;
+        let (rf, rr) = (1.0 / self.beta_f, 1.0 / self.beta_r);
+        let inv_d = c::<L::D>(1.0) / (k * rr + rf);
+        let x = (ib + IS * (rf + rr)) * inv_d * (1.0 / IS);
+        let gain = c::<L::D>(1.0) - k * (1.0 + rr);
+        let collector = (x * gain + rr) * IS;
+        let dx = x * k * rr * INV_VT * inv_d;
+        let slope = (dx * gain + x * k * (1.0 + rr) * INV_VT) * IS;
         VcaCurrents {
             collector,
             emitter: collector + ib,
@@ -197,6 +143,18 @@ impl TransistorVca {
         }
     }
 }
+
+const INV_VT: f64 = 1.0 / VT as f64;
+
+const BASE_DONE: f64 = converged(1.0e-6, VT as f64);
+const COLLECTOR_DONE: f64 = converged(1.0e-8, VT as f64);
+/// The shaper's diode node couples into its collector node, so it settles
+/// a decade tighter than its own tolerance.
+const DIODE_DONE: f64 = converged(1.0e-7, DIODE_NVT);
+
+/// The scale of the exponential of a VCA's collector voltage that
+/// [`TransistorVca::currents`] takes.
+pub const COLLECTOR: f64 = -INV_VT;
 
 /// The 909 voices' transistors.
 pub const VCA: TransistorVca = TransistorVca {
@@ -255,56 +213,120 @@ pub struct Shaper {
 const DIODE_IS: f64 = 2.52e-9;
 const DIODE_NVT: f64 = 1.752 * VT as f64;
 
+/// A diode pair's current and slope at `e`, the exponential of the voltage
+/// across it at scale [`DIODE`].
+#[inline]
+pub fn diode_pair<L: Lanes>(e: Exp<L>) -> (L::D, L::D) {
+    let (e, inv) = (e.value, c::<L::D>(1.0) / e.value);
+    (
+        (e - inv) * DIODE_IS,
+        (e + inv) * (DIODE_IS * (1.0 / DIODE_NVT)),
+    )
+}
+
+/// The scale of the exponential [`diode_pair`] takes.
+pub const DIODE: f64 = 1.0 / DIODE_NVT;
+
 impl Shaper {
     /// Solves the diode node `d` and the collector node `vc` for the
     /// triangle at `vi` and the VCA's base current `ib`, by Newton from
-    /// their last values. Returns the VCA's emitter current.
+    /// their last values, in the lanes of `on`; the others keep their
+    /// nodes. Returns the VCA's emitter current.
     #[inline]
-    pub fn solve(&self, d: &mut f64, vc: &mut f64, vi: f64, ib: f64) -> f64 {
-        let (mut dn, mut cn) = (*d, *vc);
+    pub fn solve<L: Lanes>(
+        &self,
+        on: L::DM,
+        d: &mut Junction<L>,
+        vc: &mut Junction<L>,
+        vi: L::D,
+        ib: L::D,
+    ) -> L::D {
+        self.solve_with(on, d, vc, vi, c(0.0), 0.0, ib)
+    }
+
+    /// [`Self::solve`] with a source at `volts` also feeding the collector
+    /// node through conductance `g`.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub fn solve_with<L: Lanes>(
+        &self,
+        on: L::DM,
+        d: &mut Junction<L>,
+        vc: &mut Junction<L>,
+        vi: L::D,
+        volts: L::D,
+        g: f64,
+        ib: L::D,
+    ) -> L::D {
+        let (g_in, g_out) = (1.0 / self.r_in, 1.0 / self.r_out);
+        let g_node = g_out + g + 1.0 / self.r_load;
+        let (mut dn, mut cn) = (d.v, vc.v);
+        let (mut e, mut k) = (d.e.at(dn, DIODE), vc.e.at(cn, COLLECTOR));
+        let mut done = !on;
         for _ in 0..20 {
-            let e = (dn / DIODE_NVT).clamp(-80.0, 80.0).exp();
-            let id = DIODE_IS * (e - 1.0 / e);
-            let did = DIODE_IS * (e + 1.0 / e) / DIODE_NVT;
-            let q = VCA.currents(ib, cn);
-            let f1 = (vi - dn) / self.r_in - id - (dn - cn) / self.r_out;
-            let f2 = (dn - cn) / self.r_out - cn / self.r_load - q.collector;
-            let (a11, a12) = (-1.0 / self.r_in - did - 1.0 / self.r_out, 1.0 / self.r_out);
-            let (a21, a22) = (
-                1.0 / self.r_out,
-                -1.0 / self.r_out - 1.0 / self.r_load - q.slope,
-            );
-            let det = a11 * a22 - a12 * a21;
-            let step_d = (f1 * a22 - f2 * a12) / det;
-            let step_c = (a11 * f2 - a21 * f1) / det;
-            dn -= step_d.clamp(-0.1, 0.1);
-            cn -= step_c.clamp(-0.01, 0.01);
-            if step_d.abs() < 1.0e-6 && step_c.abs() < 1.0e-8 {
+            let (id, did) = diode_pair(e);
+            let q = VCA.currents(ib, k);
+            let f1 = (vi - dn) * g_in - id - (dn - cn) * g_out;
+            let f2 = dn * g_out + volts * g - cn * g_node - q.collector;
+            let a11 = c::<L::D>(-g_in) - did - g_out;
+            let a22 = c::<L::D>(-g_node) - q.slope;
+            let inv_det = c::<L::D>(1.0) / (a11 * a22 - g_out * g_out);
+            let step_d = (f1 * a22 - f2 * g_out) * inv_det;
+            let step_c = (a11 * f2 - f1 * g_out) * inv_det;
+            dn = L::D::select(done, dn, dn - step_d.clamp(c(-0.1), c(0.1)));
+            cn = L::D::select(done, cn, cn - step_c.clamp(c(-0.01), c(0.01)));
+            k = k.at_where(!done, cn, COLLECTOR);
+            done = done
+                | ((step_d * step_d).lt(c(DIODE_DONE)) & (step_c * step_c).lt(c(COLLECTOR_DONE)));
+            if done.all() {
                 break;
             }
+            e = e.at_where(!done, dn, DIODE);
         }
-        *d = dn;
-        *vc = cn;
-        VCA.currents(ib, cn).emitter
+        *d = Junction {
+            v: dn,
+            e: Exp::select(on, e, d.e),
+        };
+        *vc = Junction {
+            v: cn,
+            e: Exp::select(on, k, vc.e),
+        };
+        VCA.currents(ib, k).emitter
     }
 }
 
 /// Solves a VCA's collector node `vc`, fed from the open-circuit voltage
-/// `open` through `ohms`, with `r_load` to ground and base current `ib`.
-/// Returns the emitter current and the current drawn from the source.
-#[inline]
-pub fn vca_port(vc: &mut f64, open: f64, ohms: f64, r_load: f64, ib: f64) -> (f64, f64) {
-    let mut v = *vc;
+/// `open` through `ohms`, with `r_load` to ground and base current `ib`, in
+/// the lanes of `on`; the others keep their node. Returns the emitter
+/// current and the current drawn from the source.
+#[inline(always)]
+pub fn vca_port<L: Lanes>(
+    on: L::DM,
+    vc: &mut Junction<L>,
+    open: L::D,
+    ohms: L::D,
+    r_load: f64,
+    ib: L::D,
+) -> (L::D, L::D) {
+    let g_source = c::<L::D>(1.0) / ohms;
+    let g = g_source + 1.0 / r_load;
+    let mut v = vc.v;
+    let mut k = vc.e.at(v, COLLECTOR);
+    let mut done = !on;
     for _ in 0..20 {
-        let q = VCA.currents(ib, v);
-        let f = (open - v) / ohms - v / r_load - q.collector;
-        let df = -1.0 / ohms - 1.0 / r_load - q.slope;
-        let step = (f / df).clamp(-0.01, 0.01);
-        v -= step;
-        if step.abs() < 1.0e-8 {
+        let q = VCA.currents(ib, k);
+        let f = open * g_source - v * g - q.collector;
+        let step = (f / (-g - q.slope)).clamp(c(-0.01), c(0.01));
+        v = L::D::select(done, v, v - step);
+        k = k.at_where(!done, v, COLLECTOR);
+        done = done | (step * step).lt(c(COLLECTOR_DONE));
+        if done.all() {
             break;
         }
     }
-    *vc = v;
-    (VCA.currents(ib, v).emitter, (open - v) / ohms)
+    *vc = Junction {
+        v,
+        e: Exp::select(on, k, vc.e),
+    };
+    (VCA.currents(ib, k).emitter, (open - v) * g_source)
 }

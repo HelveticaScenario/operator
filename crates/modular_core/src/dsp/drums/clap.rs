@@ -12,6 +12,7 @@
 //! (Q40) emptying it, Q71/Q72 (Q38) the pair.
 
 use super::analog::VT;
+use super::lanes::{Lanes, Mono, Real, c, lanewise};
 use super::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
 
 const RAIL: f32 = 15.0;
@@ -119,29 +120,42 @@ impl EnvelopeNetwork {
 
 /// The envelope generator's state.
 #[derive(Clone, Copy, Default)]
-pub struct Envelope {
-    net: MnaState<CAPS>,
+pub struct Envelope<L: Lanes = Mono> {
+    net: MnaState<CAPS, L>,
     /// Node voltages on the last sample that set the switches.
-    oc: f32,
-    ob: f32,
-    md: f32,
-    k141: f32,
-    od: f32,
-    pd: f32,
-    c144: f32,
+    oc: L::S,
+    ob: L::S,
+    md: L::S,
+    k141: L::S,
+    od: L::S,
+    pd: L::S,
+    c144: L::S,
     /// The pair's base currents.
-    q72_base: f32,
-    q71_base: f32,
+    q72_base: L::S,
+    q71_base: L::S,
 }
 
-impl Envelope {
+lanewise!(Envelope {
+    net,
+    oc,
+    ob,
+    md,
+    k141,
+    od,
+    pd,
+    c144,
+    q72_base,
+    q71_base
+});
+
+impl<L: Lanes> Envelope<L> {
     /// True while the window IC23b opens is open.
-    pub fn window_open(&self) -> bool {
-        self.ob < P
+    pub fn window_open(&self) -> L::SM {
+        self.ob.lt(c(P))
     }
 
     /// Q71's base current, which the caller's network supplies.
-    pub fn q71_base(&self) -> f32 {
+    pub fn q71_base(&self) -> L::S {
         self.q71_base
     }
 
@@ -149,32 +163,22 @@ impl Envelope {
     /// trigger line divided against −15 V) and Q71's base at `b71`,
     /// returning the OTA's control current.
     #[inline]
-    pub fn step(&mut self, net: &EnvelopeNetwork, trigger: f32, b71: f32) -> f32 {
-        // The comparators and Q73 switch on last sample's voltages.
-        let mut closed = 0;
-        if trigger > Q {
-            closed |= 1 << SINK_C;
-        }
-        if P > self.oc {
-            closed |= 1 << SINK_B;
-        }
-        if self.md > self.pd {
-            closed |= 1 << SINK_D;
-        }
-        // IC23a sinks while IC23b's output stands above P; open, it lets
-        // R365 charge C144 through D71.
-        if self.ob < P && self.c144 < -DIODE_DROP {
-            closed |= 1 << CHARGE_144;
-        }
-        if self.k141 < D70_CLAMP {
-            closed |= 1 << CLAMP_70;
-        }
-        if 0.5 * (self.od + self.k141) > -RAIL + Q73_VBE {
-            closed |= (1 << Q73_BASE) | (1 << Q73_COLLECTOR);
-        }
-        let mut injected = [0.0f32; UNKNOWNS];
+    pub fn step(&mut self, net: &EnvelopeNetwork, trigger: L::S, b71: L::S) -> L::S {
+        // The comparators and Q73 switch on last sample's voltages. IC23a
+        // sinks while IC23b's output stands above P; open, it lets R365
+        // charge C144 through D71.
+        let mut closed = [L::SM::default(); SWITCHES];
+        closed[SINK_C] = trigger.gt(c(Q));
+        closed[SINK_B] = self.oc.lt(c(P));
+        closed[SINK_D] = self.md.gt(self.pd);
+        closed[CHARGE_144] = self.ob.lt(c(P)) & self.c144.lt(c(-DIODE_DROP));
+        closed[CLAMP_70] = self.k141.lt(c(D70_CLAMP));
+        let q73 = ((self.od + self.k141) * 0.5).gt(c(-RAIL + Q73_VBE));
+        closed[Q73_BASE] = q73;
+        closed[Q73_COLLECTOR] = q73;
+        let mut injected = [c(0.0); UNKNOWNS];
         injected[B72] = self.q72_base;
-        let x = net.mna.step(&mut self.net, closed, &injected);
+        let x = net.mna.step(&mut self.net, L::closed(closed), &injected);
         self.oc = x[OC];
         self.ob = x[OB];
         self.md = x[MD];
@@ -186,8 +190,9 @@ impl Envelope {
 
         // Q71 and Q72 share R366's current; Q72's share is the OTA's
         // control current.
-        let tail = (RAIL - (b71.min(b72) + PAIR_VBE)).max(0.0) / R366;
-        let share = 1.0 / (1.0 + ((b72 - b71) / VT).clamp(-80.0, 80.0).exp());
+        let tail = (c::<L::S>(RAIL) - (b71.min(b72) + PAIR_VBE)).max(c(0.0)) / R366;
+        let exp = ((b72 - b71) / VT).clamp(c(-80.0), c(80.0)).map(f32::exp);
+        let share = c::<L::S>(1.0) / (exp + 1.0);
         let iabc = tail * share;
         self.q72_base = iabc / BETA;
         self.q71_base = (tail - iabc) / BETA;
@@ -198,13 +203,13 @@ impl Envelope {
 /// The BA662's output current for control current `iabc` and voltage
 /// `input` at its inverting input, the other grounded.
 #[inline]
-pub fn ota_current(iabc: f32, input: f32) -> f32 {
-    iabc * (-input / (2.0 * VT)).tanh()
+pub fn ota_current<L: Lanes>(iabc: L::S, input: L::S) -> L::S {
+    iabc * (-input / (2.0 * VT)).map(f32::tanh)
 }
 
 /// The BA662's output across the 808's load, R383, for control current
 /// `iabc` and voltage `input` at its inverting input.
 #[inline]
-pub fn ota(iabc: f32, input: f32) -> f32 {
-    (R383 * ota_current(iabc, input)).clamp(-OTA_SWING, OTA_SWING)
+pub fn ota<L: Lanes>(iabc: L::S, input: L::S) -> L::S {
+    (ota_current::<L>(iabc, input) * R383).clamp(c(-OTA_SWING), c(OTA_SWING))
 }

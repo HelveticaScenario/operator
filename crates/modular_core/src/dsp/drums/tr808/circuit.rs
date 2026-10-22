@@ -1,9 +1,9 @@
 //! Building blocks shared by the TR-808 voice models: the common trigger
 //! pulse, the noise generator, and discretised analog filters.
 
-use crate::dsp::drums::voice::{CHOKE_SECS, quiet_fall, samples};
+use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
+use crate::dsp::drums::voice::{FADE_SECS, quiet_fall, samples};
 use crate::dsp::utils::rng::LcgRng;
-use crate::dsp::utils::sanitize;
 
 /// Length of the 808's common trigger pulse, seconds.
 pub const PULSE_SECS: f32 = 1.0e-3;
@@ -65,11 +65,12 @@ impl WhiteNoise {
 
 /// One trapezoidal step of `u' = A·u + (0, b2)` with `A` row-major.
 #[inline]
-pub fn trapezoid(u: (f32, f32), a: [f32; 4], b2: f32, dt: f32) -> (f32, f32) {
+pub fn trapezoid<S: Real<Elem = f32>>(u: (S, S), a: [S; 4], b2: S, dt: f32) -> (S, S) {
     let h = 0.5 * dt;
-    let (m11, m12, m21, m22) = (1.0 - h * a[0], -h * a[1], -h * a[2], 1.0 - h * a[3]);
-    let r1 = u.0 + h * (a[0] * u.0 + a[1] * u.1);
-    let r2 = u.1 + h * (a[2] * u.0 + a[3] * u.1) + dt * b2;
+    let one = c::<S>(1.0);
+    let (m11, m12, m21, m22) = (one - a[0] * h, a[1] * -h, a[2] * -h, one - a[3] * h);
+    let r1 = u.0 + (a[0] * u.0 + a[1] * u.1) * h;
+    let r2 = u.1 + (a[2] * u.0 + a[3] * u.1) * h + b2 * dt;
     let det = m11 * m22 - m12 * m21;
     ((m22 * r1 - m12 * r2) / det, (m11 * r2 - m21 * r1) / det)
 }
@@ -83,14 +84,25 @@ pub struct Biquad {
 
 /// The running state of a [`Biquad`].
 #[derive(Clone, Copy, Default)]
-pub struct BiquadState {
-    s1: f32,
-    s2: f32,
+pub struct BiquadState<L: Lanes = Mono> {
+    s1: L::S,
+    s2: L::S,
 }
 
-impl BiquadState {
-    pub fn settled(&self) -> bool {
-        self.s1.abs() < SILENCE && self.s2.abs() < SILENCE
+lanewise!(BiquadState { s1, s2 });
+
+impl<L: Lanes> BiquadState<L> {
+    pub fn settled(&self) -> L::SM {
+        self.s1.abs().lt(c(SILENCE)) & self.s2.abs().lt(c(SILENCE))
+    }
+
+    /// `a` in the lanes of `mask`, `b` in the others.
+    #[inline]
+    pub fn select(mask: L::SM, a: Self, b: Self) -> Self {
+        Self {
+            s1: L::S::select(mask, a.s1, b.s1),
+            s2: L::S::select(mask, a.s2, b.s2),
+        }
     }
 }
 
@@ -129,10 +141,10 @@ impl Biquad {
     }
 
     #[inline]
-    pub fn process(&self, state: &mut BiquadState, x: f32) -> f32 {
-        let y = self.b[0] * x + state.s1;
-        state.s1 = sanitize(self.b[1] * x - self.a[0] * y + state.s2);
-        state.s2 = sanitize(self.b[2] * x - self.a[1] * y);
+    pub fn process<L: Lanes>(&self, state: &mut BiquadState<L>, x: L::S) -> L::S {
+        let y = x * self.b[0] + state.s1;
+        state.s1 = (x * self.b[1] - y * self.a[0] + state.s2).sanitize();
+        state.s2 = (x * self.b[2] - y * self.a[1]).sanitize();
         y
     }
 }
@@ -142,28 +154,37 @@ impl Biquad {
 /// `c_b` from the junction to the output, `r_bridge` across both, a shunt from
 /// the junction to ground, and the inverted output fed back into the junction
 /// through `g_fb`.
-#[derive(Clone, Copy)]
-pub struct BridgedT {
-    pub c_a: f32,
-    pub c_b: f32,
-    pub r_bridge: f32,
-    pub g_fb: f32,
+#[derive(Clone, Copy, Default)]
+pub struct BridgedT<L: Lanes = Mono> {
+    pub c_a: L::S,
+    pub c_b: L::S,
+    pub r_bridge: L::S,
+    pub g_fb: L::S,
 }
+
+lanewise!(BridgedT {
+    c_a,
+    c_b,
+    r_bridge,
+    g_fb
+});
 
 /// The voltages across a [`BridgedT`]'s arms.
 #[derive(Clone, Copy, Default)]
-pub struct Arms {
-    pub a: f32,
-    pub b: f32,
+pub struct Arms<L: Lanes = Mono> {
+    pub a: L::S,
+    pub b: L::S,
 }
 
-impl Arms {
-    pub fn settled(&self) -> bool {
-        self.a.abs() < SILENCE && self.b.abs() < SILENCE
+lanewise!(Arms { a, b });
+
+impl<L: Lanes> Arms<L> {
+    pub fn settled(&self) -> L::SM {
+        self.a.abs().lt(c(SILENCE)) & self.b.abs().lt(c(SILENCE))
     }
 }
 
-impl BridgedT {
+impl<L: Lanes> BridgedT<L> {
     /// One trapezoidal step from `arms` with the input at `vp` and a shunt
     /// current `i_shunt + g_shunt·junction`, returning the output and the
     /// new arms. While the op-amp is linear its inverting input follows `vp`,
@@ -171,49 +192,65 @@ impl BridgedT {
     /// output is pinned and the inverting input floats, so
     /// junction = output + b.
     #[inline]
-    pub fn step(&self, arms: Arms, vp: f32, g_shunt: f32, i_shunt: f32, dt: f32) -> (f32, Arms) {
+    pub fn step(
+        &self,
+        arms: Arms<L>,
+        vp: L::S,
+        g_shunt: L::S,
+        i_shunt: L::S,
+        dt: f32,
+    ) -> (L::S, Arms<L>) {
         let BridgedT {
             c_a,
             c_b,
             r_bridge,
             g_fb,
         } = *self;
-        let a = 1.0 / (r_bridge * c_a);
-        let gb = 1.0 / r_bridge;
+        let a = c::<L::S>(1.0) / (r_bridge * c_a);
+        let gb = c::<L::S>(1.0) / r_bridge;
         let u = (arms.a, arms.b);
         let linear = trapezoid(
             u,
             [
                 -a,
                 -a,
-                (-gb + 2.0 * g_fb + g_shunt) / c_b,
+                (-gb + g_fb * 2.0 + g_shunt) / c_b,
                 (-gb + g_fb) / c_b,
             ],
-            (-(2.0 * g_fb + g_shunt) * vp - i_shunt) / c_b,
+            (-(g_fb * 2.0 + g_shunt) * vp - i_shunt) / c_b,
             dt,
         );
         let out = vp - linear.0 - linear.1;
-        let (out, (a_new, b_new)) = if out.abs() > VSAT {
-            let out = VSAT.copysign(out);
+        let over = out.abs().gt(c(VSAT));
+        let (out, (a_new, b_new)) = if over.any() {
+            let pinned_out = L::S::select(out.lt(c(0.0)), c(-VSAT), c(VSAT));
             let pinned = trapezoid(
                 u,
                 [-a, -a, -gb / c_b, (-gb - g_fb - g_shunt) / c_b],
-                (-(2.0 * g_fb + g_shunt) * out - i_shunt) / c_b,
+                (-(g_fb * 2.0 + g_shunt) * pinned_out - i_shunt) / c_b,
                 dt,
             );
-            (out, pinned)
+            (
+                L::S::select(over, pinned_out, out),
+                (
+                    L::S::select(over, pinned.0, linear.0),
+                    L::S::select(over, pinned.1, linear.1),
+                ),
+            )
         } else {
             (out, linear)
         };
         (
             out,
             Arms {
-                a: sanitize(a_new),
-                b: sanitize(b_new),
+                a: a_new.sanitize(),
+                b: b_new.sanitize(),
             },
         )
     }
+}
 
+impl BridgedT {
     /// Resting frequency with a linear shunt conductance `g_shunt`, Hz.
     pub fn rest_hz(&self, g_shunt: f32) -> f32 {
         let a = 1.0 / (self.r_bridge * self.c_a);
@@ -272,18 +309,28 @@ impl DiodeCoupler {
     pub fn step(&self, v: &mut f32, vtrig: f32, dt: f32) -> f32 {
         let k = dt / (COUPLER_SUBSTEPS as f32 * self.c);
         let r_div = self.r_series + self.r_ground;
+        let g_off = 1.0 / self.r_shunt;
+        let g_on = g_off + 1.0 / r_div;
+        let (keep_off, keep_on) = (1.0 / (1.0 + k * g_off), 1.0 / (1.0 + k * g_on));
+        // With no pulse and the diode blocked, the node only relaxes through
+        // R_shunt toward ground, so the diode stays blocked all sample.
+        if vtrig == 0.0 && -*v <= DIODE_DROP {
+            let keep2 = keep_off * keep_off;
+            let keep4 = keep2 * keep2;
+            *v *= keep4 * keep4;
+            return 0.0;
+        }
         let mut sum = 0.0;
         for _ in 0..COUPLER_SUBSTEPS {
             // The capacitor carries the node's current into R_shunt and,
             // past the diode drop, into the divider; backward Euler on
             // C·v' = g·(vtrig − v) + i_off.
             let n = vtrig - *v;
-            let (g, i_off) = if n > DIODE_DROP {
-                (1.0 / self.r_shunt + 1.0 / r_div, -DIODE_DROP / r_div)
+            *v = if n > DIODE_DROP {
+                (*v + k * (g_on * vtrig - DIODE_DROP / r_div)) * keep_on
             } else {
-                (1.0 / self.r_shunt, 0.0)
+                (*v + k * g_off * vtrig) * keep_off
             };
-            *v = (*v + k * (g * vtrig + i_off)) / (1.0 + k * g);
             sum += 0.5 * (self.output(n) + self.output(vtrig - *v));
         }
         sum / COUPLER_SUBSTEPS as f32
@@ -294,7 +341,7 @@ impl DiodeCoupler {
 #[derive(Clone, Copy, Default)]
 pub struct Timing {
     pub pulse_samples: u32,
-    pub choke_samples: u32,
+    pub fade_samples: u32,
     /// [`quiet_fall`] at the sample rate.
     pub quiet_fall: f32,
 }
@@ -303,7 +350,7 @@ impl Timing {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             pulse_samples: samples(PULSE_SECS, sample_rate),
-            choke_samples: samples(CHOKE_SECS, sample_rate),
+            fade_samples: samples(FADE_SECS, sample_rate),
             quiet_fall: quiet_fall(sample_rate),
         }
     }

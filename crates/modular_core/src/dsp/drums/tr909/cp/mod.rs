@@ -11,10 +11,14 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{DIODE_DROP, Noise, RAIL, TRIG_V, Timing, VCA, VSAT, accent_volts, vca_port};
+use super::circuit::{DIODE_DROP, RAIL, TRIG_V, Timing, VCA, VSAT, accent_volts, vca_port};
+use super::noise::Noise;
+use crate::dsp::drums::analog::Junction;
 use crate::dsp::drums::clap::{Envelope, EnvelopeNetwork, ota_current};
+use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
-use crate::dsp::drums::voice::{Circuit, Level, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -74,7 +78,7 @@ const R237: f32 = 82.0e3;
 const OTA_COMPLIANCE: f32 = 13.5;
 
 /// Scales the output so an unaccented clap peaks near 5 V.
-const OUTPUT_GAIN: f32 = 1.0;
+const OUTPUT_GAIN: f32 = 1.275;
 /// Below this running peak, some 84 dB under an unaccented hit, the drum
 /// has faded out.
 const SETTLED: f32 = 3.0e-4;
@@ -118,20 +122,35 @@ fn output_network(dt: f32) -> Mna<OUT_UNKNOWNS, OUT_CAPS, 0, 1> {
 
 /// The clap's circuit state.
 #[derive(Clone, Copy, Default)]
-struct Clap {
-    trigger: Pulse,
-    accent: f32,
-    level: Level,
-    envelope: Envelope,
-    noise: MnaState<NOISE_CAPS>,
-    output: MnaState<OUT_CAPS>,
-    c59: f32,
-    c61: f32,
-    vc37: f64,
-    vbe37: f64,
-    primed: bool,
-    quiet: Quiet,
+struct Clap<L: Lanes = Mono> {
+    trigger: Pulse<L>,
+    accent: L::S,
+    level: Level<L>,
+    envelope: Envelope<L>,
+    noise: MnaState<NOISE_CAPS, L>,
+    output: MnaState<OUT_CAPS, L>,
+    c59: L::S,
+    c61: L::S,
+    vc37: Junction<L>,
+    vbe37: Junction<L>,
+    primed: L::SM,
+    quiet: Quiet<L>,
 }
+
+lanewise!(Clap {
+    trigger,
+    accent,
+    level,
+    envelope,
+    noise,
+    output,
+    c59,
+    c61,
+    vc37,
+    vbe37,
+    primed,
+    quiet,
+});
 
 #[derive(Default)]
 struct ClapShared {
@@ -145,63 +164,81 @@ struct ClapShared {
     rest: Clap,
 }
 
-impl Clap {
+/// The clap at every width.
+struct ClapDrum;
+
+impl Drum for ClapDrum {
+    type Shared = ClapShared;
+    type Circuit<L: Lanes> = Clap<L>;
+    /// The noise generator's voltage.
+    type Controls<L: Lanes> = L::S;
+    type Sources<L: Lanes> = ();
+    const QUAD: bool = true;
+    const PAIR: bool = true;
+}
+
+impl<L: Lanes> Clap<L> {
     /// Advances one sample with the generator's voltage at `noise`.
     #[inline]
-    fn advance(&mut self, sh: &ClapShared, noise: f32) -> f32 {
+    fn advance(&mut self, sh: &ClapShared, noise: L::S) -> L::S {
         let dt = sh.dt;
-        let triggered = self.trigger.next() > 0.0;
+        let triggered = self.trigger.next().gt(c(0.0));
 
         // The reverb envelope.
-        if triggered {
-            self.c59 = self.c59.max(self.accent - DIODE_DROP);
+        if triggered.any() {
+            let top = self.accent - DIODE_DROP;
+            self.c59 = L::S::select(triggered, self.c59.max(top), self.c59);
         }
         let ib37 = VCA.base_current(self.c61, R234, &mut self.vbe37);
         let i233 = (self.c59 - self.c61) / R233;
         self.c59 -= i233 * dt / C59;
-        self.c61 = (self.c61 + (i233 - ib37 as f32) * dt / C61).max(-DIODE_DROP);
+        self.c61 = (self.c61 + (i233 - L::narrow(ib37)) * dt / C61).max(c(-DIODE_DROP));
 
-        let mut injected = [0.0f32; NOISE_UNKNOWNS];
+        let mut injected = [c(0.0); NOISE_UNKNOWNS];
         injected[NOISE_IN] = noise * STIFF;
-        let x = sh.noise.open(&self.noise, 0, &injected);
-        let z = sh.noise.impedance(0, Q37C, Q37C) as f64;
+        let open = L::closed([]);
+        let x = sh.noise.open(&self.noise, open, &injected);
+        let z = sh.noise.impedance::<Mono>(0, Q37C, Q37C) as f64;
         // Q37's collector against the network's Thevenin equivalent: the
         // network already holds R203, so the port loads nothing more.
-        let (ie37, drawn) = vca_port(&mut self.vc37, x[Q37C] as f64, z, f64::INFINITY, ib37);
+        let (ie37, drawn) = vca_port(
+            !L::DM::default(),
+            &mut self.vc37,
+            L::wide(x[Q37C]),
+            c(z),
+            f64::INFINITY,
+            ib37,
+        );
         let x = sh
             .noise
-            .close(&mut self.noise, 0, x, &[(Q37C, -drawn as f32)]);
+            .close(&mut self.noise, open, x, &[(Q37C, -L::narrow(drawn))]);
 
         // The clap envelope and the OTA.
-        let m = if triggered {
-            (self.accent * R218 - RAIL * R213) / (R213 + R218)
-        } else {
-            -RAIL
-        };
+        let m = L::S::select(
+            triggered,
+            (self.accent * R218 - RAIL * R213) / (R213 + R218),
+            c(-RAIL),
+        );
         let g = 1.0 / R494 + 1.0 / R230;
-        let b71 = (TM_WIPER / R494 + self.envelope.q71_base()) / g;
+        let b71 = (self.envelope.q71_base() + TM_WIPER / R494) / g;
         let iabc = self.envelope.step(&sh.envelope, m, b71);
-        let current = ota_current(iabc, x[OTA_IN]);
+        let current = ota_current::<L>(iabc, x[OTA_IN]);
 
         // The OTA's current, held within its output's compliance.
-        let mut injected = [0.0f32; OUT_UNKNOWNS];
-        injected[M29] = ie37 as f32;
-        let x = sh.output.open(&self.output, 0, &injected);
-        let z = sh.output.impedance(0, OTA_OUT, OTA_OUT);
-        let node = (x[OTA_OUT] + z * current).clamp(-OTA_COMPLIANCE, OTA_COMPLIANCE);
+        let mut injected = [c(0.0); OUT_UNKNOWNS];
+        injected[M29] = L::narrow(ie37);
+        let x = sh.output.open(&self.output, open, &injected);
+        let z = sh.output.impedance::<Mono>(0, OTA_OUT, OTA_OUT);
+        let node = (x[OTA_OUT] + current * z).clamp(c(-OTA_COMPLIANCE), c(OTA_COMPLIANCE));
         let current = (node - x[OTA_OUT]) / z;
         let x = sh
             .output
-            .close(&mut self.output, 0, x, &[(OTA_OUT, current)]);
-        x[OUT29].clamp(-VSAT, VSAT)
+            .close(&mut self.output, open, x, &[(OTA_OUT, current)]);
+        x[OUT29].clamp(c(-VSAT), c(VSAT))
     }
 }
 
-impl Circuit for Clap {
-    type Shared = ClapShared;
-    /// The noise generator's voltage.
-    type Controls = f32;
-
+impl Fire for Clap {
     fn fire(&mut self, accent: f32, shared: &ClapShared) {
         let sounding = self.primed && !self.settled();
         if !self.primed {
@@ -210,137 +247,29 @@ impl Circuit for Clap {
         }
         self.accent = (ACCENT_GAIN * accent_volts(ACCENT_LOW, accent)).min(VSAT);
         self.level
-            .set(1.0 + accent, sounding, shared.timing.choke_samples);
+            .set(1.0 + accent, sounding, shared.timing.fade_samples);
         self.trigger.fire(TRIG_V, shared.timing.trig_samples);
     }
+}
 
-    fn settled(&self) -> bool {
+impl<L: Lanes> Circuit<L> for Clap<L> {
+    type Shared = ClapShared;
+    type Controls = L::S;
+
+    fn settled(&self) -> L::SM {
         !self.trigger.active()
-            && !self.envelope.window_open()
-            && self.c61 < ENV_SETTLED
-            && self.quiet.below(SETTLED)
+            & !self.envelope.window_open()
+            & self.c61.lt(c(ENV_SETTLED))
+            & self.quiet.below(SETTLED)
     }
 
-    fn step(&mut self, sh: &ClapShared, &noise: &f32) -> f32 {
+    fn step(&mut self, sh: &ClapShared, &noise: &L::S) -> L::S {
         let out = self.advance(sh, noise) * self.level.next();
         self.quiet.track(out, sh.timing.quiet_fall);
         out
     }
 }
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
-struct Cp909Params {
-    /// rising edges clap
-    #[signal(type = trig, range = (0.0, 5.0))]
-    trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; doubles
-    /// the level at full accent and swells the reverb (default 0)
-    #[signal(default = 0.0, range = (0.0, 5.0))]
-    #[deserr(default)]
-    accent: Option<PolySignal>,
-    /// fade out a still-sounding clap over 2 ms as the next one strikes, so
-    /// every clap starts from rest; otherwise claps run into each other, as
-    /// on the hardware (default false)
-    #[serde(default)]
-    #[deserr(default)]
-    choke: bool,
-}
+mod module;
 
-#[derive(Outputs, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct Cp909Outputs {
-    #[output("output", "drum output", default, range = (-10.0, 10.0))]
-    sample: PolyOutput,
-}
-
-/// TR-909 hand clap.
-///
-/// Each rising edge on **trigger** fires the 909's trigger into a circuit
-/// model of its hand clap: band-passed noise through a VCA that a sawtooth
-/// envelope opens several times in quick succession, over a swelling
-/// "reverb" of darker noise. **accent**, sampled at each strike, doubles
-/// the level and swells the reverb.
-///
-/// An unaccented clap peaks near **±5 V**.
-///
-/// ```js
-/// $tr909.cp($clock.beatTrigger).out()
-/// ```
-#[module(name = "$tr909.cp", has_init, patch_update, args(trigger))]
-pub struct Cp909 {
-    outputs: Cp909Outputs,
-    params: Cp909Params,
-    state: CpState,
-    channel_state: Box<[Channel]>,
-}
-
-#[derive(Default)]
-struct CpState {
-    shared: ClapShared,
-}
-
-#[derive(Clone, Copy, Default)]
-struct Channel {
-    voices: Voices<Clap>,
-    noise: Noise,
-}
-
-impl Cp909 {
-    fn init(&mut self, sample_rate: f32) {
-        let sh = &mut self.state.shared;
-        // The circuit at DC: its networks discretised at a step long
-        // enough that their capacitors carry no current.
-        sh.dt = DC_STEP;
-        sh.noise = noise_network(DC_STEP);
-        sh.envelope = EnvelopeNetwork::new(DC_STEP);
-        sh.output = output_network(DC_STEP);
-        let mut rest = Clap {
-            primed: true,
-            ..Clap::default()
-        };
-        for _ in 0..DC_ITERATIONS {
-            rest.advance(sh, NOISE_MEAN);
-        }
-        rest.quiet = Quiet::default();
-        sh.rest = rest;
-        let dt = 1.0 / sample_rate;
-        sh.timing = Timing::new(sample_rate);
-        sh.dt = dt;
-        sh.noise_rate = Noise::rate(sample_rate);
-        sh.noise = noise_network(dt);
-        sh.envelope = EnvelopeNetwork::new(dt);
-        sh.output = output_network(dt);
-    }
-
-    fn update(&mut self, _sample_rate: f32) {
-        let sh = &self.state.shared;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-            let noise = cs.noise.next(sh.noise_rate);
-            let out = cs.voices.process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                sh.timing.choke_samples,
-                sh,
-                &noise,
-            );
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
-        }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Cp909 {
-    fn on_patch_update(&mut self) {
-        let base = seed_base(self);
-        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
-            cs.noise.seed(base, ch);
-        }
-    }
-}
-
-message_handlers!(impl Cp909 {});
+pub use module::Cp909;

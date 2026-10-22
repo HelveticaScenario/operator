@@ -1,6 +1,10 @@
-use super::*;
+use std::ops::Range;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+use super::*;
+use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::voice::rails;
+
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct Bd909Params {
@@ -30,7 +34,7 @@ struct Bd909Params {
     /// on the hardware (default false)
     #[serde(default)]
     #[deserr(default)]
-    choke: bool,
+    restart: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -52,9 +56,9 @@ struct Bd909Outputs {
 /// An unaccented hit peaks near **±5 V**.
 ///
 /// ```js
-/// $tr909.bd($clock.beatTrigger).out()
+/// $tr909.kick($clock.beatTrigger).out()
 /// ```
-#[module(name = "$tr909.bd", has_init, patch_update, args(trigger))]
+#[module(name = "$tr909.kick", has_init, patch_update, args(trigger), block)]
 pub struct Bd909 {
     outputs: Bd909Outputs,
     params: Bd909Params,
@@ -65,11 +69,12 @@ pub struct Bd909 {
 #[derive(Default)]
 struct BdState {
     shared: DrumShared,
+    groups: Groups<BassDrumFamily>,
 }
 
 #[derive(Clone, Copy, Default)]
 struct Channel {
-    voices: Voices<Drum>,
+    voices: Voices<BassDrum>,
     noise: Noise,
     tune: TaperedPot,
     decay: TaperedPot,
@@ -78,6 +83,7 @@ struct Channel {
 impl Bd909 {
     fn init(&mut self, sample_rate: f32) {
         let dt = 1.0 / sample_rate;
+        self.state.groups = Groups::new();
         let sh = &mut self.state.shared;
         sh.timing = Timing::new(sample_rate);
         sh.dt = dt;
@@ -103,32 +109,110 @@ impl Bd909 {
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let sh = &self.state.shared;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-            let knob = |s: &Option<PolySignal>, default: f32| {
-                s.value_or(ch, default).clamp(0.0, 5.0) / 5.0
-            };
-            let controls = DrumControls {
-                tune: cs.tune.conductance(knob(&p.tune, DEFAULT_TUNE), R57, VR2),
-                decay: cs
-                    .decay
-                    .conductance(knob(&p.decay, DEFAULT_DECAY), R58, VR5),
-                attack: VR3 * (1.0 - knob(&p.attack, DEFAULT_ATTACK)),
-                noise: cs.noise.next(sh.noise_rate),
-            };
-            let out = cs.voices.process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                sh.timing.choke_samples,
-                sh,
-                &controls,
-            );
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
-        }
+        let channels = self.channel_count();
+        let p = &self.params;
+        let inputs = [
+            Live::new(&p.trigger),
+            Live::or(&p.accent, Bd909Params::ACCENT_DEFAULT),
+            Live::or(&p.tune, Bd909Params::TUNE_DEFAULT),
+            Live::or(&p.decay, Bd909Params::DECAY_DEFAULT),
+            Live::or(&p.attack, Bd909Params::ATTACK_DEFAULT),
+        ];
+        let out = &mut self.outputs.sample;
+        self.state.tick(
+            &mut self.channel_state[..channels],
+            p.restart,
+            inputs,
+            |ch, v| out.set(ch, v),
+        );
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut Bd909BlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch = Default::default();
+        let Bd909ParamsBlockInputs {
+            trigger,
+            accent,
+            tune,
+            decay,
+            attack,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
+        let channel_state = &mut self.channel_state[..channels];
+        each_slot(
+            &mut outputs.sample,
+            range,
+            [trigger, accent, tune, decay, attack],
+            |inputs, mut slot| {
+                self.state
+                    .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
+            },
+        );
+        Some(())
+    }
+}
+
+impl BdState {
+    /// Runs one sample of every channel on its `[trigger, accent, tune, decay,
+    /// attack]`, handing `out` each one's output.
+    #[inline(always)]
+    fn tick<I: Input>(
+        &mut self,
+        channels: &mut [Channel],
+        restart: bool,
+        [trigger, accent, tune, decay, attack]: [I; 5],
+        mut out: impl FnMut(usize, f32),
+    ) {
+        let run = Run {
+            accent,
+            restart,
+            fade_samples: self.shared.timing.fade_samples,
+            shared: &self.shared,
+        };
+        let inputs = BdInputs {
+            trigger,
+            tune,
+            decay,
+            attack,
+            noise_rate: self.shared.noise_rate,
+        };
+        self.groups.run(&inputs, channels, &run, |ch, v| {
+            out(ch, rails(v * OUTPUT_GAIN))
+        });
+    }
+}
+
+/// The inputs every channel of the bass drum reads.
+struct BdInputs<I> {
+    trigger: I,
+    tune: I,
+    decay: I,
+    attack: I,
+    noise_rate: f32,
+}
+
+impl<I: Input> Channels<BassDrumFamily> for BdInputs<I> {
+    type Channel = Channel;
+
+    fn voices(channel: &mut Channel) -> &mut Voices<BassDrum> {
+        &mut channel.voices
+    }
+
+    #[inline(always)]
+    fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, DrumControls) {
+        let knob = |s: I| s.at(ch).clamp(0.0, 5.0) / 5.0;
+        let controls = DrumControls {
+            tune: cs.tune.conductance(knob(self.tune), R57, VR2),
+            decay: cs.decay.conductance(knob(self.decay), R58, VR5),
+            attack: VR3 * (1.0 - knob(self.attack)),
+            noise: cs.noise.next(self.noise_rate),
+        };
+        (self.trigger.at(ch), controls)
     }
 }
 
@@ -138,6 +222,10 @@ impl crate::types::PatchUpdateHandler for Bd909 {
         for (ch, cs) in self.channel_state.iter_mut().enumerate() {
             cs.noise.seed(base, ch);
         }
+        let count = self.channel_count();
+        self.state
+            .groups
+            .layout::<BdInputs<&[f32]>>(&mut self.channel_state, count);
     }
 }
 

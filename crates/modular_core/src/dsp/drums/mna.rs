@@ -9,6 +9,8 @@
 //! of the network; the system matrix is inverted once per combination of
 //! switch states, so a sample costs one matrix-vector product.
 
+use super::lanes::{Lanes, Lanewise, Mask, Mono, Real, c};
+
 /// Ground, as a node index.
 pub const GROUND: usize = usize::MAX;
 
@@ -38,6 +40,9 @@ impl Default for Switch {
 /// 2^S inverse matrices.
 #[derive(Clone)]
 pub struct Mna<const N: usize, const C: usize, const S: usize, const K: usize> {
+    /// Each inverse by column: `inverse[k][j]` is every unknown's response to
+    /// a unit current into unknown `j`, so a solve sums whole columns, which
+    /// vectorises.
     inverse: [[[f32; N]; N]; K],
     caps: [(usize, usize, f32); C],
     switches: [Switch; S],
@@ -56,17 +61,33 @@ impl<const N: usize, const C: usize, const S: usize, const K: usize> Default for
 /// The capacitors' trapezoidal history: voltage and current at the last
 /// sample.
 #[derive(Clone, Copy)]
-pub struct MnaState<const C: usize> {
-    pub v: [f32; C],
-    pub i: [f32; C],
+pub struct MnaState<const C: usize, L: Lanes = Mono> {
+    pub v: [L::S; C],
+    pub i: [L::S; C],
 }
 
-impl<const C: usize> Default for MnaState<C> {
+impl<const C: usize, L: Lanes> Default for MnaState<C, L> {
     fn default() -> Self {
         Self {
-            v: [0.0; C],
-            i: [0.0; C],
+            v: [c(0.0); C],
+            i: [c(0.0); C],
         }
+    }
+}
+
+impl<const C: usize, L: Lanes> Lanewise for MnaState<C, L> {
+    type Lane = MnaState<C>;
+    #[inline]
+    fn lane(&self, lane: usize) -> MnaState<C> {
+        MnaState {
+            v: self.v.lane(lane),
+            i: self.i.lane(lane),
+        }
+    }
+    #[inline]
+    fn set_lane(&mut self, lane: usize, value: &MnaState<C>) {
+        self.v.set_lane(lane, &value.v);
+        self.i.set_lane(lane, &value.i);
     }
 }
 
@@ -145,10 +166,14 @@ impl<const N: usize> MnaBuilder<N> {
                     Self::stamp(&mut m, sw.node, sw.other, sw.g as f64);
                 }
             }
-            *inverse = invert(m);
+            *inverse = transpose(invert(m));
         }
         mna
     }
+}
+
+fn transpose<const N: usize>(m: [[f32; N]; N]) -> [[f32; N]; N] {
+    std::array::from_fn(|j| std::array::from_fn(|i| m[i][j]))
 }
 
 /// Gauss-Jordan inverse with partial pivoting.
@@ -188,7 +213,12 @@ impl<const N: usize, const C: usize, const S: usize, const K: usize> Mna<N, C, S
     /// set, plus current `injected[n]` driven into each node `n`, returning
     /// every unknown and advancing the capacitors' history.
     #[inline]
-    pub fn step(&self, state: &mut MnaState<C>, closed: usize, injected: &[f32; N]) -> [f32; N] {
+    pub fn step<L: Lanes>(
+        &self,
+        state: &mut MnaState<C, L>,
+        closed: L::Closed,
+        injected: &[L::S; N],
+    ) -> [L::S; N] {
         let x = self.open(state, closed, injected);
         self.close(state, closed, x, &[])
     }
@@ -196,10 +226,15 @@ impl<const N: usize, const C: usize, const S: usize, const K: usize> Mna<N, C, S
     /// The sample's solution with no current into the port node yet: its
     /// voltage there is the port's open-circuit voltage.
     #[inline]
-    pub fn open(&self, state: &MnaState<C>, closed: usize, injected: &[f32; N]) -> [f32; N] {
+    pub fn open<L: Lanes>(
+        &self,
+        state: &MnaState<C, L>,
+        closed: L::Closed,
+        injected: &[L::S; N],
+    ) -> [L::S; N] {
         let mut rhs = *injected;
         for (k, &(a, b, gc)) in self.caps.iter().enumerate() {
-            let j = gc * state.v[k] + state.i[k];
+            let j = state.v[k] * gc + state.i[k];
             if a != GROUND {
                 rhs[a] += j;
             }
@@ -208,58 +243,94 @@ impl<const N: usize, const C: usize, const S: usize, const K: usize> Mna<N, C, S
             }
         }
         for (s, sw) in self.switches.iter().enumerate() {
-            if closed & (1 << s) != 0 {
+            let on = L::switch_on(closed, s);
+            if on.any() {
                 let j = sw.g * sw.volts;
                 if sw.node != GROUND {
-                    rhs[sw.node] += j;
+                    rhs[sw.node] = L::S::select(on, rhs[sw.node] + j, rhs[sw.node]);
                 }
                 if sw.other != GROUND {
-                    rhs[sw.other] -= j;
+                    rhs[sw.other] = L::S::select(on, rhs[sw.other] - j, rhs[sw.other]);
                 }
             }
         }
-        let inverse = &self.inverse[closed];
-        let mut x = [0.0f32; N];
-        for (xi, row) in x.iter_mut().zip(inverse.iter()) {
-            *xi = row.iter().zip(rhs.iter()).map(|(m, r)| m * r).sum();
+        let mut x = [c(0.0); N];
+        match L::uniform(closed) {
+            Some(k) => {
+                for (column, &r) in self.inverse[k].iter().zip(rhs.iter()) {
+                    add_column::<L, N>(&mut x, column, r);
+                }
+            }
+            None => {
+                for (j, &r) in rhs.iter().enumerate() {
+                    self.add_gathered::<L>(&mut x, closed, j, r);
+                }
+            }
         }
         x
     }
 
+    /// Adds `current` times column `j` of each lane's inverse for `closed`
+    /// to `x`.
+    #[inline]
+    fn add_gathered<L: Lanes>(
+        &self,
+        x: &mut [L::S; N],
+        closed: L::Closed,
+        j: usize,
+        current: L::S,
+    ) {
+        for (i, xi) in x.iter_mut().enumerate() {
+            let m = L::gather(|lane| self.inverse[L::closed_lane(closed, lane)][j][i]);
+            *xi = m.mul_add(current, *xi);
+        }
+    }
+
     /// How far node `a`'s voltage rises per ampere driven into node `b`.
     #[inline]
-    pub fn impedance(&self, closed: usize, a: usize, b: usize) -> f32 {
-        self.inverse[closed][a][b]
+    pub fn impedance<L: Lanes>(&self, closed: L::Closed, a: usize, b: usize) -> L::S {
+        match L::uniform(closed) {
+            Some(k) => L::S::splat(self.inverse[k][b][a]),
+            None => L::gather(|lane| self.inverse[L::closed_lane(closed, lane)][b][a]),
+        }
     }
 
     /// Completes the sample from [`Self::open`]'s solution `x` with each
     /// `(node, current)` driven into its node, returning every unknown and
     /// advancing the capacitors' history.
     #[inline]
-    pub fn close(
+    pub fn close<L: Lanes>(
         &self,
-        state: &mut MnaState<C>,
-        closed: usize,
-        mut x: [f32; N],
-        ports: &[(usize, f32)],
-    ) -> [f32; N] {
-        let inverse = &self.inverse[closed];
+        state: &mut MnaState<C, L>,
+        closed: L::Closed,
+        mut x: [L::S; N],
+        ports: &[(usize, L::S)],
+    ) -> [L::S; N] {
         for &(node_index, current) in ports {
-            for (xi, row) in x.iter_mut().zip(inverse.iter()) {
-                *xi += row[node_index] * current;
+            match L::uniform(closed) {
+                Some(k) => add_column::<L, N>(&mut x, &self.inverse[k][node_index], current),
+                None => self.add_gathered::<L>(&mut x, closed, node_index, current),
             }
         }
         for (k, &(a, b, gc)) in self.caps.iter().enumerate() {
-            let v = node(&x, a) - node(&x, b);
-            let j = gc * state.v[k] + state.i[k];
-            state.i[k] = gc * v - j;
+            let v = node::<L, N>(&x, a) - node::<L, N>(&x, b);
+            let j = state.v[k] * gc + state.i[k];
+            state.i[k] = v * gc - j;
             state.v[k] = v;
         }
         x
     }
 }
 
+/// Adds `current` times `column` to `x`.
+#[inline(always)]
+fn add_column<L: Lanes, const N: usize>(x: &mut [L::S; N], column: &[f32; N], current: L::S) {
+    for (xi, &m) in x.iter_mut().zip(column.iter()) {
+        *xi = L::S::splat(m).mul_add(current, *xi);
+    }
+}
+
 #[inline]
-fn node<const N: usize>(x: &[f32; N], n: usize) -> f32 {
-    if n == GROUND { 0.0 } else { x[n] }
+fn node<L: Lanes, const N: usize>(x: &[L::S; N], n: usize) -> L::S {
+    if n == GROUND { c(0.0) } else { x[n] }
 }

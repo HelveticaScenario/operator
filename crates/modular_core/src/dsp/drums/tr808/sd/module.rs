@@ -1,6 +1,10 @@
-use super::*;
+use std::ops::Range;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+use super::*;
+use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::voice::rails;
+
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct Sd808Params {
@@ -33,7 +37,7 @@ struct Sd808Params {
     /// hardware (default false)
     #[serde(default)]
     #[deserr(default)]
-    choke: bool,
+    restart: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -60,6 +64,7 @@ impl Default for ChannelState {
                 freq: f32::NAN,
                 low: LOW,
                 high: HIGH,
+                level: 1.0,
             },
         }
     }
@@ -77,19 +82,27 @@ impl Default for ChannelState {
 /// **±10 V**.
 ///
 /// ```js
-/// $tr808.sd($clock.beatTrigger, { snappy: 4 }).out()
+/// $tr808.snare($clock.beatTrigger, { snappy: 4 }).out()
 /// ```
-#[module(name = "$tr808.sd", has_init, patch_update, args(trigger))]
+#[module(name = "$tr808.snare", has_init, patch_update, args(trigger), block)]
 pub struct Sd808 {
     outputs: Sd808Outputs,
     params: Sd808Params,
-    state: Sd808State,
+    state: SdModule,
     channel_state: Box<[ChannelState]>,
+}
+
+/// The snare's per-sample-rate constants and its channel groups.
+#[derive(Default)]
+struct SdModule {
+    st: Sd808State,
+    groups: Groups<Snare>,
 }
 
 impl Sd808 {
     fn init(&mut self, sample_rate: f32) {
-        let st = &mut self.state;
+        self.state.groups = Groups::new();
+        let st = &mut self.state.st;
         let dt = 1.0 / sample_rate;
         st.dt = dt;
         st.timing = Timing::new(sample_rate);
@@ -111,32 +124,115 @@ impl Sd808 {
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let st = &self.state;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-            let freq = p.freq.value_or(ch, DEFAULT_FREQ);
-            if freq != cs.tuning.freq {
-                cs.tuning = Tuning::new(st, freq);
-            }
-            let controls = Controls {
-                low: cs.tuning.low,
-                high: cs.tuning.high,
-                tone: p.tone.value_or(ch, DEFAULT_TONE).clamp(0.0, 5.0) / 5.0,
-                snappy: p.snappy.value_or(ch, DEFAULT_SNAPPY).clamp(0.0, 5.0) / 5.0,
-                white: cs.noise.next(st.noise_scale),
-            };
-            let out = cs.voices.process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                st.timing.choke_samples,
-                st,
-                &controls,
-            );
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
+        let channels = self.channel_count();
+        let p = &self.params;
+        let inputs = [
+            Live::new(&p.trigger),
+            Live::or(&p.accent, Sd808Params::ACCENT_DEFAULT),
+            Live::or(&p.freq, Sd808Params::FREQ_DEFAULT),
+            Live::or(&p.tone, Sd808Params::TONE_DEFAULT),
+            Live::or(&p.snappy, Sd808Params::SNAPPY_DEFAULT),
+        ];
+        let out = &mut self.outputs.sample;
+        self.state.tick(
+            &mut self.channel_state[..channels],
+            p.restart,
+            inputs,
+            |ch, v| out.set(ch, v),
+        );
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut Sd808BlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch = Default::default();
+        let Sd808ParamsBlockInputs {
+            trigger,
+            accent,
+            freq,
+            tone,
+            snappy,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
+        let channel_state = &mut self.channel_state[..channels];
+        each_slot(
+            &mut outputs.sample,
+            range,
+            [trigger, accent, freq, tone, snappy],
+            |inputs, mut slot| {
+                self.state
+                    .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
+            },
+        );
+        Some(())
+    }
+}
+
+impl SdModule {
+    /// Runs one sample of every channel on its `[trigger, accent, freq, tone,
+    /// snappy]`, handing `out` each one's output.
+    #[inline(always)]
+    fn tick<I: Input>(
+        &mut self,
+        channels: &mut [ChannelState],
+        restart: bool,
+        [trigger, accent, freq, tone, snappy]: [I; 5],
+        mut out: impl FnMut(usize, f32),
+    ) {
+        let run = Run {
+            accent,
+            restart,
+            fade_samples: self.st.timing.fade_samples,
+            shared: &self.st,
+        };
+        let inputs = SdInputs {
+            st: &self.st,
+            trigger,
+            freq,
+            tone,
+            snappy,
+        };
+        self.groups.run(&inputs, channels, &run, |ch, v| {
+            out(ch, rails(v * OUTPUT_GAIN))
+        });
+    }
+}
+
+/// The inputs every channel of the snare reads.
+struct SdInputs<'a, I> {
+    st: &'a Sd808State,
+    trigger: I,
+    freq: I,
+    tone: I,
+    snappy: I,
+}
+
+impl<I: Input> Channels<Snare> for SdInputs<'_, I> {
+    type Channel = ChannelState;
+
+    fn voices(channel: &mut ChannelState) -> &mut Voices<Voice> {
+        &mut channel.voices
+    }
+
+    #[inline(always)]
+    fn inputs(&self, ch: usize, cs: &mut ChannelState) -> (f32, Controls) {
+        let freq = self.freq.at(ch);
+        if freq != cs.tuning.freq {
+            cs.tuning = Tuning::new(self.st, freq);
         }
+        let controls = Controls {
+            low: cs.tuning.low,
+            high: cs.tuning.high,
+            tone: self.tone.at(ch).clamp(0.0, 5.0) / 5.0,
+            snappy: self.snappy.at(ch).clamp(0.0, 5.0) / 5.0,
+            white: cs.noise.next(self.st.noise_scale),
+            level: cs.tuning.level,
+        };
+        (self.trigger.at(ch), controls)
     }
 }
 
@@ -146,6 +242,10 @@ impl crate::types::PatchUpdateHandler for Sd808 {
         for (ch, cs) in self.channel_state.iter_mut().enumerate() {
             cs.noise.seed(base, ch);
         }
+        let count = self.channel_count();
+        self.state
+            .groups
+            .layout::<SdInputs<&[f32]>>(&mut self.channel_state, count);
     }
 }
 

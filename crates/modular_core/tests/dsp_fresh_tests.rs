@@ -401,6 +401,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$mix" => json!({ "inputs": [] }),
         "$adsr" => json!({ "gate": 0.0 }),
         "$perc" => json!({ "trigger": 0.0 }),
+        "$tr808.hiHat" => json!({ "closed": 0.0 }),
         drum if drum.starts_with("$tr808.") || drum.starts_with("$tr909.") => {
             json!({ "trigger": 0.0 })
         }

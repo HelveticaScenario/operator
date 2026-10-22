@@ -19,11 +19,13 @@ use schemars::JsonSchema;
 use super::circuit::{
     Arms, Biquad, BiquadState, BridgedT, SILENCE, Timing, WhiteNoise, pulse_volts,
 };
-use crate::dsp::drums::analog::{VT, high_pass, low_pass, one_pole_coeff, rc_hz};
-use crate::dsp::drums::voice::{Circuit, Pulse, Voices};
+use crate::dsp::drums::analog::{Exp, VT, converged, high_pass, low_pass, one_pole_coeff, rc_hz};
+use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::lanes::{Lanes, Lanewise, Mask, Mono, Real, c, lanewise};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices};
 use crate::dsp::utils::rng::seed_base;
-use crate::dsp::utils::{sanitize, voct_to_hz};
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::dsp::utils::voct_to_hz;
+use crate::poly::{PolyOutput, PolySignal};
 
 mod modules;
 mod parts;
@@ -84,44 +86,43 @@ const PINK_C_GROUND: f32 = 0.018e-6;
 const D56_DROP: f32 = 0.6;
 
 /// The circuit's state for one hit sequence.
-#[derive(Clone, Copy)]
-struct Voice {
-    pulse: Pulse,
+#[derive(Clone, Copy, Default)]
+struct Voice<L: Lanes = Mono> {
+    pulse: Pulse<L>,
     /// Voltage across the input coupling capacitor.
-    c_in: f32,
-    arms: Arms,
+    c_in: L::S,
+    arms: Arms<L>,
     /// Junction voltage from the last step.
-    junction: f32,
-    /// Noise gate: C72, C71, Q52's base-emitter voltage, and the pink
-    /// noise, collector coupling and smoothing filters.
-    env: f32,
-    couple: f32,
-    vbe: f32,
-    pink: BiquadState,
-    gate_hp: f32,
-    gate_lp: f32,
-    out_hp: f32,
-    out_lp: f32,
+    junction: L::S,
+    /// Noise gate: C72, C71, Q52's base-emitter voltage and its
+    /// exponential, and the pink noise, collector coupling and smoothing
+    /// filters.
+    env: L::S,
+    couple: L::S,
+    vbe: L::S,
+    q52: Exp<L>,
+    pink: BiquadState<L>,
+    gate_hp: L::S,
+    gate_lp: L::S,
+    out_hp: L::S,
+    out_lp: L::S,
 }
 
-impl Default for Voice {
-    fn default() -> Self {
-        Self {
-            pulse: Pulse::default(),
-            c_in: 0.0,
-            arms: Arms::default(),
-            junction: 0.0,
-            env: 0.0,
-            couple: 0.0,
-            vbe: 0.0,
-            pink: BiquadState::default(),
-            gate_hp: 0.0,
-            gate_lp: 0.0,
-            out_hp: 0.0,
-            out_lp: 0.0,
-        }
-    }
-}
+lanewise!(Voice {
+    pulse,
+    c_in,
+    arms,
+    junction,
+    env,
+    couple,
+    vbe,
+    q52,
+    pink,
+    gate_hp,
+    gate_lp,
+    out_hp,
+    out_lp,
+});
 
 /// Per-sample-rate constants for one voice.
 #[derive(Default)]
@@ -129,6 +130,7 @@ struct TomState {
     timing: Timing,
     dt: f32,
     noise: Option<&'static NoiseParts>,
+    accent_trim: f32,
     tuning: &'static [f32],
     noise_scale: f32,
     pink: Biquad,
@@ -149,6 +151,7 @@ impl TomState {
     fn init(&mut self, parts: &'static Parts, sample_rate: f32) {
         let dt = 1.0 / sample_rate;
         self.dt = dt;
+        self.accent_trim = parts.accent_trim;
         self.tuning = tuning_table();
         self.timing = Timing::new(sample_rate);
         self.noise = parts.noise.as_ref();
@@ -181,100 +184,124 @@ struct Channel {
 }
 
 /// The settings for one sample.
-struct Controls {
-    t: BridgedT,
+#[derive(Clone, Copy, Default)]
+struct Controls<L: Lanes = Mono> {
+    t: BridgedT<L>,
     /// The white noise generator's voltage. Gated noise keeps its generator
     /// running between hits, so the gate's first sample after a strike draws
     /// fresh noise.
-    white: f32,
+    white: L::S,
+    /// Output gain levelling `freq`.
+    level: L::S,
 }
 
-impl Circuit for Voice {
+lanewise!(Controls { t, white, level });
+
+/// The toms and congas at every width.
+struct TomDrum;
+
+impl Drum for TomDrum {
     type Shared = TomState;
-    type Controls = Controls;
+    type Circuit<L: Lanes> = Voice<L>;
+    type Controls<L: Lanes> = Controls<L>;
+    type Sources<L: Lanes> = ();
+    const QUAD: bool = true;
+    const PAIR: bool = false;
+}
+
+impl Fire for Voice {
+    fn accent_trim(st: &TomState) -> f32 {
+        st.accent_trim
+    }
 
     fn fire(&mut self, accent: f32, st: &TomState) {
         self.pulse
             .fire(pulse_volts(accent), st.timing.pulse_samples);
     }
+}
 
-    fn settled(&self) -> bool {
-        !self.pulse.active()
-            && self.arms.settled()
-            && self.vbe < Q52_OFF
-            && [
-                self.c_in,
-                self.gate_hp,
-                self.gate_lp,
-                self.out_hp,
-                self.out_lp,
-            ]
-            .iter()
-            .all(|v| v.abs() < SILENCE)
+impl<L: Lanes> Circuit<L> for Voice<L> {
+    type Shared = TomState;
+    type Controls = Controls<L>;
+
+    fn settled(&self) -> L::SM {
+        let silent = |v: L::S| v.abs().lt(c(SILENCE));
+        (!self.pulse.active())
+            .and_then(|| self.arms.settled())
+            .and_then(|| self.vbe.lt(c(Q52_OFF)))
+            .and_then(|| silent(self.c_in) & silent(self.gate_hp) & silent(self.gate_lp))
+            .and_then(|| silent(self.out_hp) & silent(self.out_lp))
     }
 
     /// Advances the circuit one sample, returning the output mixer's voltage.
-    fn step(&mut self, st: &TomState, c: &Controls) -> f32 {
+    fn step(&mut self, st: &TomState, ctl: &Controls<L>) -> L::S {
         let vtrig = self.pulse.next();
-        let out = self.ring(st, &c.t, vtrig);
+        let out = self.ring(st, &ctl.t, vtrig);
         let noise = match st.noise {
-            Some(n) => self.gate(n, st, vtrig, c.white),
-            None => 0.0,
+            Some(n) => self.gate(n, st, vtrig, ctl.white),
+            None => c(0.0),
         };
 
         // Output mixer: the ring and noise meet through equal resistors, so
         // their average drives C81 into IC13's virtual ground.
-        let mix = 0.5 * (out + noise);
-        let hp = high_pass(&mut self.out_hp, mix, st.out_hp_coeff);
-        -2.0 * (R_LEVEL / R_MIX) * low_pass(&mut self.out_lp, hp, st.out_lp_coeff)
+        let mix = (out + noise) * 0.5;
+        let hp = high_pass(&mut self.out_hp, mix, c(st.out_hp_coeff));
+        low_pass(&mut self.out_lp, hp, c(st.out_lp_coeff)) * (-2.0 * (R_LEVEL / R_MIX)) * ctl.level
     }
 }
 
-impl Voice {
+impl<L: Lanes> Voice<L> {
     /// Advances the input network and bridged-T one sample, returning
     /// IC15's output.
     #[inline]
-    fn ring(&mut self, st: &TomState, t: &BridgedT, vtrig: f32) -> f32 {
+    fn ring(&mut self, st: &TomState, t: &BridgedT<L>, vtrig: L::S) -> L::S {
         let dt = st.dt;
         // C73 charges through the divider, so IC15 sees a spike only tens of
         // microseconds long; its average over the sample keeps the energy it
         // delivers exact. D56 stops the falling edge a diode drop below
         // ground, discharging C73 as it does.
         let across = vtrig - self.c_in;
-        let vp = if across < -D56_DROP {
-            self.c_in = vtrig + D56_DROP;
-            -D56_DROP * st.in_share
-        } else {
-            self.c_in = vtrig - across * st.in_mul;
-            st.in_share * across * st.in_avg
-        };
+        let clipped = across.lt(c(-D56_DROP));
+        let vp = L::S::select(
+            clipped,
+            c(-D56_DROP * st.in_share),
+            across * st.in_share * st.in_avg,
+        );
+        self.c_in = L::S::select(clipped, vtrig + D56_DROP, vtrig - across * st.in_mul);
 
         // The tuning network's current is linearised about the junction's
         // new voltage, refined once, so the diodes join the implicit solve as
         // a conductance.
         let mut junction = self.junction;
-        let mut solved = (0.0, self.arms);
+        let mut solved = (c(0.0), self.arms);
         for _ in 0..2 {
-            let (i_tune, g_tune) = tuning_current(st.tuning, junction);
+            let (i_tune, g_tune) = tuning_current::<L>(st.tuning, junction);
             solved = t.step(self.arms, vp, g_tune, i_tune - g_tune * junction, dt);
             junction = solved.0 + solved.1.b;
         }
         let (out, arms) = solved;
         self.arms = arms;
-        self.junction = sanitize(junction);
+        self.junction = junction.sanitize();
         out
     }
 
     /// The noise gate's output at C75 for this sample.
-    fn gate(&mut self, n: &NoiseParts, st: &TomState, vtrig: f32, white: f32) -> f32 {
+    fn gate(&mut self, n: &NoiseParts, st: &TomState, vtrig: L::S, white: L::S) -> L::S {
         let dt = st.dt;
-        if vtrig - D55_DROP > self.env {
-            self.env += (vtrig - D55_DROP - self.env) * st.env_charge;
-        }
-        let pink = if self.vbe < Q52_OFF {
-            0.0
+        let charging = (vtrig - D55_DROP).gt(self.env);
+        self.env = L::S::select(
+            charging,
+            self.env + (vtrig - D55_DROP - self.env) * st.env_charge,
+            self.env,
+        );
+        let gated = self.vbe.lt(c(Q52_OFF));
+        let pink = if gated.all() {
+            c(0.0)
         } else {
-            st.pink.process(&mut self.pink, white)
+            let mut pink = self.pink;
+            let y = st.pink.process(&mut pink, white);
+            self.pink = BiquadState::select(gated, self.pink, pink);
+            L::S::select(gated, c(0.0), y)
         };
         let thevenin = pink * R217 / (R216 + R217);
         let r_th = parallel(R216, R217);
@@ -283,72 +310,55 @@ impl Voice {
         // divider, and the base current through R220. Newton on the
         // base-emitter voltage from the last sample's value, with steps
         // limited so the junction's exponential cannot overshoot.
-        let is_b = Q52_IS / Q52_BETA;
-        let mut vbe = self.vbe;
+        const DONE: f64 = converged(1.0e-6, VT as f64);
+        let (vt, inv_vt) = (VT as f64, 1.0 / VT as f64);
+        let is_b = (Q52_IS / Q52_BETA) as f64;
+        let (r220, g218, g_th) = (R220 as f64, 1.0 / R218 as f64, 1.0 / r_th as f64);
+        let source = L::wide(self.env) * g218 + L::wide(thevenin + self.couple) * g_th;
+        let mut vbe = L::wide(self.vbe);
+        let mut e = self.q52.at(vbe, inv_vt);
+        let mut done = L::DM::default();
         for _ in 0..4 {
-            let e = (vbe / VT).exp();
-            let ib = is_b * (e - 1.0);
-            let dib = is_b * e / VT;
-            let base = vbe + R220 * ib;
-            let f = (self.env - base) / R218 + (thevenin + self.couple - base) / r_th - ib;
-            let df = -(1.0 + R220 * dib) * (1.0 / R218 + 1.0 / r_th) - dib;
-            vbe -= (f / df).clamp(-4.0 * VT, 4.0 * VT);
+            let ib = (e.value - 1.0) * is_b;
+            let dib = e.value * is_b * inv_vt;
+            let base = vbe + ib * r220;
+            let f = source - base * (g218 + g_th) - ib;
+            let df = -(dib * r220 + 1.0) * (g218 + g_th) - dib;
+            let step = (f / df).clamp(c(-4.0 * vt), c(4.0 * vt));
+            vbe = L::D::select(done, vbe, vbe - step);
+            e = e.at_where(!done, vbe, inv_vt);
+            done = done | (step * step).lt(c(DONE));
+            if done.all() {
+                break;
+            }
         }
-        vbe = vbe.min(0.9);
+        let vbe = vbe.min(c(0.9));
+        let e = e.at(vbe, inv_vt);
+        self.q52 = e;
+        let vbe = L::narrow(vbe);
         self.vbe = vbe;
-        let ib = is_b * ((vbe / VT).exp() - 1.0);
-        let base = vbe + R220 * ib;
+        let ib = L::narrow((e.value - 1.0) * is_b);
+        let base = vbe + ib * R220;
         // Backward Euler for C71 (its time constant is a few samples) and
         // C72's slow bleed.
         let h = dt / (r_th * n.c_couple);
-        self.couple = (self.couple - h * (thevenin - base)) / (1.0 + h);
-        self.env -= dt * (self.env - base) / (R218 * n.c_env);
+        self.couple = (self.couple - (thevenin - base) * h) / (1.0 + h);
+        self.env -= (self.env - base) * dt / (R218 * n.c_env);
 
-        let open = ((vbe - Q52_OFF) / Q52_FADE).clamp(0.0, 1.0);
-        let drop = open * (Q52_BETA * ib * R221).min(VCC - 0.2);
-        let coupled = high_pass(&mut self.gate_hp, -drop, st.gate_hp_coeff);
+        let open = ((vbe - Q52_OFF) / Q52_FADE).clamp(c(0.0), c(1.0));
+        let drop = open * (ib * Q52_BETA * R221).min(c(VCC - 0.2));
+        let coupled = high_pass(&mut self.gate_hp, -drop, c(st.gate_hp_coeff));
         low_pass(
             &mut self.gate_lp,
             coupled * R223 / (R221 + R223),
-            st.gate_lp_coeff,
+            c(st.gate_lp_coeff),
         )
     }
 }
 
-/// Runs one block of samples for a voice's channels.
-#[allow(clippy::too_many_arguments)]
-fn process(
-    parts: &Parts,
-    st: &TomState,
-    channels: &mut [Channel],
-    trigger: &PolySignal,
-    accent: &Option<PolySignal>,
-    freq: &Option<PolySignal>,
-    decay: &Option<PolySignal>,
-    choke: bool,
-    default_freq: f32,
-    default_decay: f32,
-    output: &mut PolyOutput,
-) {
-    for (ch, cs) in channels.iter_mut().enumerate() {
-        let freq = freq.value_or(ch, default_freq);
-        let decay = decay.value_or(ch, default_decay);
-        if freq != cs.network.freq || decay != cs.network.decay {
-            cs.network = Network::new(parts, freq, decay, st.rest_hz);
-        }
-        let controls = Controls {
-            t: cs.network.t,
-            white: cs.noise.next(st.noise_scale),
-        };
-        let out = cs.voices.process(
-            trigger.get_value(ch),
-            accent,
-            ch,
-            choke,
-            st.timing.choke_samples,
-            st,
-            &controls,
-        );
-        output.set(ch, out * parts.gain);
-    }
+/// A tom's per-sample-rate constants and its channel groups.
+#[derive(Default)]
+struct TomModule {
+    st: TomState,
+    groups: Groups<TomDrum>,
 }

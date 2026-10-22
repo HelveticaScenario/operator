@@ -8,12 +8,18 @@
 //! passes the mix to IC50a. A Sallen-Key high-pass with gain on IC50b
 //! thins it to a click.
 
+use std::ops::Range;
+
 use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{DIODE_DROP, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts};
+use crate::dsp::drums::analog::Junction;
+use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
-use crate::dsp::drums::voice::{Circuit, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Voices, rails};
 use crate::poly::{PolyOutput, PolySignal};
 
 // IC48b scales the accent voltage by 1 + R406/R397.
@@ -90,8 +96,6 @@ const OUT_UNKNOWNS: usize = 6;
 const OUT_CAPS: usize = 2;
 const STIFF: f32 = 10.0;
 
-/// Scales the output so an unaccented hit peaks near 5 V.
-const OUTPUT_GAIN: f32 = 1.0;
 /// Below this running peak, some 84 dB under an unaccented hit, the drum
 /// has faded out.
 const SETTLED: f32 = 3.0e-4;
@@ -133,17 +137,29 @@ fn output_network(dt: f32) -> Mna<OUT_UNKNOWNS, OUT_CAPS, 0, 1> {
 
 /// The rim shot's circuit state.
 #[derive(Clone, Copy, Default)]
-struct Rim {
-    trigger: Pulse,
-    accent: f32,
-    env: f32,
-    res: MnaState<RES_CAPS>,
-    out: MnaState<OUT_CAPS>,
-    mix: f64,
-    vc: f64,
-    vbe: f64,
-    quiet: Quiet,
+struct Rim<L: Lanes = Mono> {
+    trigger: Pulse<L>,
+    accent: L::S,
+    env: L::S,
+    res: MnaState<RES_CAPS, L>,
+    out: MnaState<OUT_CAPS, L>,
+    mix: Junction<L>,
+    vc: Junction<L>,
+    vbe: Junction<L>,
+    quiet: Quiet<L>,
 }
+
+lanewise!(Rim {
+    trigger,
+    accent,
+    env,
+    res,
+    out,
+    mix,
+    vc,
+    vbe,
+    quiet
+});
 
 #[derive(Default)]
 struct RimShared {
@@ -155,58 +171,99 @@ struct RimShared {
     env_charge: f32,
 }
 
-impl Circuit for Rim {
-    type Shared = RimShared;
-    type Controls = ();
+/// The rim shot at every width.
+struct RimDrum;
 
+impl Drum for RimDrum {
+    type Shared = RimShared;
+    type Circuit<L: Lanes> = Rim<L>;
+    type Controls<L: Lanes> = ();
+    type Sources<L: Lanes> = ();
+    const QUAD: bool = false;
+    const PAIR: bool = false;
+}
+
+impl Fire for Rim {
     fn fire(&mut self, accent: f32, shared: &RimShared) {
         self.accent = (ACCENT_GAIN * accent_volts(ACCENT_LOW, accent)).min(VSAT);
         self.trigger.fire(TRIG_V, shared.timing.trig_samples);
     }
+}
 
-    fn settled(&self) -> bool {
-        !self.trigger.active() && self.env < ENV_SETTLED && self.quiet.below(SETTLED)
+impl<L: Lanes> Circuit<L> for Rim<L> {
+    type Shared = RimShared;
+    type Controls = ();
+
+    fn settled(&self) -> L::SM {
+        !self.trigger.active() & self.env.lt(c(ENV_SETTLED)) & self.quiet.below(SETTLED)
     }
 
-    fn step(&mut self, sh: &RimShared, _: &()) -> f32 {
+    fn step(&mut self, sh: &RimShared, _: &()) -> L::S {
         let dt = sh.dt;
         let trig = self.trigger.next();
 
         // C119 charges from the gated accent, then feeds Q65's base.
-        if trig > 0.0 {
+        let on = trig.gt(c(0.0));
+        if on.any() {
             let top = self.accent - DIODE_DROP;
-            self.env = top + (self.env - top) * sh.env_charge;
+            self.env = L::S::select(on, top + (self.env - top) * sh.env_charge, self.env);
         }
         let ib = VCA.base_current(self.env, R403, &mut self.vbe);
-        self.env -= ib as f32 * dt / C119;
+        self.env -= L::narrow(ib) * dt / C119;
 
-        let mut injected = [0.0f32; RES_UNKNOWNS];
+        let mut injected = [c(0.0); RES_UNKNOWNS];
         injected[DRIVE] = trig / R_DRIVE;
-        let x = sh.res.open(&self.res, 0, &injected);
-        let z = sh.res.impedance(0, MIX, MIX) as f64;
+        let open = L::closed([]);
+        let x = sh.res.open(&self.res, open, &injected);
+        let z = sh.res.impedance::<Mono>(0, MIX, MIX) as f64;
         // The mix node's diodes and Q65's collector, fed from the
         // network's Thevenin equivalent at the mix node.
-        let open = x[MIX] as f64;
+        let v = L::wide(x[MIX]);
         let shaper = Shaper {
             r_in: z,
             r_out: R423,
             r_load: R418,
         };
-        let ie = shaper.solve(&mut self.mix, &mut self.vc, open, ib);
-        let drawn = (open - self.mix) / z;
-        sh.res.close(&mut self.res, 0, x, &[(MIX, -drawn as f32)]);
+        let ie = shaper.solve(!L::DM::default(), &mut self.mix, &mut self.vc, v, ib);
+        let drawn = (v - self.mix.v) / z;
+        sh.res
+            .close(&mut self.res, open, x, &[(MIX, -L::narrow(drawn))]);
 
-        let level = (-(R_LEVEL * ie) as f32).clamp(-VSAT, VSAT);
-        let mut injected = [0.0f32; OUT_UNKNOWNS];
+        let level = L::narrow(-(ie * R_LEVEL)).clamp(c(-VSAT), c(VSAT));
+        let mut injected = [c(0.0); OUT_UNKNOWNS];
         injected[OUT_IN] = level * STIFF;
-        let x = sh.out.step(&mut self.out, 0, &injected);
-        let out = x[OUT].clamp(-VSAT, VSAT);
+        let x = sh.out.step(&mut self.out, open, &injected);
+        let out = x[OUT].clamp(c(-VSAT), c(VSAT));
         self.quiet.track(out, sh.timing.quiet_fall);
         out
     }
 }
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+/// The inputs every channel of the rim shot reads.
+struct RsInputs<I> {
+    trigger: I,
+}
+
+impl<I: Input> Channels<RimDrum> for RsInputs<I> {
+    type Channel = Voices<Rim>;
+
+    fn voices(channel: &mut Voices<Rim>) -> &mut Voices<Rim> {
+        channel
+    }
+
+    #[inline(always)]
+    fn inputs(&self, ch: usize, _: &mut Voices<Rim>) -> (f32, ()) {
+        (self.trigger.at(ch), ())
+    }
+}
+
+#[derive(Default)]
+struct RsState {
+    shared: RimShared,
+    groups: Groups<RimDrum>,
+}
+
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct Rs909Params {
@@ -223,7 +280,7 @@ struct Rs909Params {
     /// the hardware (default false)
     #[serde(default)]
     #[deserr(default)]
-    choke: bool,
+    restart: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -243,20 +300,21 @@ struct Rs909Outputs {
 /// An unaccented hit peaks near **±5 V**.
 ///
 /// ```js
-/// $tr909.rs($clock.beatTrigger).out()
+/// $tr909.rimShot($clock.beatTrigger).out()
 /// ```
-#[module(name = "$tr909.rs", has_init, args(trigger))]
+#[module(name = "$tr909.rimShot", has_init, patch_update, args(trigger), block)]
 pub struct Rs909 {
     outputs: Rs909Outputs,
     params: Rs909Params,
-    state: RimShared,
+    state: RsState,
     channel_state: Box<[Voices<Rim>]>,
 }
 
 impl Rs909 {
     fn init(&mut self, sample_rate: f32) {
         let dt = 1.0 / sample_rate;
-        let sh = &mut self.state;
+        self.state.groups = Groups::new();
+        let sh = &mut self.state.shared;
         sh.timing = Timing::new(sample_rate);
         sh.dt = dt;
         sh.res = resonator_network(dt);
@@ -265,20 +323,75 @@ impl Rs909 {
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let sh = &self.state;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let out = self.channel_state[ch].process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                sh.timing.choke_samples,
-                sh,
-                &(),
-            );
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
-        }
+        let channels = self.channel_count();
+        let p = &self.params;
+        let inputs = [
+            Live::new(&p.trigger),
+            Live::or(&p.accent, Rs909Params::ACCENT_DEFAULT),
+        ];
+        let out = &mut self.outputs.sample;
+        self.state.tick(
+            &mut self.channel_state[..channels],
+            p.restart,
+            inputs,
+            |ch, v| out.set(ch, v),
+        );
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut Rs909BlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch = Default::default();
+        let Rs909ParamsBlockInputs { trigger, accent } =
+            p.block_inputs(range.clone(), channels, &mut scratch)?;
+        let channel_state = &mut self.channel_state[..channels];
+        each_slot(
+            &mut outputs.sample,
+            range,
+            [trigger, accent],
+            |inputs, mut slot| {
+                self.state
+                    .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
+            },
+        );
+        Some(())
+    }
+}
+
+impl RsState {
+    /// Runs one sample of every channel on its `[trigger, accent]`, handing
+    /// `out` each one's output.
+    #[inline(always)]
+    fn tick<I: Input>(
+        &mut self,
+        channels: &mut [Voices<Rim>],
+        restart: bool,
+        [trigger, accent]: [I; 2],
+        mut out: impl FnMut(usize, f32),
+    ) {
+        let run = Run {
+            accent,
+            restart,
+            fade_samples: self.shared.timing.fade_samples,
+            shared: &self.shared,
+        };
+        let inputs = RsInputs { trigger };
+        self.groups
+            .run(&inputs, channels, &run, |ch, v| out(ch, rails(v)));
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Rs909 {
+    fn on_patch_update(&mut self) {
+        let count = self.channel_count();
+        self.state
+            .groups
+            .layout::<RsInputs<&[f32]>>(&mut self.channel_state, count);
     }
 }
 

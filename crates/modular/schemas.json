@@ -899,8 +899,8 @@
     "channels": 2
   },
   {
-    "name": "$tr808.bd",
-    "documentation": "TR-808 bass drum.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its bass drum: a resonant bridged-T filter rings at\n≈49.5 Hz with a short frequency jump on the attack and a falling pitch\n\"sigh\". **decay** sets how long the ring lasts, **tone** how much of the\nattack click comes through, and **accent**, sampled at each strike, drives\nthe circuit harder. Retriggering a ringing drum adds to its current state\nrather than restarting it, as on the hardware, so long decays at fast\ntempos swing in level from hit to hit; **choke** starts every hit from rest\ninstead.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**; higher **freq** and **tone** run hotter, up to where the\ncircuit's op-amp clips.\n\n```js\n$tr808.bd($clock.beatTrigger, { decay: 2 }).out()\n```",
+    "name": "$tr808.kick",
+    "documentation": "TR-808 bass drum.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its bass drum: a resonant bridged-T filter rings at\n≈49.5 Hz with a short frequency jump on the attack and a falling pitch\n\"sigh\". **decay** sets how long the ring lasts, **tone** how much of the\nattack click comes through, and **accent**, sampled at each strike, drives\nthe circuit harder. Retriggering a ringing drum adds to its current state\nrather than restarting it, as on the hardware, so long decays at fast\ntempos swing in level from hit to hit; **restart** starts every hit from\nrest instead.\n\nAn unaccented hit peaks near **±5 V** at any **freq**, and a fully\naccented one near **±10 V**; toward the top of the **freq** range the\ncircuit's op-amp clips, so accent adds less there.\n\n```js\n$tr808.kick($clock.beatTrigger, { decay: 2 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Bd808Params",
@@ -916,11 +916,6 @@
               "type": "null"
             }
           ]
-        },
-        "choke": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
-          "type": "boolean",
-          "default": false
         },
         "decay": {
           "description": "seconds for the ring to fall 60 dB; the stock decay knob spans\n≈0.09–3.8 s, and the circuit can ring no shorter than ≈0.09 s at stock\npitch (default 1)",
@@ -943,6 +938,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-ringing hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "tone": {
           "description": "tone control, 0–5 V: opens the output low-pass from ≈300 Hz to ≈7 kHz,\nletting through more of the attack click (default 2.5)",
@@ -1083,8 +1083,8 @@
     ]
   },
   {
-    "name": "$tr808.sd",
-    "documentation": "TR-808 snare drum.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its snare: two bridged-T resonators near 250 and 500 Hz,\nblended by **tone**, over a burst of chopped white noise whose strength\n**snappy** sets. **accent**, sampled at each strike, drives the circuit\nharder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.sd($clock.beatTrigger, { snappy: 4 }).out()\n```",
+    "name": "$tr808.snare",
+    "documentation": "TR-808 snare drum.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its snare: two bridged-T resonators near 250 and 500 Hz,\nblended by **tone**, over a burst of chopped white noise whose strength\n**snappy** sets. **accent**, sampled at each strike, drives the circuit\nharder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.snare($clock.beatTrigger, { snappy: 4 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Sd808Params",
@@ -1101,11 +1101,6 @@
             }
           ]
         },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
         "freq": {
           "description": "pitch of the low resonator in V/Oct, scaling both; stock is ≈250 Hz\n(default -0.0678)",
           "anyOf": [
@@ -1116,6 +1111,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "snappy": {
           "description": "snappy control, 0–5 V: how hard each hit charges the noise envelope\n(default 2.5)",
@@ -1267,8 +1267,8 @@
     ]
   },
   {
-    "name": "$tr808.rs",
-    "documentation": "TR-808 rim shot.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its rim shot: two resonators near 1.8 kHz and 450 Hz\nswitch a transistor that chops a short envelope, and a resonant high-pass\nturns the result into a bright, 10 ms crack. **accent**, sampled at each\nstrike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.rs($clock.beatTrigger).out()\n```",
+    "name": "$tr808.rimShot",
+    "documentation": "TR-808 rim shot.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its rim shot: two resonators near 1.8 kHz and 450 Hz\nswitch a transistor that chops a short envelope, and a resonant high-pass\nturns the result into a bright, 10 ms crack. **accent**, sampled at each\nstrike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.rimShot($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Rs808Params",
@@ -1285,11 +1285,6 @@
             }
           ]
         },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
         "freq": {
           "description": "pitch of the upper resonator in V/Oct, scaling both; stock is\n≈1.79 kHz (default 2.771)",
           "anyOf": [
@@ -1300,6 +1295,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -1413,8 +1413,8 @@
     ]
   },
   {
-    "name": "$tr808.cl",
-    "documentation": "TR-808 claves.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its claves: a high-Q bridged-T resonator rings at\n≈2.5 kHz. **decay** sets how long it rings, and **accent**, sampled at\neach strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.cl($clock.beatTrigger).out()\n```",
+    "name": "$tr808.claves",
+    "documentation": "TR-808 claves.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its claves: a high-Q bridged-T resonator rings at\n≈2.5 kHz. **decay** sets how long it rings, and **accent**, sampled at\neach strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.claves($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cl808Params",
@@ -1430,11 +1430,6 @@
               "type": "null"
             }
           ]
-        },
-        "choke": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
-          "type": "boolean",
-          "default": false
         },
         "decay": {
           "description": "seconds for the ring to fall 60 dB; stock is 0.075 s (default 0.075)",
@@ -1457,6 +1452,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-ringing hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -1578,8 +1578,8 @@
     ]
   },
   {
-    "name": "$tr808.cb",
-    "documentation": "TR-808 cowbell.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its cowbell: two square-wave oscillators near 540 and\n800 Hz, gated by a sharp-attacked envelope and shaped by a band-pass\nfilter. **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.cb($clock.beatTrigger).out()\n```",
+    "name": "$tr808.cowbell",
+    "documentation": "TR-808 cowbell.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its cowbell: two square-wave oscillators near 540 and\n800 Hz, gated by a sharp-attacked envelope and shaped by a band-pass\nfilter. **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.cowbell($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cb808Params",
@@ -1596,11 +1596,6 @@
             }
           ]
         },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelope, as on\nthe hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
         "freq": {
           "description": "pitch of the lower oscillator in V/Oct, scaling both; stock is\n540 Hz against 800 Hz (default 1.0454)",
           "anyOf": [
@@ -1611,6 +1606,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelope, as on\nthe hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the bell",
@@ -1724,8 +1724,8 @@
     ]
   },
   {
-    "name": "$tr808.cp",
-    "documentation": "TR-808 hand clap.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its hand clap: band-passed noise through a VCA that a\nsawtooth envelope opens several times in quick succession, over a slower\n\"reverb\" of the same noise. **accent**, sampled at each strike, doubles\nthe level and lets the tail ring longer.\n\nAn unaccented clap peaks near **±5 V**.\n\n```js\n$tr808.cp($clock.beatTrigger).out()\n```",
+    "name": "$tr808.clap",
+    "documentation": "TR-808 hand clap.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its hand clap: band-passed noise through a VCA that a\nsawtooth envelope opens several times in quick succession, over a slower\n\"reverb\" of the same noise. **accent**, sampled at each strike, doubles\nthe level and lets the tail ring longer.\n\nAn unaccented clap peaks near **±5 V**.\n\n```js\n$tr808.clap($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cp808Params",
@@ -1742,7 +1742,7 @@
             }
           ]
         },
-        "choke": {
+        "restart": {
           "description": "fade out a still-sounding clap over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise claps run into each other, as\non the hardware (default false)",
           "type": "boolean",
           "default": false
@@ -1851,8 +1851,8 @@
     ]
   },
   {
-    "name": "$tr808.ma",
-    "documentation": "TR-808 maracas.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its maracas: clipped white noise let through a short\nenvelope and high-passed to a hiss. **accent**, sampled at each strike,\ndoubles the level and draws the shake out.\n\nAn unaccented shake peaks near **±5 V**.\n\n```js\n$tr808.ma($clock.beatTrigger).out()\n```",
+    "name": "$tr808.maracas",
+    "documentation": "TR-808 maracas.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its maracas: clipped white noise let through a short\nenvelope and high-passed to a hiss. **accent**, sampled at each strike,\ndoubles the level and draws the shake out.\n\nAn unaccented shake peaks near **±5 V**.\n\n```js\n$tr808.maracas($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Ma808Params",
@@ -1869,7 +1869,7 @@
             }
           ]
         },
-        "choke": {
+        "restart": {
           "description": "fade out a still-sounding shake over 2 ms as the next one strikes,\nso every shake starts from rest; otherwise shakes run into each\nother, as on the hardware (default false)",
           "type": "boolean",
           "default": false
@@ -1978,8 +1978,8 @@
     ]
   },
   {
-    "name": "$tr808.cy",
-    "documentation": "TR-808 cymbal.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its cymbal: six square-wave oscillators, filtered into\ntwo bands and gated by three envelopes of different lengths. **decay**\nsets how long the low band rings, **tone** the balance of the bands, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr808.cy($clock.barTrigger).out()\n```",
+    "name": "$tr808.cymbal",
+    "documentation": "TR-808 cymbal.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its cymbal: six square-wave oscillators, filtered into\ntwo bands and gated by three envelopes of different lengths. **decay**\nsets how long the low band rings, **tone** the balance of the bands, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr808.cymbal($clock.barTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cy808Params",
@@ -1996,11 +1996,6 @@
             }
           ]
         },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
         "decay": {
           "description": "decay control, 0–5 V: how long the low band rings (default 2.5)",
           "anyOf": [
@@ -2011,6 +2006,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "tone": {
           "description": "tone control, 0–5 V: from dark, the high band cut, to bright\n(default 2.5)",
@@ -2143,15 +2143,15 @@
     ]
   },
   {
-    "name": "$tr808.oh",
-    "documentation": "TR-808 open hi-hat.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its open hat: six square-wave oscillators, filtered to a\nbright band, gated by an envelope that holds and then falls away, and\nhigh-passed. **decay** sets how long it holds, and **accent**, sampled at\neach strike, drives it harder.\n\nA rising edge on **close** chokes the hat as the 808's closed hat does:\npatch the closed hat's trigger into it.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr808.oh($clock.barTrigger, { close: $clock.beatTrigger }).out()\n```",
+    "name": "$tr808.hiHat",
+    "documentation": "TR-808 hi-hats, closed and open.\n\nEach rising edge on **closed** or **open** fires the 808's trigger pulse\ninto a circuit model of that hat: six square-wave oscillators, shared by\nboth, filtered to a bright band, gated by the hat's envelope and\nhigh-passed. The closed hat's envelope is short; the open hat's holds\nand then falls away, for as long as **decay** sets. **accent**, sampled\nat each strike, drives either hat harder.\n\nAs on the 808, a closed hit also cuts off a ringing open one. **cut**\nbends how hard: below 0 the open hat only ducks, and above 0 it stops\nsharply.\n\nAn unaccented hit of either hat peaks near **±5 V**.\n\n```js\n$tr808.hiHat($clock.beatTrigger, { open: $clock.barTrigger, cut: -2 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "Oh808Params",
+      "title": "Hh808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and on each close, and held\nfor the hit; raises the trigger pulse, for a louder hit (default 0)",
+          "description": "accent, 0–5 V, sampled on each strike of either hat and held for the\nhit; raises the trigger pulse, for a louder hit (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2161,13 +2161,12 @@
             }
           ]
         },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelope, as on\nthe hardware (default false)",
-          "type": "boolean",
-          "default": false
+        "closed": {
+          "description": "rising edges strike the closed hat, which also cuts off a ringing\nopen hat",
+          "$ref": "#/$defs/PolySignal"
         },
-        "close": {
-          "description": "rising edges close the hat, as the closed hi-hat's trigger does on\nthe 808, choking a ringing hit",
+        "cut": {
+          "description": "how hard a closed hit cuts off the open hat, -5–5 V: 0 is the 808's\nown cut, falling silent in about 100 ms; -5 leaves the open hat\nringing, and 5 silences it in a few milliseconds (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2178,7 +2177,7 @@
           ]
         },
         "decay": {
-          "description": "decay control, 0–5 V: how long the hat rings before it falls away\n(default 2.5)",
+          "description": "decay control, 0–5 V: how long the open hat rings before it falls\naway (default 2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2188,13 +2187,25 @@
             }
           ]
         },
-        "trigger": {
-          "description": "rising edges strike the hat",
-          "$ref": "#/$defs/PolySignal"
+        "open": {
+          "description": "rising edges strike the open hat",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one on the same\nhat strikes, so every hit starts from rest; otherwise hits add to the\nenvelope, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
-        "trigger"
+        "closed"
       ],
       "$defs": {
         "PolySignal": {
@@ -2259,9 +2270,25 @@
     "outputs": [
       {
         "name": "output",
-        "description": "drum output",
+        "description": "both hats",
         "polyphonic": true,
         "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "closed",
+        "description": "the closed hat alone",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "open",
+        "description": "the open hat alone",
+        "polyphonic": true,
+        "default": false,
         "minValue": -10.0,
         "maxValue": 10.0
       }
@@ -2269,8 +2296,16 @@
     "bufferOutputs": [],
     "signalParams": [
       {
-        "name": "trigger",
-        "description": "rising edges strike the hat",
+        "name": "closed",
+        "description": "rising edges strike the closed hat, which also cuts off a ringing\nopen hat",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "open",
+        "description": "rising edges strike the open hat",
         "signalType": "trig",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -2278,7 +2313,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and on each close, and held\nfor the hit; raises the trigger pulse, for a louder hit (default 0)",
+        "description": "accent, 0–5 V, sampled on each strike of either hat and held for the\nhit; raises the trigger pulse, for a louder hit (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -2286,157 +2321,30 @@
       },
       {
         "name": "decay",
-        "description": "decay control, 0–5 V: how long the hat rings before it falls away\n(default 2.5)",
+        "description": "decay control, 0–5 V: how long the open hat rings before it falls\naway (default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
         "maxValue": 5.0
       },
       {
-        "name": "close",
-        "description": "rising edges close the hat, as the closed hi-hat's trigger does on\nthe 808, choking a ringing hit",
-        "signalType": "trig",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 5.0
-      }
-    ],
-    "positionalArgs": [
-      {
-        "name": "trigger"
-      }
-    ]
-  },
-  {
-    "name": "$tr808.ch",
-    "documentation": "TR-808 closed hi-hat.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its closed hat: six square-wave oscillators, filtered to\na bright band, gated by a short envelope and high-passed. **accent**,\nsampled at each strike, drives it harder.\n\nOn the 808 a closed hat also chokes the open hat: patch the same trigger\ninto `$tr808.oh`'s **close** input.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr808.ch($clock.beatTrigger).out()\n```",
-    "paramsSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "Ch808Params",
-      "type": "object",
-      "properties": {
-        "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse, for a louder hit (default 0)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelope, as on\nthe hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
-        "trigger": {
-          "description": "rising edges strike the hat",
-          "$ref": "#/$defs/PolySignal"
-        }
-      },
-      "required": [
-        "trigger"
-      ],
-      "$defs": {
-        "PolySignal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Signal"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
-            }
-          ]
-        },
-        "Signal": {
-          "anyOf": [
-            {
-              "type": "number",
-              "format": "double"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/SignalTaggedSchema"
-            }
-          ]
-        },
-        "SignalTaggedSchema": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "channel": {
-                  "type": "integer",
-                  "format": "uint",
-                  "default": 0,
-                  "minimum": 0
-                },
-                "module": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string",
-                  "const": "cable"
-                }
-              },
-              "required": [
-                "type",
-                "module",
-                "port"
-              ]
-            }
-          ]
-        }
-      }
-    },
-    "outputs": [
-      {
-        "name": "output",
-        "description": "drum output",
-        "polyphonic": true,
-        "default": true,
-        "minValue": -10.0,
-        "maxValue": 10.0
-      }
-    ],
-    "bufferOutputs": [],
-    "signalParams": [
-      {
-        "name": "trigger",
-        "description": "rising edges strike the hat",
-        "signalType": "trig",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 5.0
-      },
-      {
-        "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse, for a louder hit (default 0)",
+        "name": "cut",
+        "description": "how hard a closed hit cuts off the open hat, -5–5 V: 0 is the 808's\nown cut, falling silent in about 100 ms; -5 leaves the open hat\nringing, and 5 silences it in a few milliseconds (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
-        "minValue": 0.0,
+        "minValue": -5.0,
         "maxValue": 5.0
       }
     ],
     "positionalArgs": [
       {
-        "name": "trigger"
+        "name": "closed"
       }
     ]
   },
   {
-    "name": "$tr808.lt",
-    "documentation": "TR-808 low tom.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its low tom: a bridged-T filter rings at ≈87 Hz,\nstarting sharp and settling as its diodes stop conducting, over a burst\nof low pink noise that swells in a few milliseconds after the hit.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lt($clock.beatTrigger).out()\n```",
+    "name": "$tr808.lowTom",
+    "documentation": "TR-808 low tom.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its low tom: a bridged-T filter rings at ≈87 Hz,\nstarting sharp and settling as its diodes stop conducting, over a burst\nof low pink noise that swells in a few milliseconds after the hit.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Lt808Params",
@@ -2452,11 +2360,6 @@
               "type": "null"
             }
           ]
-        },
-        "choke": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
         },
         "decay": {
           "description": "seconds for the ring to fall 60 dB; stock is 0.63 s (default 0.634)",
@@ -2479,6 +2382,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -2600,8 +2508,8 @@
     ]
   },
   {
-    "name": "$tr808.mt",
-    "documentation": "TR-808 mid tom.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its mid tom: a bridged-T filter rings at ≈134 Hz,\nstarting sharp and settling as its diodes stop conducting, over a burst\nof low pink noise that swells in a few milliseconds after the hit.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.mt($clock.beatTrigger).out()\n```",
+    "name": "$tr808.midTom",
+    "documentation": "TR-808 mid tom.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its mid tom: a bridged-T filter rings at ≈134 Hz,\nstarting sharp and settling as its diodes stop conducting, over a burst\nof low pink noise that swells in a few milliseconds after the hit.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Mt808Params",
@@ -2617,11 +2525,6 @@
               "type": "null"
             }
           ]
-        },
-        "choke": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
         },
         "decay": {
           "description": "seconds for the ring to fall 60 dB; stock is 0.40 s (default 0.399)",
@@ -2644,6 +2547,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -2765,8 +2673,8 @@
     ]
   },
   {
-    "name": "$tr808.ht",
-    "documentation": "TR-808 high tom.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its high tom: a bridged-T filter rings at ≈182 Hz,\nstarting sharp and settling as its diodes stop conducting, over a burst\nof low pink noise that swells in a few milliseconds after the hit.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.ht($clock.beatTrigger).out()\n```",
+    "name": "$tr808.highTom",
+    "documentation": "TR-808 high tom.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its high tom: a bridged-T filter rings at ≈182 Hz,\nstarting sharp and settling as its diodes stop conducting, over a burst\nof low pink noise that swells in a few milliseconds after the hit.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Ht808Params",
@@ -2782,11 +2690,6 @@
               "type": "null"
             }
           ]
-        },
-        "choke": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
         },
         "decay": {
           "description": "seconds for the ring to fall 60 dB; stock is 0.31 s (default 0.306)",
@@ -2809,6 +2712,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -2930,8 +2838,8 @@
     ]
   },
   {
-    "name": "$tr808.lc",
-    "documentation": "TR-808 low conga.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its low conga: a bridged-T filter rings at ≈192 Hz,\nstarting sharp and settling as its diodes stop conducting.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lc($clock.beatTrigger).out()\n```",
+    "name": "$tr808.lowConga",
+    "documentation": "TR-808 low conga.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its low conga: a bridged-T filter rings at ≈192 Hz,\nstarting sharp and settling as its diodes stop conducting.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowConga($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Lc808Params",
@@ -2947,11 +2855,6 @@
               "type": "null"
             }
           ]
-        },
-        "choke": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
         },
         "decay": {
           "description": "seconds for the ring to fall 60 dB; stock is 0.63 s (default 0.634)",
@@ -2974,6 +2877,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -3095,8 +3003,8 @@
     ]
   },
   {
-    "name": "$tr808.mc",
-    "documentation": "TR-808 mid conga.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its mid conga: a bridged-T filter rings at ≈276 Hz,\nstarting sharp and settling as its diodes stop conducting.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.mc($clock.beatTrigger).out()\n```",
+    "name": "$tr808.midConga",
+    "documentation": "TR-808 mid conga.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its mid conga: a bridged-T filter rings at ≈276 Hz,\nstarting sharp and settling as its diodes stop conducting.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midConga($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Mc808Params",
@@ -3112,11 +3020,6 @@
               "type": "null"
             }
           ]
-        },
-        "choke": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
         },
         "decay": {
           "description": "seconds for the ring to fall 60 dB; stock is 0.31 s (default 0.306)",
@@ -3139,6 +3042,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -3260,8 +3168,8 @@
     ]
   },
   {
-    "name": "$tr808.hc",
-    "documentation": "TR-808 high conga.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its high conga: a bridged-T filter rings at ≈405 Hz,\nstarting sharp and settling as its diodes stop conducting.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.hc($clock.beatTrigger).out()\n```",
+    "name": "$tr808.highConga",
+    "documentation": "TR-808 high conga.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its high conga: a bridged-T filter rings at ≈405 Hz,\nstarting sharp and settling as its diodes stop conducting.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highConga($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Hc808Params",
@@ -3277,11 +3185,6 @@
               "type": "null"
             }
           ]
-        },
-        "choke": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
         },
         "decay": {
           "description": "seconds for the ring to fall 60 dB; stock is 0.31 s (default 0.306)",
@@ -3304,6 +3207,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -3425,8 +3333,8 @@
     ]
   },
   {
-    "name": "$tr909.bd",
-    "documentation": "TR-909 bass drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its bass drum: a triangle VCO rounded toward a sine, its pitch\nswept down from about 300 Hz to rest near 56 Hz, with a click and a\nburst of noise at the attack. **tune** sets how long the sweep takes,\n**attack** the click's level, **decay** how long the drum rings, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.bd($clock.beatTrigger).out()\n```",
+    "name": "$tr909.kick",
+    "documentation": "TR-909 bass drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its bass drum: a triangle VCO rounded toward a sine, its pitch\nswept down from about 300 Hz to rest near 56 Hz, with a click and a\nburst of noise at the attack. **tune** sets how long the sweep takes,\n**attack** the click's level, **decay** how long the drum rings, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.kick($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Bd909Params",
@@ -3454,11 +3362,6 @@
             }
           ]
         },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
         "decay": {
           "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
           "anyOf": [
@@ -3469,6 +3372,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -3609,8 +3517,8 @@
     ]
   },
   {
-    "name": "$tr909.sd",
-    "documentation": "TR-909 snare drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its snare: two triangle VCOs rounded toward sines, their pitch\nbent up at the strike, over filtered noise. **tune** sets the pitch,\n**tone** how long the low noise lasts, **snappy** the noise's level, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.sd($clock.beatTrigger).out()\n```",
+    "name": "$tr909.snare",
+    "documentation": "TR-909 snare drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its snare: two triangle VCOs rounded toward sines, their pitch\nbent up at the strike, over filtered noise. **tune** sets the pitch,\n**tone** how long the low noise lasts, **snappy** the noise's level, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.snare($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Sd909Params",
@@ -3627,7 +3535,7 @@
             }
           ]
         },
-        "choke": {
+        "restart": {
           "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
           "type": "boolean",
           "default": false
@@ -3793,8 +3701,8 @@
     ]
   },
   {
-    "name": "$tr909.rs",
-    "documentation": "TR-909 rim shot.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its rim shot: three resonators rung by the trigger pulse,\nclipped by diodes, passed by an accent-driven VCA and high-passed to a\nclick. **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.rs($clock.beatTrigger).out()\n```",
+    "name": "$tr909.rimShot",
+    "documentation": "TR-909 rim shot.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its rim shot: three resonators rung by the trigger pulse,\nclipped by diodes, passed by an accent-driven VCA and high-passed to a\nclick. **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.rimShot($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Rs909Params",
@@ -3811,7 +3719,7 @@
             }
           ]
         },
-        "choke": {
+        "restart": {
           "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on\nthe hardware (default false)",
           "type": "boolean",
           "default": false
@@ -3920,8 +3828,8 @@
     ]
   },
   {
-    "name": "$tr909.cp",
-    "documentation": "TR-909 hand clap.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its hand clap: band-passed noise through a VCA that a sawtooth\nenvelope opens several times in quick succession, over a swelling\n\"reverb\" of darker noise. **accent**, sampled at each strike, doubles\nthe level and swells the reverb.\n\nAn unaccented clap peaks near **±5 V**.\n\n```js\n$tr909.cp($clock.beatTrigger).out()\n```",
+    "name": "$tr909.clap",
+    "documentation": "TR-909 hand clap.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its hand clap: band-passed noise through a VCA that a sawtooth\nenvelope opens several times in quick succession, over a swelling\n\"reverb\" of darker noise. **accent**, sampled at each strike, doubles\nthe level and swells the reverb.\n\nAn unaccented clap peaks near **±5 V**.\n\n```js\n$tr909.clap($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cp909Params",
@@ -3938,7 +3846,7 @@
             }
           ]
         },
-        "choke": {
+        "restart": {
           "description": "fade out a still-sounding clap over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise claps run into each other, as\non the hardware (default false)",
           "type": "boolean",
           "default": false
@@ -4047,8 +3955,8 @@
     ]
   },
   {
-    "name": "$tr909.lt",
-    "documentation": "TR-909 low tom.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its low tom: three triangle VCOs, their pitch bent down from\nthe strike, one clipped ever harder as it fades, the others rounded\ntoward sines, over a burst of noise. **tune** sets the pitch, **decay**\nhow long the drum rings, and **accent**, sampled at each strike,\ndrives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.lt($clock.beatTrigger).out()\n```",
+    "name": "$tr909.lowTom",
+    "documentation": "TR-909 low tom.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its low tom: three triangle VCOs, their pitch bent down from\nthe strike, one clipped ever harder as it fades, the others rounded\ntoward sines, over a burst of noise. **tune** sets the pitch, **decay**\nhow long the drum rings, and **accent**, sampled at each strike,\ndrives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.lowTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Lt909Params",
@@ -4065,11 +3973,6 @@
             }
           ]
         },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
         "decay": {
           "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
           "anyOf": [
@@ -4080,6 +3983,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -4212,8 +4120,8 @@
     ]
   },
   {
-    "name": "$tr909.mt",
-    "documentation": "TR-909 mid tom.\n\nThe low tom's circuit with smaller capacitors: it rings higher and\nshorter. **tune** sets the pitch, **decay** how long the drum rings,\nand **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.mt($clock.beatTrigger).out()\n```",
+    "name": "$tr909.midTom",
+    "documentation": "TR-909 mid tom.\n\nThe low tom's circuit with smaller capacitors: it rings higher and\nshorter. **tune** sets the pitch, **decay** how long the drum rings,\nand **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.midTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Mt909Params",
@@ -4230,11 +4138,6 @@
             }
           ]
         },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
         "decay": {
           "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
           "anyOf": [
@@ -4245,6 +4148,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",
@@ -4377,8 +4285,8 @@
     ]
   },
   {
-    "name": "$tr909.ht",
-    "documentation": "TR-909 high tom.\n\nThe low tom's circuit with smaller capacitors still: the highest and\nshortest of the three. **tune** sets the pitch, **decay** how long\nthe drum rings, and **accent**, sampled at each strike, drives it\nharder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.ht($clock.beatTrigger).out()\n```",
+    "name": "$tr909.highTom",
+    "documentation": "TR-909 high tom.\n\nThe low tom's circuit with smaller capacitors still: the highest and\nshortest of the three. **tune** sets the pitch, **decay** how long\nthe drum rings, and **accent**, sampled at each strike, drives it\nharder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.highTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Ht909Params",
@@ -4395,11 +4303,6 @@
             }
           ]
         },
-        "choke": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
         "decay": {
           "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
           "anyOf": [
@@ -4410,6 +4313,11 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
         },
         "trigger": {
           "description": "rising edges strike the drum",

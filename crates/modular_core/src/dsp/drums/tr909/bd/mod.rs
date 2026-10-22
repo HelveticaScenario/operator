@@ -16,16 +16,22 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    DIODE_DROP, Noise, RAIL, Shaper, TRIG_V, TaperedPot, Timing, VCA, VSAT, accent_volts, vca_port,
+    DIODE_DROP, RAIL, Shaper, TRIG_V, TaperedPot, Timing, VCA, VSAT, accent_volts, vca_port,
 };
+use super::noise::Noise;
+use crate::dsp::drums::analog::Junction;
+use crate::dsp::drums::group::{self, Channels, Groups, Run};
+use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Voices};
 use crate::dsp::utils::rng::seed_base;
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal};
 
 mod module;
+mod networks;
 
 pub use module::Bd909;
+use networks::{attack_network, envelope_network};
 
 // The pitch envelope: R21 from the trigger through D7 into C9, drained by
 // R57 and the tune pot VR2 to ground and by R26 into IC12a's virtual
@@ -135,109 +141,66 @@ const DC_ITERATIONS: usize = 4;
 const R_LEVEL: f64 = 100.0e3;
 
 /// Scales the output so an unaccented hit peaks near 5 V.
-const OUTPUT_GAIN: f32 = 1.95;
+const OUTPUT_GAIN: f32 = 1.467;
 /// Below this running peak the drum has faded out.
 const SETTLED: f32 = 1.0e-4;
 /// The decay envelope at rest: Q12 passes nothing below it.
 const E1_SETTLED: f32 = 0.3;
 
-const DEFAULT_TUNE: f32 = 2.5;
-const DEFAULT_ATTACK: f32 = 2.5;
-const DEFAULT_DECAY: f32 = 2.5;
-
-fn envelope_network(dt: f32) -> Mna<ENV_UNKNOWNS, ENV_CAPS, ENV_SWITCHES, ENV_COMBOS> {
-    let mut b = MnaBuilder::<ENV_UNKNOWNS>::default();
-    b.resistor(DV, X, 1.8e3)
-        .resistor(DV, Y, 47.0e3)
-        .resistor(Y, GROUND, 10.0e3)
-        .capacitor(E1, GROUND, 0.33e-6);
-    let diode = |from, to| Switch {
-        node: to,
-        other: from,
-        g: 1.0 / R_DIODE,
-        volts: -DIODE_DROP,
-    };
-    b.build(
-        dt,
-        [
-            Switch {
-                node: DV,
-                other: GROUND,
-                g: 1.0 / R_SWITCH,
-                volts: 0.0,
-            },
-            diode(X, Y),
-            diode(X, E1),
-        ],
-    )
-}
-
-fn attack_network(dt: f32) -> Mna<ATTACK_UNKNOWNS, ATTACK_CAPS, ATTACK_SWITCHES, ATTACK_COMBOS> {
-    let mut b = MnaBuilder::<ATTACK_UNKNOWNS>::default();
-    b.resistor(NOISE_IN, GROUND, 1.0 / STIFF)
-        .resistor(NOISE_IN, N1, 12.0e3)
-        .resistor(N1, GROUND, 4.7e3)
-        .capacitor(N1, N2, 0.47e-6)
-        .resistor(N2, N3, 4.7e3)
-        .capacitor(N3, GROUND, 0.1e-6)
-        .resistor(N3, NB, 4.7e3)
-        .resistor(NB, GROUND, 330.0)
-        // Q8's collector: C5 and R14, then C2 and R7 into the Sallen-Key
-        // low-pass on Q9 (R15, R16, C3, C4), R8 on its emitter, and C11
-        // and R44 into NB.
-        .capacitor(P0, GROUND, 0.0068e-6)
-        .resistor(P0, GROUND, 22.0e3)
-        .capacitor(P0, P1, 0.0033e-6)
-        .resistor(P1, PA, 100.0e3)
-        .resistor(PA, GROUND, 100.0e3)
-        .resistor(PA, PB, 39.0e3)
-        .capacitor(PB, GROUND, 100.0e-12)
-        .capacitor(PA, PE, 0.0047e-6)
-        .opamp(PB, PE, PE, OP9)
-        .resistor(PE, GROUND, 10.0e3)
-        .capacitor(PE, P4, 0.47e-6)
-        .resistor(P4, NB, 22.0e3);
-    b.build(
-        dt,
-        [Switch {
-            node: P0,
-            other: GROUND,
-            g: 1.0 / 100.0,
-            volts: RAIL,
-        }],
-    )
-}
-
 /// The bass drum's circuit state.
 #[derive(Clone, Copy, Default)]
-struct Drum {
-    trigger: Pulse,
+struct BassDrum<L: Lanes = Mono> {
+    trigger: Pulse<L>,
     /// The scaled accent voltage for this hit.
-    accent: f32,
-    c9: f32,
-    c7: f32,
-    c12: f32,
+    accent: L::S,
+    c9: L::S,
+    c7: L::S,
+    c12: L::S,
     /// The triangle, and the Schmitt trigger's output: rising while true.
-    tri: f32,
-    rising: bool,
-    envelope: MnaState<ENV_CAPS>,
-    x: f32,
-    y: f32,
-    e1: f32,
-    attack: MnaState<ATTACK_CAPS>,
+    tri: L::S,
+    rising: L::SM,
+    envelope: MnaState<ENV_CAPS, L>,
+    x: L::S,
+    y: L::S,
+    e1: L::S,
+    attack: MnaState<ATTACK_CAPS, L>,
     /// The shaper's diode node and Q12's collector, Q6's collector.
-    d: f64,
-    c12_node: f64,
-    c6_node: f64,
-    /// Base-emitter voltages carried between samples for Newton.
-    q12_vbe: f64,
-    q6_vbe: f64,
-    q12_base: f32,
-    q6_base: f32,
+    d: Junction<L>,
+    c12_node: Junction<L>,
+    c6_node: Junction<L>,
+    /// Base-emitter junctions carried between samples for Newton.
+    q12_vbe: Junction<L>,
+    q6_vbe: Junction<L>,
+    q12_base: L::S,
+    q6_base: L::S,
     /// False until the first strike sets the attack network at rest.
-    primed: bool,
-    quiet: Quiet,
+    primed: L::SM,
+    quiet: Quiet<L>,
 }
+
+lanewise!(BassDrum {
+    trigger,
+    accent,
+    c9,
+    c7,
+    c12,
+    tri,
+    rising,
+    envelope,
+    x,
+    y,
+    e1,
+    attack,
+    d,
+    c12_node,
+    c6_node,
+    q12_vbe,
+    q6_vbe,
+    q12_base,
+    q6_base,
+    primed,
+    quiet,
+});
 
 #[derive(Default)]
 struct DrumShared {
@@ -259,41 +222,66 @@ struct DrumShared {
     c12_bleed: f32,
 }
 
-struct DrumControls {
+#[derive(Clone, Copy, Default)]
+struct DrumControls<L: Lanes = Mono> {
     /// Conductances draining C9 and C8, VR3's resistance, and the noise.
-    tune: f32,
-    decay: f32,
-    attack: f32,
-    noise: f32,
+    tune: L::S,
+    decay: L::S,
+    attack: L::S,
+    noise: L::S,
 }
 
-impl Drum {
+lanewise!(DrumControls {
+    tune,
+    decay,
+    attack,
+    noise
+});
+
+/// The bass drum at every width.
+struct BassDrumFamily;
+
+impl group::Drum for BassDrumFamily {
+    type Shared = DrumShared;
+    type Circuit<L: Lanes> = BassDrum<L>;
+    type Controls<L: Lanes> = DrumControls<L>;
+    type Sources<L: Lanes> = ();
+    const QUAD: bool = false;
+    const PAIR: bool = false;
+}
+
+impl<L: Lanes> BassDrum<L> {
     /// Advances the triangle one sample at control voltage `cv` (its
     /// magnitude sets the slope), reflecting off IC13b's thresholds.
     #[inline]
-    fn vco(&mut self, cv: f32, dt: f32) {
+    fn vco(&mut self, cv: L::S, dt: f32) {
         let mut travel = cv.abs() / (R59 * C14) * dt;
-        while travel > 0.0 {
-            let room = if self.rising {
-                THRESHOLD - self.tri
-            } else {
-                self.tri + THRESHOLD
-            };
-            if travel < room {
-                self.tri += if self.rising { travel } else { -travel };
-                break;
-            }
-            self.tri = if self.rising { THRESHOLD } else { -THRESHOLD };
-            travel -= room.max(0.0);
-            self.rising = !self.rising;
+        let mut active = travel.gt(c(0.0));
+        while active.any() {
+            let room = L::S::select(
+                self.rising,
+                c::<L::S>(THRESHOLD) - self.tri,
+                self.tri + THRESHOLD,
+            );
+            let finish = active & travel.lt(room);
+            let moved = self.tri + L::S::select(self.rising, travel, -travel);
+            let reflect = active & !finish;
+            let edge = L::S::select(self.rising, c(THRESHOLD), c(-THRESHOLD));
+            self.tri = L::S::select(finish, moved, L::S::select(reflect, edge, self.tri));
+            travel = L::S::select(reflect, travel - room.max(c(0.0)), travel);
+            self.rising = (reflect & !self.rising) | (!reflect & self.rising);
+            active = reflect & travel.gt(c(0.0));
         }
+    }
+
+    /// C7's voltage below which Q3 can no longer hold Q4 on.
+    fn gate_threshold(&self) -> L::S {
+        let need = (self.accent - VBE).max(c(0.0)) / (R32 * BETA);
+        (need + VBE / R17) * R18 + VBE
     }
 }
 
-impl Circuit for Drum {
-    type Shared = DrumShared;
-    type Controls = DrumControls;
-
+impl Fire for BassDrum {
     fn fire(&mut self, accent: f32, shared: &DrumShared) {
         if !self.primed {
             self.attack = shared.attack_rest;
@@ -302,64 +290,66 @@ impl Circuit for Drum {
         self.accent = (ACCENT_GAIN * accent_volts(ACCENT_LOW, accent)).min(VSAT);
         self.trigger.fire(TRIG_V, shared.timing.trig_samples);
     }
+}
 
-    fn settled(&self) -> bool {
+impl<L: Lanes> Circuit<L> for BassDrum<L> {
+    type Shared = DrumShared;
+    type Controls = DrumControls<L>;
+
+    fn settled(&self) -> L::SM {
         !self.trigger.active()
-            && self.c7 < self.gate_threshold()
-            && self.e1 < E1_SETTLED
-            && self.quiet.below(SETTLED)
+            & self.c7.lt(self.gate_threshold())
+            & self.e1.lt(c(E1_SETTLED))
+            & self.quiet.below(SETTLED)
     }
 
-    fn step(&mut self, sh: &DrumShared, c: &DrumControls) -> f32 {
+    fn step(&mut self, sh: &DrumShared, ctl: &DrumControls<L>) -> L::S {
         let dt = sh.dt;
         let trig = self.trigger.next();
-        let triggered = trig > 0.0;
+        let triggered = trig.gt(c(0.0));
 
         // The pitch envelope and IC12a.
-        let (g_charge, target) = if triggered && trig - DIODE_DROP > self.c9 {
-            (1.0 / R21, trig - DIODE_DROP)
-        } else {
-            (0.0, 0.0)
-        };
-        let g = g_charge + c.tune + 1.0 / R26;
+        let charging = triggered & (trig - DIODE_DROP).gt(self.c9);
+        let g_charge = L::S::select(charging, c(1.0 / R21), c(0.0));
+        let target = L::S::select(charging, trig - DIODE_DROP, c(0.0));
+        let g = g_charge + ctl.tune + 1.0 / R26;
         let settle = g_charge * target / g;
-        self.c9 = settle + (self.c9 - settle) * (-g * dt / C9).exp();
-        let cv = -(R28 / R26) * self.c9 - (R28 / R27) * RAIL;
+        self.c9 = settle + (self.c9 - settle) * (-g * dt / C9).map(f32::exp);
+        let cv = self.c9 * -(R28 / R26) - (R28 / R27) * RAIL;
 
         // The VCO, held by Q11 while the trigger lasts.
-        if triggered {
-            self.tri *= sh.sync_coeff;
-            self.rising = true;
-        } else {
+        let held = self.tri * sh.sync_coeff;
+        if !triggered.all() {
             self.vco(cv, dt);
         }
+        self.tri = L::S::select(triggered, held, self.tri);
+        self.rising = triggered | self.rising;
 
         // Q3 keeps the decay gate open while C7 holds up.
-        if triggered {
-            let top = trig - DIODE_DROP;
-            self.c7 = top + (self.c7 - top) * sh.c7_charge;
-        } else if self.c7 > VBE {
-            self.c7 = VBE + (self.c7 - VBE) * sh.c7_bleed;
-        }
-        let gate = triggered || self.c7 > self.gate_threshold();
+        let top = trig - DIODE_DROP;
+        let charged = top + (self.c7 - top) * sh.c7_charge;
+        let bled = (self.c7 - VBE) * sh.c7_bleed + VBE;
+        self.c7 = L::S::select(
+            triggered,
+            charged,
+            L::S::select(self.c7.gt(c(VBE)), bled, self.c7),
+        );
+        let gate = triggered | self.c7.gt(self.gate_threshold());
 
         // The decay envelope.
-        let mut closed = 0;
-        let mut injected = [0.0f32; ENV_UNKNOWNS];
-        if gate {
-            closed |= 1 << GATE;
-            injected[DV] = self.accent / R_SWITCH;
-        }
-        if self.x - self.y > DIODE_DROP {
-            closed |= 1 << D8;
-        }
-        if self.x - self.e1 > DIODE_DROP {
-            closed |= 1 << D9;
-        }
+        let mut injected = [c(0.0); ENV_UNKNOWNS];
+        injected[DV] = L::S::select(gate, self.accent / R_SWITCH, c(0.0));
+        let d8 = (self.x - self.y).gt(c(DIODE_DROP));
+        let d9 = (self.x - self.e1).gt(c(DIODE_DROP));
+        let mut switches = [L::SM::default(); ENV_SWITCHES];
+        switches[GATE] = gate;
+        switches[D8] = d8;
+        switches[D9] = d9;
+        let closed = L::closed(switches);
         injected[E1] -= self.q12_base;
         let x = sh.envelope.open(&self.envelope, closed, &injected);
-        let z = sh.envelope.impedance(closed, E1, E1);
-        let drain = -c.decay * x[E1] / (1.0 + z * c.decay);
+        let z = sh.envelope.impedance::<L>(closed, E1, E1);
+        let drain = -ctl.decay * x[E1] / (z * ctl.decay + 1.0);
         let x = sh
             .envelope
             .close(&mut self.envelope, closed, x, &[(E1, drain)]);
@@ -367,48 +357,43 @@ impl Circuit for Drum {
         self.y = x[Y];
         self.e1 = x[E1];
         let ib12 = VCA.base_current(self.e1, R34, &mut self.q12_vbe);
-        self.q12_base = ib12 as f32;
+        self.q12_base = L::narrow(ib12);
 
         // The attack envelope.
-        let (g_charge, target, mul) = if triggered {
-            (1.0 / R41, self.accent, sh.c12_charge)
-        } else {
-            (0.0, 0.0, sh.c12_bleed)
-        };
+        let g_charge = L::S::select(triggered, c(1.0 / R41), c(0.0));
+        let target = L::S::select(triggered, self.accent, c(0.0));
+        let mul = L::S::select(triggered, c(sh.c12_charge), c(sh.c12_bleed));
         let g = g_charge + 1.0 / R493;
         let settle = (g_charge * target - self.q6_base) / g;
         self.c12 = settle + (self.c12 - settle) * mul;
         let ib6 = VCA.base_current(self.c12, R42, &mut self.q6_vbe);
-        self.q6_base = ib6 as f32;
+        self.q6_base = L::narrow(ib6);
 
         // The attack network: noise and the pulse into Q6.
-        let mut injected = [0.0f32; ATTACK_UNKNOWNS];
-        injected[NOISE_IN] = c.noise * STIFF;
-        injected[PE] = -RAIL / 10.0e3;
-        let closed = if triggered { 0 } else { 1 << Q8_ON };
+        let mut injected = [c(0.0); ATTACK_UNKNOWNS];
+        injected[NOISE_IN] = ctl.noise * STIFF;
+        injected[PE] = c(-RAIL / 10.0e3);
+        let mut switches = [L::SM::default(); ATTACK_SWITCHES];
+        switches[Q8_ON] = !triggered;
+        let closed = L::closed(switches);
         let x = sh.attack.open(&self.attack, closed, &injected);
-        let z = sh.attack.impedance(closed, NB, NB) as f64;
+        let z = L::wide(sh.attack.impedance::<L>(closed, NB, NB));
+        let all = !L::DM::default();
         let (ie6, drawn) = vca_port(
+            all,
             &mut self.c6_node,
-            x[NB] as f64,
-            z + c.attack as f64,
+            L::wide(x[NB]),
+            z + L::wide(ctl.attack),
             R55,
             ib6,
         );
         sh.attack
-            .close(&mut self.attack, closed, x, &[(NB, -drawn as f32)]);
+            .close(&mut self.attack, closed, x, &[(NB, -L::narrow(drawn))]);
 
-        let ie12 = SHAPER.solve(&mut self.d, &mut self.c12_node, self.tri as f64, ib12);
-        let out = (-(R_LEVEL * (ie12 + ie6)) as f32).clamp(-VSAT, VSAT);
+        let tri = L::wide(self.tri);
+        let ie12 = SHAPER.solve(all, &mut self.d, &mut self.c12_node, tri, ib12);
+        let out = L::narrow(-((ie12 + ie6) * R_LEVEL)).clamp(c(-VSAT), c(VSAT));
         self.quiet.track(out, sh.timing.quiet_fall);
         out
-    }
-}
-
-impl Drum {
-    /// C7's voltage below which Q3 can no longer hold Q4 on.
-    fn gate_threshold(&self) -> f32 {
-        let need = (self.accent - VBE).max(0.0) / (R32 * BETA);
-        VBE + R18 * (need + VBE / R17)
     }
 }

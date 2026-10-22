@@ -17,9 +17,9 @@ use schemars::JsonSchema;
 
 use super::circuit::{Arms, BridgedT, DiodeCoupler, SILENCE, T60_TO_RATE, Timing, pulse_volts};
 use crate::dsp::drums::analog::{VT, high_pass, one_pole_coeff, rc_hz};
-use crate::dsp::drums::voice::{Circuit, Pulse, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices};
 use crate::dsp::utils::{sanitize, voct_to_hz};
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal};
 
 // IC20a's input: C114 into R306, D64 into the R310/R311 divider.
 const IC20_IN: DiodeCoupler = DiodeCoupler {
@@ -113,17 +113,12 @@ const R319: f32 = 220.0e3;
 const R_LEVEL: f32 = 470.0e3 * 100.0e3 / (470.0e3 + 100.0e3);
 
 /// Scale the outputs so an unaccented hit peaks near 5 V.
-const RIM_GAIN: f32 = 0.519;
+const RIM_GAIN: f32 = 0.522;
 const CLAVES_GAIN: f32 = 3.62;
 
 /// Conductance of Q62's base mix, and each resonator's share of it.
 const MIX_G: f32 = 1.0 / R317 + 1.0 / R318 + 1.0 / R320;
 
-/// Claves ring time to −60 dB: three times the service notes' 25 ms decay
-/// to −20 dB. R313 sits so close to the T's damping that a stock 808 rings
-/// for as long as its tolerances allow; Q74 mutes IC19 after ≈110 ms to
-/// hide the leak.
-const CLAVES_DECAY: f32 = 0.075;
 const MIN_DECAY: f32 = 0.005;
 const MAX_DECAY: f32 = 10.0;
 
@@ -239,19 +234,22 @@ impl RimShared {
     }
 }
 
+#[derive(Clone, Copy, Default)]
 struct RimControls {
     high: BridgedT,
     low: BridgedT,
 }
 
-impl Circuit for Rim {
-    type Shared = RimShared;
-    type Controls = RimControls;
-
+impl Fire for Rim {
     fn fire(&mut self, accent: f32, shared: &RimShared) {
         let volts = pulse_volts(accent);
         self.pulse.fire(volts, shared.timing.pulse_samples);
     }
+}
+
+impl Circuit for Rim {
+    type Shared = RimShared;
+    type Controls = RimControls;
 
     fn settled(&self) -> bool {
         !self.pulse.active()
@@ -362,14 +360,23 @@ struct ClavesShared {
     couple_coeff: f32,
 }
 
-impl Circuit for Claves {
-    type Shared = ClavesShared;
-    type Controls = BridgedT;
+/// Brings a fully accented hit to twice the level of an unaccented one.
+const CLAVES_ACCENT_TRIM: f32 = 0.796;
+
+impl Fire for Claves {
+    fn accent_trim(_: &ClavesShared) -> f32 {
+        CLAVES_ACCENT_TRIM
+    }
 
     fn fire(&mut self, accent: f32, shared: &ClavesShared) {
         let volts = pulse_volts(accent);
         self.pulse.fire(volts, shared.timing.pulse_samples);
     }
+}
+
+impl Circuit for Claves {
+    type Shared = ClavesShared;
+    type Controls = BridgedT;
 
     fn settled(&self) -> bool {
         !self.pulse.active()

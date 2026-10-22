@@ -8,6 +8,7 @@ use crate::types::{Module, ModuleSchema, SampleableConstructor};
 pub mod bd;
 mod circuit;
 pub mod cp;
+mod noise;
 pub mod rs;
 pub mod sd;
 pub mod tom;

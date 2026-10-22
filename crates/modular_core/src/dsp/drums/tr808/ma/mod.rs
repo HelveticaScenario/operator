@@ -9,15 +9,20 @@
 //! until C135 runs out and C134 recharges through R343. A Sallen-Key
 //! high-pass on Q68 leaves only the hiss.
 
+use crate::dsp::drums::lanes::Mono;
 use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{PULSE_V, Timing, WhiteNoise, pulse_volts};
 use crate::dsp::drums::analog::{high_pass, one_pole_coeff, rc_hz};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Level, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
+
+mod module;
+
+pub use module::Ma808;
 
 const RAIL: f32 = 15.0;
 const BETA: f32 = 300.0;
@@ -79,7 +84,7 @@ const R335: f32 = 6.8e3;
 const C130: f32 = 0.047e-6;
 
 /// Scales the output so an unaccented shake peaks near 5 V.
-const OUTPUT_GAIN: f32 = 1.92;
+const OUTPUT_GAIN: f32 = 1.879;
 /// Below this running peak the maracas have faded out.
 const SETTLED: f32 = 3.0e-4;
 
@@ -214,7 +219,7 @@ impl Shake {
         }
         let x = sh.noise.open(&self.noise, closed, &injected);
         // Q65 saturates once the node reaches the rail.
-        let z = sh.noise.impedance(closed, N, N);
+        let z = sh.noise.impedance::<Mono>(closed, N, N);
         let source = q65.min(((N_MAX - x[N]) / z).max(0.0));
         let x = sh.noise.close(&mut self.noise, closed, x, &[(N, source)]);
         self.n = x[N];
@@ -227,10 +232,13 @@ impl Shake {
     }
 }
 
-impl Circuit for Shake {
-    type Shared = ShakeShared;
-    /// The white noise generator's voltage.
-    type Controls = f32;
+/// Brings a fully accented hit to twice the level of an unaccented one.
+const ACCENT_TRIM: f32 = 0.798;
+
+impl Fire for Shake {
+    fn accent_trim(_: &ShakeShared) -> f32 {
+        ACCENT_TRIM
+    }
 
     fn fire(&mut self, accent: f32, shared: &ShakeShared) {
         let volts = pulse_volts(accent);
@@ -240,9 +248,15 @@ impl Circuit for Shake {
             self.primed = true;
         }
         self.level
-            .set(volts / PULSE_V, sounding, shared.timing.choke_samples);
+            .set(volts / PULSE_V, sounding, shared.timing.fade_samples);
         self.pulse.fire(volts, shared.timing.pulse_samples);
     }
+}
+
+impl Circuit for Shake {
+    type Shared = ShakeShared;
+    /// The white noise generator's voltage.
+    type Controls = f32;
 
     fn settled(&self) -> bool {
         !self.pulse.active() && self.e135 < Q67_ON && self.quiet.below(SETTLED)
@@ -255,120 +269,3 @@ impl Circuit for Shake {
         out
     }
 }
-
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
-struct Ma808Params {
-    /// rising edges shake the maracas
-    #[signal(type = trig, range = (0.0, 5.0))]
-    trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; doubles
-    /// the level at full accent and draws the shake out (default 0)
-    #[signal(default = 0.0, range = (0.0, 5.0))]
-    #[deserr(default)]
-    accent: Option<PolySignal>,
-    /// fade out a still-sounding shake over 2 ms as the next one strikes,
-    /// so every shake starts from rest; otherwise shakes run into each
-    /// other, as on the hardware (default false)
-    #[serde(default)]
-    #[deserr(default)]
-    choke: bool,
-}
-
-#[derive(Outputs, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct Ma808Outputs {
-    #[output("output", "drum output", default, range = (-10.0, 10.0))]
-    sample: PolyOutput,
-}
-
-/// TR-808 maracas.
-///
-/// Each rising edge on **trigger** fires the 808's trigger pulse into a
-/// circuit model of its maracas: clipped white noise let through a short
-/// envelope and high-passed to a hiss. **accent**, sampled at each strike,
-/// doubles the level and draws the shake out.
-///
-/// An unaccented shake peaks near **±5 V**.
-///
-/// ```js
-/// $tr808.ma($clock.beatTrigger).out()
-/// ```
-#[module(name = "$tr808.ma", has_init, patch_update, args(trigger))]
-pub struct Ma808 {
-    outputs: Ma808Outputs,
-    params: Ma808Params,
-    state: MaState,
-    channel_state: Box<[Channel]>,
-}
-
-#[derive(Default)]
-struct MaState {
-    shared: ShakeShared,
-}
-
-#[derive(Clone, Copy, Default)]
-struct Channel {
-    voices: Voices<Shake>,
-    noise: WhiteNoise,
-}
-
-/// A time step long enough that every capacitor in the circuit carries no
-/// current: the networks discretised at it solve for the circuit at DC.
-const DC_STEP: f32 = 1.0e3;
-/// Iterations that settle the switches at DC.
-const DC_ITERATIONS: usize = 20;
-
-impl Ma808 {
-    fn init(&mut self, sample_rate: f32) {
-        let sh = &mut self.state.shared;
-        sh.envelope = envelope_network(DC_STEP);
-        sh.noise = noise_network(DC_STEP);
-        let mut rest = Shake {
-            primed: true,
-            ..Shake::default()
-        };
-        for _ in 0..DC_ITERATIONS {
-            rest.advance(sh, 0.0, 0.0);
-        }
-        rest.quiet = Quiet::default();
-        sh.rest = rest;
-        let dt = 1.0 / sample_rate;
-        sh.timing = Timing::new(sample_rate);
-        sh.noise_scale = WhiteNoise::scale(sample_rate);
-        sh.envelope = envelope_network(dt);
-        sh.noise = noise_network(dt);
-        sh.c130_coeff = one_pole_coeff(rc_hz(R335, C130), sample_rate);
-    }
-
-    fn update(&mut self, _sample_rate: f32) {
-        let sh = &self.state.shared;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-            let white = cs.noise.next(sh.noise_scale);
-            let out = cs.voices.process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                sh.timing.choke_samples,
-                sh,
-                &white,
-            );
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
-        }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Ma808 {
-    fn on_patch_update(&mut self) {
-        let base = seed_base(self);
-        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
-            cs.noise.seed(base, ch);
-        }
-    }
-}
-
-message_handlers!(impl Ma808 {});

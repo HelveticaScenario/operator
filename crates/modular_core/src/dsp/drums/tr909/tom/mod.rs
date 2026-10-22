@@ -18,13 +18,17 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    DIODE_DROP, Noise, RAIL, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts, vca_port,
+    COLLECTOR, DIODE, DIODE_DROP, RAIL, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts,
+    diode_pair, vca_port,
 };
-use crate::dsp::drums::analog::VT;
+use super::noise::Noise;
+use crate::dsp::drums::analog::{Exp, Junction, VT, converged};
+use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
-use crate::dsp::drums::voice::{Circuit, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Voices};
 use crate::dsp::utils::rng::seed_base;
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal};
 
 mod modules;
 mod vco;
@@ -103,8 +107,6 @@ const R102: f64 = 1.0e3;
 const R103: f64 = 10.0e3;
 const R104: f64 = 2.2e3;
 const R101: f32 = 1.0e6;
-const DIODE_IS: f64 = 2.52e-9;
-const DIODE_NVT: f64 = 1.752 * VT as f64;
 
 // VCO-2 through R105, D22 and D23, R106 into Q20; VCO-3 through R117, D28
 // and D27, R116 into Q21.
@@ -154,7 +156,7 @@ const R194: f64 = 100.0e3;
 const R_LEVEL: f64 = 50.0e3;
 
 /// Scales the output so an unaccented hit peaks near 5 V.
-const OUTPUT_GAIN: f32 = 6.3;
+const OUTPUT_GAIN: f32 = 5.215;
 /// Below this running peak, some 84 dB under an unaccented hit, the drum
 /// has faded out.
 const SETTLED: f32 = 3.0e-4;
@@ -162,49 +164,53 @@ const SETTLED: f32 = 3.0e-4;
 /// only through Q21's base, ever more slowly.
 const ENV_SETTLED: f32 = 0.65;
 
-const DEFAULT_TUNE: f32 = 2.5;
-const DEFAULT_DECAY: f32 = 2.5;
-
 const NOISE_MEAN: f32 = 0.5 * RAIL;
 const DC_STEP: f32 = 1.0e3;
 const DC_ITERATIONS: usize = 4;
 
-fn noise_network(dt: f32) -> Mna<NOISE_UNKNOWNS, NOISE_CAPS, 0, 1> {
-    let mut b = MnaBuilder::<NOISE_UNKNOWNS>::default();
-    b.resistor(NOISE_IN, GROUND, 1.0 / STIFF)
-        .resistor(NOISE_IN, N1, 22.0e3)
-        .capacitor(N1, GROUND, 0.0047e-6)
-        .capacitor(N1, N2, 0.0047e-6)
-        .capacitor(N2, N3, 0.0047e-6)
-        .resistor(N2, HIGH_OUT, 10.0e3)
-        .resistor(N3, GROUND, 220.0e3)
-        .opamp(N3, HIGH_OUT, HIGH_OUT, OP27)
-        .capacitor(HIGH_OUT, N53, 0.047e-6);
-    b.build(dt, [])
-}
-
 /// A tom's circuit state.
 #[derive(Clone, Copy, Default)]
-struct Tom {
-    trigger: Pulse,
-    accent: f32,
-    c16: f32,
-    c17: f32,
-    vcos: [Vco; 3],
-    c24: f32,
-    env1: f32,
-    env2: f32,
-    env2_pot: f32,
-    env3: f32,
-    c54: f32,
-    noise: MnaState<NOISE_CAPS>,
-    clip: [f64; 3],
-    vc: [f64; 4],
-    shape: [f64; 2],
-    vbe: [f64; 5],
-    primed: bool,
-    quiet: Quiet,
+struct Tom<L: Lanes = Mono> {
+    trigger: Pulse<L>,
+    accent: L::S,
+    c16: L::S,
+    c17: L::S,
+    vcos: [Vco<L>; 3],
+    c24: L::S,
+    env1: L::S,
+    env2: L::S,
+    env2_pot: L::S,
+    env3: L::S,
+    c54: L::S,
+    noise: MnaState<NOISE_CAPS, L>,
+    clip: Clipper<L>,
+    vc: [Junction<L>; 4],
+    shape: [Junction<L>; 2],
+    vbe: [Junction<L>; 5],
+    primed: L::SM,
+    quiet: Quiet<L>,
 }
+
+lanewise!(Tom {
+    trigger,
+    accent,
+    c16,
+    c17,
+    vcos,
+    c24,
+    env1,
+    env2,
+    env2_pot,
+    env3,
+    c54,
+    noise,
+    clip,
+    vc,
+    shape,
+    vbe,
+    primed,
+    quiet,
+});
 
 #[derive(Default)]
 struct TomShared {
@@ -220,17 +226,17 @@ struct TomShared {
     fall17: f32,
 }
 
-struct TomControls {
-    tune: f32,
+#[derive(Clone, Copy, Default)]
+struct TomControls<L: Lanes = Mono> {
+    tune: L::S,
     /// Conductance draining C21 through the decay pot and R111.
-    decay: f32,
-    noise: f32,
+    decay: L::S,
+    noise: L::S,
 }
 
-impl Circuit for Tom {
-    type Shared = TomShared;
-    type Controls = TomControls;
+lanewise!(TomControls { tune, decay, noise });
 
+impl Fire for Tom {
     fn fire(&mut self, accent: f32, shared: &TomShared) {
         if !self.primed {
             self.noise = shared.noise_rest;
@@ -239,49 +245,61 @@ impl Circuit for Tom {
         self.accent = ACCENT_GAIN * accent_volts(ACCENT_LOW, accent);
         self.trigger.fire(TRIG_V, shared.timing.trig_samples);
     }
+}
 
-    fn settled(&self) -> bool {
+impl<L: Lanes> Circuit<L> for Tom<L> {
+    type Shared = TomShared;
+    type Controls = TomControls<L>;
+
+    fn settled(&self) -> L::SM {
         !self.trigger.active()
-            && self.env1.max(self.env2).max(self.env3) < ENV_SETTLED
-            && self.quiet.below(SETTLED)
+            & self.env1.max(self.env2).max(self.env3).lt(c(ENV_SETTLED))
+            & self.quiet.below(SETTLED)
     }
 
-    fn step(&mut self, sh: &TomShared, c: &TomControls) -> f32 {
+    fn step(&mut self, sh: &TomShared, ctl: &TomControls<L>) -> L::S {
         let Some(parts) = sh.parts else {
-            return 0.0;
+            return c(0.0);
         };
         let dt = sh.dt;
         let trig = self.trigger.next();
-        let triggered = trig > 0.0;
+        let triggered = trig.gt(c(0.0));
 
         // The trigger charges C16, C17, C24 and C54 through diodes and the
         // envelopes from the gated accent; each drains through its own
         // resistors meanwhile and after.
-        let top = trig - DIODE_DROP;
-        let charge = self.accent - DIODE_DROP;
-        if triggered {
-            self.c16 = self.c16.max(top);
-            self.c17 = self.c17.max(top);
-            self.c24 = self.c24.max(top);
-            self.c54 = self.c54.max(top);
-            self.env1 = self.env1.max(charge);
-            self.env2_pot = self.env2_pot.max(charge);
-            self.env3 = self.env3.max(charge);
+        if triggered.any() {
+            let top = trig - DIODE_DROP;
+            let charge = self.accent - DIODE_DROP;
+            let raise = |v: L::S, to: L::S| L::S::select(triggered, v.max(to), v);
+            self.c16 = raise(self.c16, top);
+            self.c17 = raise(self.c17, top);
+            self.c24 = raise(self.c24, top);
+            self.c54 = raise(self.c54, top);
+            self.env1 = raise(self.env1, charge);
+            self.env2_pot = raise(self.env2_pot, charge);
+            self.env3 = raise(self.env3, charge);
         }
         self.c16 *= sh.fall16;
         self.c17 *= sh.fall17;
 
         // The inverters' supply and the VCOs.
-        let vdd = c.tune;
-        let vss = vdd + (100.0e3 / R60) * self.c16 + (100.0e3 / R61) * self.c17;
+        let vdd = ctl.tune;
+        let vss = vdd + self.c16 * (100.0e3 / R60) + self.c17 * (100.0e3 / R61);
         for (k, vco) in self.vcos.iter_mut().enumerate() {
-            if triggered {
-                vco.tri *= sh.reset[k];
-                vco.rising = false;
+            let reset = Vco {
+                tri: vco.tri * sh.reset[k],
+                rising: L::SM::default(),
+            };
+            let run = if triggered.all() {
+                reset
             } else {
                 let rc = R_INTEGRATOR * parts.vco[k];
-                vco.run(vss / rc, vdd / rc, dt);
-            }
+                let mut run = *vco;
+                run.run(vss / rc, vdd / rc, dt);
+                run
+            };
+            *vco = Vco::select(triggered, reset, run);
         }
 
         // Base currents, each drawing on its capacitor.
@@ -289,127 +307,85 @@ impl Circuit for Tom {
         let ib19 = VCA.base_current(self.env1, R107, &mut self.vbe[1]);
         let ib20 = VCA.base_current(self.env2, R109, &mut self.vbe[2]);
         let ib21 = VCA.base_current(self.env3, R110, &mut self.vbe[3]);
-        self.c24 -= ib18 as f32 * dt / parts.clip;
-        self.env3 -= ib21 as f32 * dt / parts.env3;
+        self.c24 -= L::narrow(ib18) * dt / parts.clip;
+        self.env3 -= L::narrow(ib21) * dt / parts.env3;
         // ENV1 drains into Q19 and through R108 into C23; C21 drains
         // through the decay pot and R100 into C23, which feeds Q20.
         let i108 = (self.env1 - self.env2) / R108;
         let i100 = (self.env2_pot - self.env2) / R100;
-        self.env1 -= (i108 + ib19 as f32) * dt / parts.env1;
-        self.env2 += (i108 + i100 - ib20 as f32) * dt / parts.env2;
-        self.env2_pot -= (i100 + c.decay * self.env2_pot) * dt / parts.env2_pot;
+        self.env1 -= (i108 + L::narrow(ib19)) * dt / parts.env1;
+        self.env2 += (i108 + i100 - L::narrow(ib20)) * dt / parts.env2;
+        self.env2_pot -= (i100 + ctl.decay * self.env2_pot) * dt / parts.env2_pot;
 
         // The tom noise burst.
         let ib33 = VCA.base_current(self.c54, R200, &mut self.vbe[4]);
-        self.c54 -= ib33 as f32 * dt / C54;
-        let mut injected = [0.0f32; NOISE_UNKNOWNS];
-        injected[NOISE_IN] = c.noise * STIFF;
-        let x = sh.noise.open(&self.noise, 0, &injected);
-        let z = sh.noise.impedance(0, N53, N53) as f64;
-        let open53 = x[N53] as f64;
-        let (ie33, drawn) = if ib33 > OFF {
-            vca_port(&mut self.vc[3], open53, z + R195, R199, ib33)
+        self.c54 -= L::narrow(ib33) * dt / C54;
+        let mut injected = [c(0.0); NOISE_UNKNOWNS];
+        injected[NOISE_IN] = ctl.noise * STIFF;
+        let open = L::closed([]);
+        let x = sh.noise.open(&self.noise, open, &injected);
+        let z = L::wide(sh.noise.impedance::<L>(open, N53, N53));
+        let open53 = L::wide(x[N53]);
+        let on33 = ib33.gt(c(OFF));
+        let (ie33, drawn) = if on33.all() {
+            vca_port(on33, &mut self.vc[3], open53, z + R195, R199, ib33)
         } else {
-            (0.0, open53 / (z + R195 + R199))
+            let idle = open53 / (z + R195 + R199);
+            if on33.any() {
+                let (ie, drawn) = vca_port(on33, &mut self.vc[3], open53, z + R195, R199, ib33);
+                (
+                    L::D::select(on33, ie, c(0.0)),
+                    L::D::select(on33, drawn, idle),
+                )
+            } else {
+                (c(0.0), idle)
+            }
         };
         sh.noise
-            .close(&mut self.noise, 0, x, &[(N53, -drawn as f32)]);
-        let burst = (-R193 * ie33).clamp(-VSAT as f64, VSAT as f64);
+            .close(&mut self.noise, open, x, &[(N53, -L::narrow(drawn))]);
+        let burst = (ie33 * -R193).clamp(c(-VSAT as f64), c(VSAT as f64));
 
         // VCO-1 through the clipper into Q19; VCO-2 and VCO-3 through the
         // shapers into Q20 and Q21, the burst joining Q21's collector. A
         // transistor without base current passes nothing.
-        let ie19 = if ib18 > OFF && ib19 > OFF {
-            let [a, b, d] = &mut self.clip;
-            let into19 = clipper(a, b, d, self.vcos[0].tri as f64, ib18);
-            vca_port(&mut self.vc[0], into19 * R104, R104, R_COLLECTOR, ib19).0
+        let on19 = ib18.gt(c(OFF)) & ib19.gt(c(OFF));
+        let ie19 = if on19.any() {
+            let into19 = self.clip.solve(on19, L::wide(self.vcos[0].tri), ib18);
+            let port = vca_port(
+                on19,
+                &mut self.vc[0],
+                into19 * R104,
+                c(R104),
+                R_COLLECTOR,
+                ib19,
+            );
+            L::D::select(on19, port.0, c(0.0))
         } else {
-            0.0
+            c(0.0)
         };
         let [s2, s3] = &mut self.shape;
-        let ie20 = if ib20 > OFF {
-            SHAPER.solve(s2, &mut self.vc[1], self.vcos[1].tri as f64, ib20)
+        let on20 = ib20.gt(c(OFF));
+        let ie20 = if on20.any() {
+            let tri = L::wide(self.vcos[1].tri);
+            L::D::select(
+                on20,
+                SHAPER.solve(on20, s2, &mut self.vc[1], tri, ib20),
+                c(0.0),
+            )
         } else {
-            0.0
+            c(0.0)
         };
-        let ie21 = if ib21 > OFF {
-            let open21 = self.vcos[2].tri as f64;
-            shaped_with_burst(s3, &mut self.vc[2], open21, burst, ib21)
+        let on21 = ib21.gt(c(OFF));
+        let ie21 = if on21.any() {
+            let tri = L::wide(self.vcos[2].tri);
+            let ie = SHAPER.solve_with(on21, s3, &mut self.vc[2], tri, burst, 1.0 / R194, ib21);
+            L::D::select(on21, ie, c(0.0))
         } else {
-            0.0
+            c(0.0)
         };
 
-        let out = (-(R_LEVEL * (ie19 + ie20 + ie21)) as f32).clamp(-VSAT, VSAT);
+        let out = L::narrow(-((ie19 + ie20 + ie21) * R_LEVEL)).clamp(c(-VSAT), c(VSAT));
         self.quiet.track(out, sh.timing.quiet_fall);
         out
-    }
-}
-
-#[derive(Default)]
-struct TomState {
-    shared: TomShared,
-}
-
-#[derive(Clone, Copy, Default)]
-struct Channel {
-    voices: Voices<Tom>,
-    noise: Noise,
-}
-
-/// Sets up a tom of `parts` at `sample_rate`.
-fn init(state: &mut TomState, parts: TomParts, sample_rate: f32) {
-    let dt = 1.0 / sample_rate;
-    let sh = &mut state.shared;
-    sh.parts = Some(parts);
-    sh.timing = Timing::new(sample_rate);
-    sh.dt = dt;
-    sh.noise_rate = Noise::rate(sample_rate);
-    // The noise network at DC: discretised at a step long enough that its
-    // capacitors carry no current.
-    let dc = noise_network(DC_STEP);
-    let mut injected = [0.0f32; NOISE_UNKNOWNS];
-    injected[NOISE_IN] = NOISE_MEAN * STIFF;
-    let mut rest = MnaState::default();
-    for _ in 0..DC_ITERATIONS {
-        dc.step(&mut rest, 0, &injected);
-    }
-    sh.noise_rest = rest;
-    sh.noise = noise_network(dt);
-    sh.reset = parts.vco.map(|c| (-dt / (R_RESET * c)).exp());
-    sh.fall16 = (-dt / (R60 * C16)).exp();
-    sh.fall17 = (-dt / (R61 * C17)).exp();
-}
-
-/// The inputs every tom reads.
-struct TomInputs<'a> {
-    trigger: &'a PolySignal,
-    accent: &'a Option<PolySignal>,
-    tune: &'a Option<PolySignal>,
-    decay: &'a Option<PolySignal>,
-    choke: bool,
-}
-
-/// Runs one sample for every channel of a tom.
-fn update(state: &TomState, p: TomInputs, channels: &mut [Channel], out: &mut PolyOutput) {
-    let sh = &state.shared;
-    for (ch, cs) in channels.iter_mut().enumerate() {
-        let knob =
-            |s: &Option<PolySignal>, default: f32| s.value_or(ch, default).clamp(0.0, 5.0) / 5.0;
-        let tune = knob(p.tune, DEFAULT_TUNE);
-        let controls = TomControls {
-            tune: RAIL * (R112 + VR10 * tune) / (R113 + VR10 + R112),
-            decay: 1.0 / (R111 + VR11 * knob(p.decay, DEFAULT_DECAY)),
-            noise: cs.noise.next(sh.noise_rate),
-        };
-        let v = cs.voices.process(
-            p.trigger.get_value(ch),
-            p.accent,
-            ch,
-            p.choke,
-            sh.timing.choke_samples,
-            sh,
-            &controls,
-        );
-        out.set(ch, v * OUTPUT_GAIN);
     }
 }

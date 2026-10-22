@@ -1,6 +1,11 @@
-use super::*;
+use std::ops::Range;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+use super::*;
+use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
+use crate::dsp::drums::tr808::levels;
+use crate::dsp::drums::voice::rails;
+
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct Rs808Params {
@@ -23,7 +28,7 @@ struct Rs808Params {
     /// hardware (default false)
     #[serde(default)]
     #[deserr(default)]
-    choke: bool,
+    restart: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -45,17 +50,33 @@ struct Rs808Outputs {
 /// **±10 V**.
 ///
 /// ```js
-/// $tr808.rs($clock.beatTrigger).out()
+/// $tr808.rimShot($clock.beatTrigger).out()
 /// ```
-#[module(name = "$tr808.rs", has_init, args(trigger))]
+#[module(name = "$tr808.rimShot", has_init, args(trigger), block)]
 pub struct Rs808 {
     outputs: Rs808Outputs,
     params: Rs808Params,
     state: RimShared,
-    channel_state: Box<[Voices<Rim>]>,
+    channel_state: Box<[RimChannel]>,
 }
 
 /// The rim shot's upper resonator as built, Hz.
+/// A rim shot channel: its circuits, and its resonators tuned to its
+/// `freq` with the output gain levelling it.
+#[derive(Clone, Copy, Default)]
+struct RimChannel {
+    voices: Voices<Rim>,
+    controls: Cached<f32, (RimControls, f32)>,
+}
+
+/// A claves channel: its circuits, and its resonator tuned to its `freq`
+/// and `decay` with the output gain levelling `freq`.
+#[derive(Clone, Copy, Default)]
+struct ClavesChannel {
+    voices: Voices<Claves>,
+    t: Cached<(f32, f32), (BridgedT, f32)>,
+}
+
 fn rim_rest_hz() -> f32 {
     RIM_HIGH_T.rest_hz(1.0 / R312)
 }
@@ -87,32 +108,88 @@ impl Rs808 {
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let st = &self.state;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            // `freq` scales both resonators and keeps their stock decays.
-            let r = voct_to_hz(p.freq.value_or(ch, 2.771)) / rim_rest_hz();
+        let channels = self.channel_count();
+        let p = &self.params;
+        let inputs = [
+            Live::new(&p.trigger),
+            Live::or(&p.accent, Rs808Params::ACCENT_DEFAULT),
+            Live::or(&p.freq, Rs808Params::FREQ_DEFAULT),
+        ];
+        let out = &mut self.outputs.sample;
+        rim_tick(
+            &self.state,
+            &mut self.channel_state[..channels],
+            p.restart,
+            inputs,
+            |ch, v| out.set(ch, v),
+        );
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut Rs808BlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch = Default::default();
+        let Rs808ParamsBlockInputs {
+            trigger,
+            accent,
+            freq,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
+        let channel_state = &mut self.channel_state[..channels];
+        each_slot(
+            &mut outputs.sample,
+            range,
+            [trigger, accent, freq],
+            |inputs, mut slot| {
+                rim_tick(&self.state, channel_state, p.restart, inputs, |ch, v| {
+                    slot.set(ch, v)
+                })
+            },
+        );
+        Some(())
+    }
+}
+
+/// Runs one sample of every rim shot channel on its `[trigger, accent,
+/// freq]`, handing `out` each one's output.
+#[inline(always)]
+fn rim_tick<I: Input>(
+    st: &RimShared,
+    channels: &mut [RimChannel],
+    restart: bool,
+    [trigger, accent, freq]: [I; 3],
+    mut out: impl FnMut(usize, f32),
+) {
+    for (ch, cs) in channels.iter_mut().enumerate() {
+        // `freq` scales both resonators and keeps their stock decays.
+        let (controls, level) = cs.controls.get(freq.at(ch), |freq| {
+            let r = voct_to_hz(freq) / rim_rest_hz();
             let controls = RimControls {
                 high: RIM_HIGH_T.tuned(r, T60_TO_RATE / RIM_HIGH_T.decay_rate()),
                 low: RIM_LOW_T.tuned(r, T60_TO_RATE / RIM_LOW_T.decay_rate()),
             };
-            let out = self.channel_state[ch].process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                st.timing.choke_samples,
-                st,
-                &controls,
-            );
-            self.outputs.sample.set(ch, out * RIM_GAIN);
-        }
+            (controls, levels::RIM_SHOT.gain(freq))
+        });
+        let v = cs.voices.process(
+            trigger.at(ch),
+            accent,
+            ch,
+            restart,
+            st.timing.fade_samples,
+            st,
+            &controls,
+        );
+        out(ch, rails(v * RIM_GAIN * level));
     }
 }
 
 message_handlers!(impl Rs808 {});
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct Cl808Params {
@@ -130,6 +207,9 @@ struct Cl808Params {
     #[deserr(default)]
     freq: Option<PolySignal>,
     /// seconds for the ring to fall 60 dB; stock is 0.075 s (default 0.075)
+    // Three times the service notes' 25 ms decay to −20 dB. R313 sits so
+    // close to the T's damping that a stock 808 rings for as long as its
+    // tolerances allow; Q74 mutes IC19 after ≈110 ms to hide the leak.
     #[signal(default = 0.075, range = (0.01, 1.0))]
     #[deserr(default)]
     decay: Option<PolySignal>,
@@ -138,7 +218,7 @@ struct Cl808Params {
     /// hardware (default false)
     #[serde(default)]
     #[deserr(default)]
-    choke: bool,
+    restart: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -159,14 +239,14 @@ struct Cl808Outputs {
 /// **±10 V**.
 ///
 /// ```js
-/// $tr808.cl($clock.beatTrigger).out()
+/// $tr808.claves($clock.beatTrigger).out()
 /// ```
-#[module(name = "$tr808.cl", has_init, args(trigger))]
+#[module(name = "$tr808.claves", has_init, args(trigger), block)]
 pub struct Cl808 {
     outputs: Cl808Outputs,
     params: Cl808Params,
     state: ClavesShared,
-    channel_state: Box<[Voices<Claves>]>,
+    channel_state: Box<[ClavesChannel]>,
 }
 
 impl Cl808 {
@@ -178,27 +258,81 @@ impl Cl808 {
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let st = &self.state;
-        let rest_hz = CLAVES_T.rest_hz(1.0 / R312);
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let r = voct_to_hz(p.freq.value_or(ch, 3.273)) / rest_hz;
-            let decay = p
-                .decay
-                .value_or(ch, CLAVES_DECAY)
-                .clamp(MIN_DECAY, MAX_DECAY);
-            let t = CLAVES_T.tuned(r, decay);
-            let out = self.channel_state[ch].process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                st.timing.choke_samples,
-                st,
-                &t,
-            );
-            self.outputs.sample.set(ch, out * CLAVES_GAIN);
-        }
+        let channels = self.channel_count();
+        let p = &self.params;
+        let inputs = [
+            Live::new(&p.trigger),
+            Live::or(&p.accent, Cl808Params::ACCENT_DEFAULT),
+            Live::or(&p.freq, Cl808Params::FREQ_DEFAULT),
+            Live::or(&p.decay, Cl808Params::DECAY_DEFAULT),
+        ];
+        let out = &mut self.outputs.sample;
+        claves_tick(
+            &self.state,
+            &mut self.channel_state[..channels],
+            p.restart,
+            inputs,
+            |ch, v| out.set(ch, v),
+        );
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut Cl808BlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch = Default::default();
+        let Cl808ParamsBlockInputs {
+            trigger,
+            accent,
+            freq,
+            decay,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
+        let channel_state = &mut self.channel_state[..channels];
+        each_slot(
+            &mut outputs.sample,
+            range,
+            [trigger, accent, freq, decay],
+            |inputs, mut slot| {
+                claves_tick(&self.state, channel_state, p.restart, inputs, |ch, v| {
+                    slot.set(ch, v)
+                })
+            },
+        );
+        Some(())
+    }
+}
+
+/// Runs one sample of every claves channel on its `[trigger, accent, freq,
+/// decay]`, handing `out` each one's output.
+#[inline(always)]
+fn claves_tick<I: Input>(
+    st: &ClavesShared,
+    channels: &mut [ClavesChannel],
+    restart: bool,
+    [trigger, accent, freq, decay]: [I; 4],
+    mut out: impl FnMut(usize, f32),
+) {
+    let rest_hz = CLAVES_T.rest_hz(1.0 / R312);
+    for (ch, cs) in channels.iter_mut().enumerate() {
+        let (t, level) = cs.t.get((freq.at(ch), decay.at(ch)), |(freq, decay)| {
+            let r = voct_to_hz(freq) / rest_hz;
+            let t = CLAVES_T.tuned(r, decay.clamp(MIN_DECAY, MAX_DECAY));
+            (t, levels::CLAVES.gain(freq))
+        });
+        let v = cs.voices.process(
+            trigger.at(ch),
+            accent,
+            ch,
+            restart,
+            st.timing.fade_samples,
+            st,
+            &t,
+        );
+        out(ch, rails(v * CLAVES_GAIN * level));
     }
 }
 

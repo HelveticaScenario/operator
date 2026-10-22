@@ -16,14 +16,18 @@ use schemars::JsonSchema;
 use super::circuit::{Timing, pulse_volts};
 use super::metal::{MetalBank, MetalFilters, metal_pulse};
 use super::swing::{SwingState, vca};
+use crate::dsp::drums::group::{Channels, Drum, Groups, QUAD, Run};
+use crate::dsp::drums::lanes::{Lanes, Lanewise, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Voices};
 use crate::dsp::utils::rng::seed_base;
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal};
 
 mod module;
+mod networks;
 
 pub use module::Cy808;
+use networks::{envelope_network, high_network, low_network, mid_network, tone_network};
 
 // Q19 smooths the trigger pulse: a one-pole lag on the pulse less a
 // base-emitter drop, fitted by Werner, Abel and Smith.
@@ -105,155 +109,53 @@ const VR4: f32 = 20.0e3;
 const POT_END: f32 = 10.0;
 
 /// Scales the output so an unaccented hit at stock settings peaks near 5 V.
-const OUTPUT_GAIN: f32 = 2.27;
+const OUTPUT_GAIN: f32 = 2.063;
 /// Below this running peak, some 77 dB under an unaccented hit, the
 /// cymbal has faded out; C38 and C40 would otherwise drain through their
 /// diodes' last microamps for seconds more.
 const SETTLED: f32 = 3.0e-4;
 
-const DEFAULT_DECAY: f32 = 2.5;
-const DEFAULT_TONE: f32 = 2.5;
-
-fn envelope_network(dt: f32) -> Mna<ENV_UNKNOWNS, ENV_CAPS, ENV_SWITCHES, ENV_COMBOS> {
-    let mut b = MnaBuilder::<ENV_UNKNOWNS>::default();
-    b.capacitor(E1, GROUND, 1.0e-6)
-        .resistor(E1, E37, 22.0e3)
-        .capacitor(E37, GROUND, 2.2e-6)
-        .resistor(E1, GROUND, R94)
-        .capacitor(E2A, GROUND, 1.0e-6)
-        .resistor(E2A, E2, 33.0e3)
-        .capacitor(E2, GROUND, 0.47e-6)
-        .resistor(E2, GROUND, R90)
-        .capacitor(B41, GROUND, 1.0e-6)
-        .resistor(E20, J, 33.0e3)
-        .resistor(J, GROUND, 10.0e3)
-        .resistor(J, GROUND, R91)
-        .resistor(E20, E3, 33.0e3)
-        .capacitor(E3, GROUND, 2.2e-6)
-        .resistor(E3, GROUND, R104);
-    let charge = |node| Switch {
-        node,
-        other: GROUND,
-        g: 1.0 / R_CHARGE,
-        volts: 0.0,
-    };
-    b.build(
-        dt,
-        [
-            charge(E1),
-            charge(E2A),
-            charge(B41),
-            Switch {
-                node: E20,
-                other: GROUND,
-                g: 1.0 / R_Q20,
-                volts: 0.0,
-            },
-        ],
-    )
-}
-
-/// Q16's node: C36 and C47 (the diode joins them while the VCA pulls the
-/// node down), R94 from its envelope, and the third-order high-pass on
-/// IC5a.
-fn high_network(dt: f32) -> Mna<HIGH_UNKNOWNS, HIGH_CAPS, 0, 1> {
-    let (h1, h2, h3, m5a, out, opamp) = (1, 2, 3, 4, HIGH_OUT, 6);
-    let mut b = MnaBuilder::<HIGH_UNKNOWNS>::default();
-    b.capacitor(NODE, GROUND, 0.0015e-6)
-        .capacitor(NODE, GROUND, 0.0015e-6)
-        .resistor(NODE, GROUND, R94)
-        .capacitor(NODE, h1, 0.0033e-6)
-        .resistor(h1, GROUND, 6.8e3)
-        .capacitor(h1, h2, 0.001e-6)
-        .resistor(h2, out, 18.0e3)
-        .capacitor(h2, h3, 0.001e-6)
-        .resistor(h3, GROUND, 18.0e3)
-        .resistor(m5a, GROUND, 22.0e3)
-        .resistor(m5a, out, 39.0e3)
-        .opamp(h3, m5a, out, opamp);
-    b.build(dt, [])
-}
-
-/// Q17's node: C43 and C50, R90 from its envelope and R91 from Q20, and the
-/// high-pass on IC5b.
-fn mid_network(dt: f32) -> Mna<MID_UNKNOWNS, MID_CAPS, 0, 1> {
-    let (g1, g2, m5b, out, opamp) = (1, 2, 3, MID_OUT, 5);
-    let mut b = MnaBuilder::<MID_UNKNOWNS>::default();
-    b.capacitor(NODE, GROUND, 0.003e-6)
-        .resistor(NODE, GROUND, R90)
-        .resistor(NODE, GROUND, R91)
-        .capacitor(NODE, g1, 0.001e-6)
-        .capacitor(g1, g2, 0.001e-6)
-        .resistor(g2, GROUND, 18.0e3)
-        .resistor(g1, out, 18.0e3)
-        .resistor(m5b, GROUND, 39.0e3)
-        .resistor(m5b, out, 39.0e3)
-        .opamp(g2, m5b, out, opamp);
-    b.build(dt, [])
-}
-
-/// Q18's node: R104 from its envelope, and Q25's Sallen-Key high-pass with
-/// Q25 as a unity follower.
-fn low_network(dt: f32) -> Mna<LOW_UNKNOWNS, LOW_CAPS, 0, 1> {
-    let (f1, f2, out, follower) = (1, 2, LOW_OUT, 4);
-    let mut b = MnaBuilder::<LOW_UNKNOWNS>::default();
-    b.resistor(NODE, GROUND, R104)
-        .capacitor(NODE, f1, 0.0015e-6)
-        .capacitor(f1, f2, 0.0015e-6)
-        .resistor(f1, out, 22.0e3)
-        .resistor(f2, GROUND, 82.0e3)
-        .opamp(f2, out, out, follower);
-    b.build(dt, [])
-}
-
-/// The tone stage and IC6, with the level pot at maximum. The tone pot's
-/// halves are run-time shunts at `TT` and `V125`.
-fn tone_network(dt: f32) -> Mna<TONE_UNKNOWNS, TONE_CAPS, 0, 1> {
-    let mut b = MnaBuilder::<TONE_UNKNOWNS>::default();
-    b.resistor(T_A, GROUND, 1.0 / STIFF)
-        .resistor(T_B, GROUND, 1.0 / STIFF)
-        .resistor(T_C, GROUND, 1.0 / STIFF)
-        .capacitor(T_A, T55, 0.01e-6)
-        .resistor(T55, TT, 22.0e3)
-        .resistor(V125, VV, 2.2e3)
-        .capacitor(T_B, T56, 0.01e-6)
-        .resistor(T56, VV, 10.0e3)
-        .capacitor(T_C, T58, 0.01e-6)
-        .resistor(T58, F3, 100.0e3)
-        .capacitor(F3, GROUND, 0.0033e-6)
-        .resistor(F3, VV, 10.0e3)
-        .resistor(TT, W, 22.0e3)
-        .resistor(VV, W, 15.0e3)
-        .capacitor(W, M6, 0.01e-6)
-        .resistor(M6, TONE_OUT, 82.5e3)
-        .capacitor(M6, TONE_OUT, 220.0e-12)
-        .opamp(GROUND, M6, TONE_OUT, TONE_OPAMP);
-    b.build(dt, [])
-}
-
 /// The cymbal's circuit state.
 #[derive(Clone, Copy, Default)]
-struct Cymbal {
-    pulse: Pulse,
-    smooth: f32,
-    env: MnaState<ENV_CAPS>,
+struct Cymbal<L: Lanes = Mono> {
+    pulse: Pulse<L>,
+    smooth: L::S,
+    env: MnaState<ENV_CAPS, L>,
     /// The envelope nodes, C41, Q20's emitter and Q20's emitter current on
     /// the last sample.
-    feeds: [f32; 4],
-    b41: f32,
-    e20: f32,
-    q20: f32,
-    high: MnaState<HIGH_CAPS>,
-    mid: MnaState<MID_CAPS>,
-    low: MnaState<LOW_CAPS>,
-    bases: [SwingState; 3],
+    feeds: [L::S; 4],
+    b41: L::S,
+    e20: L::S,
+    q20: L::S,
+    high: MnaState<HIGH_CAPS, L>,
+    mid: MnaState<MID_CAPS, L>,
+    low: MnaState<LOW_CAPS, L>,
+    bases: [SwingState<L>; 3],
     /// The VCA nodes on the last sample.
-    nodes: [f32; 3],
-    tone: MnaState<TONE_CAPS>,
+    nodes: [L::S; 3],
+    tone: MnaState<TONE_CAPS, L>,
     /// False until the first strike sets the bases at rest.
-    primed: bool,
-    quiet: Quiet,
+    primed: L::SM,
+    quiet: Quiet<L>,
 }
+
+lanewise!(Cymbal {
+    pulse,
+    smooth,
+    env,
+    feeds,
+    b41,
+    e20,
+    q20,
+    high,
+    mid,
+    low,
+    bases,
+    nodes,
+    tone,
+    primed,
+    quiet,
+});
 
 #[derive(Default)]
 struct CymbalShared {
@@ -268,17 +170,41 @@ struct CymbalShared {
     rest: SwingState,
 }
 
-struct CymbalControls {
-    high: f32,
-    low: f32,
+#[derive(Clone, Copy, Default)]
+struct CymbalControls<L: Lanes = Mono> {
+    high: L::S,
+    low: L::S,
     /// Conductances of the decay pot and the tone pot's two halves.
-    decay: f32,
-    tone: [f32; 2],
+    decay: L::S,
+    tone: [L::S; 2],
 }
 
-impl Circuit for Cymbal {
+lanewise!(CymbalControls {
+    high,
+    low,
+    decay,
+    tone
+});
+
+/// The cymbal at every width, with its oscillator bank.
+struct CymbalDrum;
+
+impl Drum for CymbalDrum {
     type Shared = CymbalShared;
-    type Controls = CymbalControls;
+    type Circuit<L: Lanes> = Cymbal<L>;
+    type Controls<L: Lanes> = CymbalControls<L>;
+    type Sources<L: Lanes> = MetalBank<L>;
+    const QUAD: bool = true;
+    const PAIR: bool = true;
+}
+
+/// Brings a fully accented hit to twice the level of an unaccented one.
+const ACCENT_TRIM: f32 = 0.886;
+
+impl Fire for Cymbal {
+    fn accent_trim(_: &CymbalShared) -> f32 {
+        ACCENT_TRIM
+    }
 
     fn fire(&mut self, accent: f32, shared: &CymbalShared) {
         let volts = pulse_volts(accent);
@@ -289,123 +215,117 @@ impl Circuit for Cymbal {
         self.pulse
             .fire(metal_pulse(volts), shared.timing.pulse_samples);
     }
+}
 
-    fn settled(&self) -> bool {
-        !self.pulse.active() && self.quiet.below(SETTLED)
+impl<L: Lanes> Circuit<L> for Cymbal<L> {
+    type Shared = CymbalShared;
+    type Controls = CymbalControls<L>;
+
+    fn settled(&self) -> L::SM {
+        !self.pulse.active() & self.quiet.below(SETTLED)
     }
 
-    fn step(&mut self, sh: &CymbalShared, c: &CymbalControls) -> f32 {
+    fn step(&mut self, sh: &CymbalShared, ctl: &CymbalControls<L>) -> L::S {
         // Q19's smoothed pulse charges the envelopes through D6–D8 while it
         // stands above them.
         let vtrig = self.pulse.next();
-        if vtrig > 0.0 {
-            self.smooth += (vtrig - SMOOTH_VBE - self.smooth) * sh.smooth_coeff;
-        } else {
-            self.smooth = 0.0;
-        }
+        let smoothed = self.smooth + (vtrig - SMOOTH_VBE - self.smooth) * sh.smooth_coeff;
+        self.smooth = L::S::select(vtrig.gt(c(0.0)), smoothed, c(0.0));
         let charge = self.smooth - CHARGE_DROP;
         let [e1, e2a, _, _] = self.feeds;
         let [n47, n50, n48] = self.nodes;
-        let mut closed = 0;
-        let mut injected = [0.0f32; ENV_UNKNOWNS];
+        let mut switches = [L::SM::default(); ENV_SWITCHES];
+        let mut injected = [c(0.0); ENV_UNKNOWNS];
         for (bit, node, now) in [
             (CHARGE_E1, E1, e1),
             (CHARGE_E2A, E2A, e2a),
             (CHARGE_B41, B41, self.b41),
         ] {
-            if charge > now {
-                closed |= 1 << bit;
-                injected[node] += charge / R_CHARGE;
-            }
+            let on = charge.gt(now);
+            switches[bit] = on;
+            injected[node] = L::S::select(on, injected[node] + charge / R_CHARGE, injected[node]);
         }
         // Q20 follows C41 a base-emitter drop down while it can, drawing
         // its base current from C41.
         let follow = self.b41 - Q20_VBE;
-        if follow > self.e20 {
-            closed |= 1 << Q20_ON;
-            injected[E20] += follow / R_Q20;
-        }
+        let q20_on = follow.gt(self.e20);
+        switches[Q20_ON] = q20_on;
+        injected[E20] = L::S::select(q20_on, injected[E20] + follow / R_Q20, injected[E20]);
         injected[B41] -= self.q20 / (Q20_BETA + 1.0);
         injected[E1] += n47 / R94;
         injected[E2] += n50 / R90;
         injected[J] += n50 / R91;
         injected[E3] += n48 / R104;
+        let closed = L::closed(switches);
         let x = sh.env.open(&self.env, closed, &injected);
         // The decay pot shunts C41.
-        let z = sh.env.impedance(closed, B41, B41);
-        let decay_current = -c.decay * x[B41] / (1.0 + z * c.decay);
+        let z = sh.env.impedance::<L>(closed, B41, B41);
+        let decay_current = -ctl.decay * x[B41] / (z * ctl.decay + 1.0);
         let x = sh
             .env
             .close(&mut self.env, closed, x, &[(B41, decay_current)]);
-        self.q20 = if closed & (1 << Q20_ON) != 0 {
-            (follow - x[E20]) / R_Q20
-        } else {
-            0.0
-        };
+        self.q20 = L::S::select(q20_on, (follow - x[E20]) / R_Q20, c(0.0));
         self.b41 = x[B41];
         self.e20 = x[E20];
         self.feeds = [x[E1], x[E2A], x[E2], x[E3]];
         let (e1, e2, e3, j) = (x[E1], x[E2], x[E3], x[J]);
 
         let dt = sh.dt;
-        let mut inj = [0.0f32; HIGH_UNKNOWNS];
+        let open = L::closed([]);
+        let mut inj = [c(0.0); HIGH_UNKNOWNS];
         inj[NODE] = e1 / R94;
-        let [last_h, last_m, last_l] = self.nodes;
         let hx = vca(
             &sh.high,
             &mut self.high,
-            0,
+            open,
             NODE,
             &mut self.bases[0],
-            c.high,
+            ctl.high,
             &inj,
-            last_h,
             dt,
         );
-        let mut inj = [0.0f32; MID_UNKNOWNS];
+        let mut inj = [c(0.0); MID_UNKNOWNS];
         inj[NODE] = e2 / R90 + j / R91;
         let mx = vca(
             &sh.mid,
             &mut self.mid,
-            0,
+            open,
             NODE,
             &mut self.bases[1],
-            c.high,
+            ctl.high,
             &inj,
-            last_m,
             dt,
         );
-        let mut inj = [0.0f32; LOW_UNKNOWNS];
+        let mut inj = [c(0.0); LOW_UNKNOWNS];
         inj[NODE] = e3 / R104;
         let lx = vca(
             &sh.low,
             &mut self.low,
-            0,
+            open,
             NODE,
             &mut self.bases[2],
-            c.low,
+            ctl.low,
             &inj,
-            last_l,
             dt,
         );
         self.nodes = [hx[NODE], mx[NODE], lx[NODE]];
 
-        let mut inj = [0.0f32; TONE_UNKNOWNS];
+        let mut inj = [c(0.0); TONE_UNKNOWNS];
         inj[T_A] = hx[HIGH_OUT] * STIFF;
         inj[T_B] = mx[MID_OUT] * STIFF;
         inj[T_C] = lx[LOW_OUT] * STIFF;
-        let x = sh.tone.open(&self.tone, 0, &inj);
+        let x = sh.tone.open(&self.tone, open, &inj);
         // The tone pot's halves shunt TT and V125: solve the two-port.
-        let [g1, g3] = c.tone;
-        let z = |a, b| sh.tone.impedance(0, a, b);
-        let (a11, a12) = (1.0 + z(TT, TT) * g1, z(TT, V125) * g3);
-        let (a21, a22) = (z(V125, TT) * g1, 1.0 + z(V125, V125) * g3);
+        let [g1, g3] = ctl.tone;
+        let z = |a, b| sh.tone.impedance::<Mono>(0, a, b);
+        let (a11, a12) = (g1 * z(TT, TT) + 1.0, g3 * z(TT, V125));
+        let (a21, a22) = (g1 * z(V125, TT), g3 * z(V125, V125) + 1.0);
         let det = a11 * a22 - a12 * a21;
         let v_tt = (a22 * x[TT] - a12 * x[V125]) / det;
         let v_125 = (a11 * x[V125] - a21 * x[TT]) / det;
         let x = sh.tone.close(
             &mut self.tone,
-            0,
+            open,
             x,
             &[(TT, -g1 * v_tt), (V125, -g3 * v_125)],
         );

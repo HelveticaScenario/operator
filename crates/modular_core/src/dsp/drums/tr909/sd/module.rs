@@ -1,6 +1,10 @@
-use super::*;
+use std::ops::Range;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+use super::*;
+use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::voice::rails;
+
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct Sd909Params {
@@ -29,7 +33,7 @@ struct Sd909Params {
     /// on the hardware (default false)
     #[serde(default)]
     #[deserr(default)]
-    choke: bool,
+    restart: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -50,9 +54,9 @@ struct Sd909Outputs {
 /// An unaccented hit peaks near **±5 V**.
 ///
 /// ```js
-/// $tr909.sd($clock.beatTrigger).out()
+/// $tr909.snare($clock.beatTrigger).out()
 /// ```
-#[module(name = "$tr909.sd", has_init, patch_update, args(trigger))]
+#[module(name = "$tr909.snare", has_init, patch_update, args(trigger), block)]
 pub struct Sd909 {
     outputs: Sd909Outputs,
     params: Sd909Params,
@@ -63,6 +67,7 @@ pub struct Sd909 {
 #[derive(Default)]
 struct SdState {
     shared: SnareShared,
+    groups: Groups<SnareDrum>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -74,6 +79,7 @@ struct Channel {
 impl Sd909 {
     fn init(&mut self, sample_rate: f32) {
         let dt = 1.0 / sample_rate;
+        self.state.groups = Groups::new();
         let sh = &mut self.state.shared;
         sh.timing = Timing::new(sample_rate);
         sh.dt = dt;
@@ -97,31 +103,114 @@ impl Sd909 {
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let sh = &self.state.shared;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-            let knob = |s: &Option<PolySignal>, default: f32| {
-                s.value_or(ch, default).clamp(0.0, 5.0) / 5.0
-            };
-            let tune = knob(&p.tune, DEFAULT_TUNE);
-            let controls = SnareControls {
-                tune: RAIL * (R284 + VR6 * tune) / (R287 + VR6 + R284),
-                tone: 1.0 / (R254 + VR7 * knob(&p.tone, DEFAULT_TONE)),
-                snappy: VR9 * knob(&p.snappy, DEFAULT_SNAPPY) as f64,
-                noise: cs.noise.next(sh.noise_rate),
-            };
-            let out = cs.voices.process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                sh.timing.choke_samples,
-                sh,
-                &controls,
-            );
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
-        }
+        let channels = self.channel_count();
+        let p = &self.params;
+        let inputs = [
+            Live::new(&p.trigger),
+            Live::or(&p.accent, Sd909Params::ACCENT_DEFAULT),
+            Live::or(&p.tune, Sd909Params::TUNE_DEFAULT),
+            Live::or(&p.tone, Sd909Params::TONE_DEFAULT),
+            Live::or(&p.snappy, Sd909Params::SNAPPY_DEFAULT),
+        ];
+        let out = &mut self.outputs.sample;
+        self.state.tick(
+            &mut self.channel_state[..channels],
+            p.restart,
+            inputs,
+            |ch, v| out.set(ch, v),
+        );
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut Sd909BlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch = Default::default();
+        let Sd909ParamsBlockInputs {
+            trigger,
+            accent,
+            tune,
+            tone,
+            snappy,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
+        let channel_state = &mut self.channel_state[..channels];
+        each_slot(
+            &mut outputs.sample,
+            range,
+            [trigger, accent, tune, tone, snappy],
+            |inputs, mut slot| {
+                self.state
+                    .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
+            },
+        );
+        Some(())
+    }
+}
+
+impl SdState {
+    /// Runs one sample of every channel on its `[trigger, accent, tune, tone,
+    /// snappy]`, handing `out` each one's output.
+    #[inline(always)]
+    fn tick<I: Input>(
+        &mut self,
+        channels: &mut [Channel],
+        restart: bool,
+        [trigger, accent, tune, tone, snappy]: [I; 5],
+        mut out: impl FnMut(usize, f32),
+    ) {
+        let run = Run {
+            accent,
+            restart,
+            fade_samples: self.shared.timing.fade_samples,
+            shared: &self.shared,
+        };
+        let inputs = SdInputs {
+            trigger,
+            tune,
+            tone,
+            snappy,
+            noise_rate: self.shared.noise_rate,
+            dt: self.shared.dt,
+        };
+        self.groups.run(&inputs, channels, &run, |ch, v| {
+            out(ch, rails(v * OUTPUT_GAIN))
+        });
+    }
+}
+
+/// The inputs every channel of the snare reads.
+struct SdInputs<I> {
+    trigger: I,
+    tune: I,
+    tone: I,
+    snappy: I,
+    noise_rate: f32,
+    dt: f32,
+}
+
+impl<I: Input> Channels<SnareDrum> for SdInputs<I> {
+    type Channel = Channel;
+
+    fn voices(channel: &mut Channel) -> &mut Voices<Snare> {
+        &mut channel.voices
+    }
+
+    #[inline(always)]
+    fn inputs(&self, ch: usize, channel: &mut Channel) -> (f32, SnareControls) {
+        let knob = |s: I| s.at(ch).clamp(0.0, 5.0) / 5.0;
+        let tune = knob(self.tune);
+        let tone = 1.0 / (R254 + VR7 * knob(self.tone));
+        let controls = SnareControls {
+            tune: RAIL * (R284 + VR6 * tune) / (R287 + VR6 + R284),
+            tone_fall: (-tone * self.dt / C67).exp(),
+            snappy: VR9 * knob(self.snappy) as f64,
+            noise: channel.noise.next(self.noise_rate),
+        };
+        (self.trigger.at(ch), controls)
     }
 }
 
@@ -131,6 +220,10 @@ impl crate::types::PatchUpdateHandler for Sd909 {
         for (ch, cs) in self.channel_state.iter_mut().enumerate() {
             cs.noise.seed(base, ch);
         }
+        let count = self.channel_count();
+        self.state
+            .groups
+            .layout::<SdInputs<&[f32]>>(&mut self.channel_state, count);
     }
 }
 

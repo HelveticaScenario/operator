@@ -16,15 +16,20 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{
-    DIODE_DROP, Noise, RAIL, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts, vca_port,
-};
+use super::circuit::{DIODE_DROP, RAIL, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts, vca_port};
+use super::noise::Noise;
+use crate::dsp::drums::analog::Junction;
+use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
-use crate::dsp::drums::voice::{Circuit, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Voices};
 use crate::dsp::utils::rng::seed_base;
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal};
 
 mod module;
+mod vco;
+
+use vco::Vco;
 
 pub use module::Sd909;
 
@@ -129,17 +134,13 @@ const C78: f32 = 0.47e-6;
 const R_LEVEL: f64 = 50.0e3;
 
 /// Scales the output so an unaccented hit peaks near 5 V.
-const OUTPUT_GAIN: f32 = 1.0;
+const OUTPUT_GAIN: f32 = 1.116;
 /// Below this running peak, some 64 dB under an unaccented hit, the drum
 /// has faded out: its envelopes drain only through the VCAs' bases, ever
 /// more slowly, and pass a faint leak for seconds more.
 const SETTLED: f32 = 3.0e-3;
 /// Every envelope below this has let its VCA all but close.
 const ENV_SETTLED: f32 = 0.65;
-
-const DEFAULT_TUNE: f32 = 2.5;
-const DEFAULT_TONE: f32 = 2.5;
-const DEFAULT_SNAPPY: f32 = 2.5;
 
 const NOISE_MEAN: f32 = 0.5 * RAIL;
 const DC_STEP: f32 = 1.0e3;
@@ -166,71 +167,58 @@ fn noise_network(dt: f32) -> Mna<NOISE_UNKNOWNS, NOISE_CAPS, 0, 1> {
     b.build(dt, [])
 }
 
-/// One triangle VCO: the integrator's voltage and the comparator's state.
-#[derive(Clone, Copy, Default)]
-struct Vco {
-    tri: f32,
-    rising: bool,
-}
-
-impl Vco {
-    /// Advances `dt` at slope `slope` V/s, reflecting off the comparator's
-    /// thresholds.
-    #[inline]
-    fn run(&mut self, slope: f32, dt: f32) {
-        let mut travel = slope * dt;
-        while travel > 0.0 {
-            let room = if self.rising {
-                THRESHOLD - self.tri
-            } else {
-                self.tri + THRESHOLD
-            };
-            if travel < room {
-                self.tri += if self.rising { travel } else { -travel };
-                break;
-            }
-            self.tri = if self.rising { THRESHOLD } else { -THRESHOLD };
-            travel -= room.max(0.0);
-            self.rising = !self.rising;
-        }
-    }
-
-    /// Holds the integrator toward zero with `coeff` per sample and the
-    /// comparator low, so the triangle starts downward.
-    #[inline]
-    fn reset(&mut self, coeff: f32) {
-        self.tri *= coeff;
-        self.rising = false;
-    }
-}
-
 /// The snare's circuit state.
 #[derive(Clone, Copy, Default)]
-struct Snare {
-    trigger: Pulse,
-    accent: f32,
-    c66: f32,
-    vco1: Vco,
-    vco2: Vco,
-    c83: f32,
-    c70: f32,
-    c82: f32,
-    c79: f32,
-    c67: f32,
-    c73: f32,
-    noise: MnaState<NOISE_CAPS>,
-    c78: f32,
+struct Snare<L: Lanes = Mono> {
+    trigger: Pulse<L>,
+    accent: L::S,
+    c66: L::S,
+    vco1: Vco<L>,
+    vco2: Vco<L>,
+    c83: L::S,
+    c70: L::S,
+    c82: L::S,
+    c79: L::S,
+    c67: L::S,
+    c73: L::S,
+    noise: MnaState<NOISE_CAPS, L>,
+    c78: L::S,
     /// Shaper and collector nodes, and base-emitter voltages for Newton.
-    d1: f64,
-    vc50: f64,
-    d2: f64,
-    vc51: f64,
-    vc48: f64,
-    vc47: f64,
-    vbe: [f64; 4],
-    primed: bool,
-    quiet: Quiet,
+    d1: Junction<L>,
+    vc50: Junction<L>,
+    d2: Junction<L>,
+    vc51: Junction<L>,
+    vc48: Junction<L>,
+    vc47: Junction<L>,
+    vbe: [Junction<L>; 4],
+    primed: L::SM,
+    quiet: Quiet<L>,
 }
+
+lanewise!(Snare {
+    trigger,
+    accent,
+    c66,
+    vco1,
+    vco2,
+    c83,
+    c70,
+    c82,
+    c79,
+    c67,
+    c73,
+    noise,
+    c78,
+    d1,
+    vc50,
+    d2,
+    vc51,
+    vc48,
+    vc47,
+    vbe,
+    primed,
+    quiet,
+});
 
 #[derive(Default)]
 struct SnareShared {
@@ -247,20 +235,37 @@ struct SnareShared {
     c66_bleed: f32,
 }
 
-struct SnareControls {
+#[derive(Clone, Copy, Default)]
+struct SnareControls<L: Lanes = Mono> {
     /// The tune pot's wiper voltage.
-    tune: f32,
-    /// Conductance draining C67 through the tone pot and R254.
-    tone: f32,
+    tune: L::S,
+    /// C67's fall per sample as the tone pot and R254 drain it.
+    tone_fall: L::S,
     /// The snappy pot's resistance.
-    snappy: f64,
-    noise: f32,
+    snappy: L::D,
+    noise: L::S,
 }
 
-impl Circuit for Snare {
-    type Shared = SnareShared;
-    type Controls = SnareControls;
+lanewise!(SnareControls {
+    tune,
+    tone_fall,
+    snappy,
+    noise
+});
 
+/// The snare at every width.
+struct SnareDrum;
+
+impl Drum for SnareDrum {
+    type Shared = SnareShared;
+    type Circuit<L: Lanes> = Snare<L>;
+    type Controls<L: Lanes> = SnareControls<L>;
+    type Sources<L: Lanes> = ();
+    const QUAD: bool = true;
+    const PAIR: bool = true;
+}
+
+impl Fire for Snare {
     fn fire(&mut self, accent: f32, shared: &SnareShared) {
         if !self.primed {
             self.noise = shared.noise_rest;
@@ -269,115 +274,124 @@ impl Circuit for Snare {
         self.accent = (ACCENT_GAIN * accent_volts(ACCENT_LOW, accent)).min(VSAT);
         self.trigger.fire(TRIG_V, shared.timing.trig_samples);
     }
+}
 
-    fn settled(&self) -> bool {
+impl<L: Lanes> Circuit<L> for Snare<L> {
+    type Shared = SnareShared;
+    type Controls = SnareControls<L>;
+
+    fn settled(&self) -> L::SM {
         !self.trigger.active()
-            && self.c83.max(self.c82).max(self.c67).max(self.c73) < ENV_SETTLED
-            && self.quiet.below(SETTLED)
+            & self
+                .c83
+                .max(self.c82)
+                .max(self.c67)
+                .max(self.c73)
+                .lt(c(ENV_SETTLED))
+            & self.quiet.below(SETTLED)
     }
 
-    fn step(&mut self, sh: &SnareShared, c: &SnareControls) -> f32 {
+    fn step(&mut self, sh: &SnareShared, ctl: &SnareControls<L>) -> L::S {
         let dt = sh.dt;
         let trig = self.trigger.next();
-        let triggered = trig > 0.0;
+        let triggered = trig.gt(c(0.0));
 
         // The inverters' supply: the tune voltage, lifted by C66.
-        let (pulse, mul) = if triggered && trig - DIODE_DROP > self.c66 {
-            (1.0 / R247, sh.c66_charge)
-        } else {
-            (0.0, sh.c66_bleed)
-        };
+        let charging = triggered & (trig - DIODE_DROP).gt(self.c66);
+        let pulse = L::S::select(charging, c(1.0 / R247), c(0.0));
+        let mul = L::S::select(charging, c(sh.c66_charge), c(sh.c66_bleed));
         let g_tune = 1.0 / (R248 + R249);
         let total = pulse + g_tune;
-        let settle = (pulse * (trig - DIODE_DROP) + g_tune * c.tune) / total;
+        let settle = (pulse * (trig - DIODE_DROP) + ctl.tune * g_tune) / total;
         self.c66 = settle + (self.c66 - settle) * mul;
-        let vdd = (c.tune * R248 + self.c66 * R249) / (R248 + R249);
+        let vdd = (ctl.tune * R248 + self.c66 * R249) / (R248 + R249);
 
-        if triggered {
-            self.vco1.reset(sh.reset1);
-            self.vco2.reset(sh.reset2);
-        } else {
-            self.vco1.run(vdd / VCO1_RC, dt);
-            self.vco2.run(vdd / VCO2_RC, dt);
-        }
+        self.vco1.advance(triggered, vdd / VCO1_RC, dt, sh.reset1);
+        self.vco2.advance(triggered, vdd / VCO2_RC, dt, sh.reset2);
 
         // The envelopes: charged from the gated accent while the trigger
         // lasts, the drum VCAs' second stages held empty meanwhile.
-        let charge = self.accent - DIODE_DROP;
-        if triggered {
+        if triggered.any() {
+            let charge = self.accent - DIODE_DROP;
             for v in [&mut self.c83, &mut self.c82, &mut self.c67, &mut self.c73] {
-                *v = v.max(charge);
+                *v = L::S::select(triggered, v.max(charge), *v);
             }
-            self.c70 = 0.0;
-            self.c79 = 0.0;
+            self.c70 = L::S::select(triggered, c(0.0), self.c70);
+            self.c79 = L::S::select(triggered, c(0.0), self.c79);
         }
-        let mut ib = [0.0f64; 4];
+        let idle = !L::wide_mask(triggered);
+        let mut ib = [c::<L::D>(0.0); 4];
         // ENV3: C83 into C70 through R291, C70 into Q50's base.
-        ib[0] = if triggered {
-            0.0
-        } else {
-            VCA.base_current(self.c70, R290, &mut self.vbe[0])
-        };
+        ib[0] = VCA.base_current_where(idle, self.c70, R290, &mut self.vbe[0]);
         let i291 = (self.c83 - self.c70) / R291;
         self.c83 -= i291 * dt / C83;
-        self.c70 += (i291 - ib[0] as f32) * dt / C70;
+        self.c70 += (i291 - L::narrow(ib[0])) * dt / C70;
         // ENV2: C82 into C79 through R295, C79 into Q51's base.
-        ib[1] = if triggered {
-            0.0
-        } else {
-            VCA.base_current(self.c79, R293, &mut self.vbe[1])
-        };
+        ib[1] = VCA.base_current_where(idle, self.c79, R293, &mut self.vbe[1]);
         let i295 = (self.c82 - self.c79) / R295;
         self.c82 -= i295 * dt / C82;
-        self.c79 += (i295 - ib[1] as f32) * dt / C79;
+        self.c79 += (i295 - L::narrow(ib[1])) * dt / C79;
         // ENV4: the tone pot drains C67; R297 feeds Q48's base.
         ib[2] = VCA.base_current(self.c67, R297, &mut self.vbe[2]);
-        self.c67 *= (-c.tone * dt / C67).exp();
-        self.c67 -= ib[2] as f32 * dt / C67;
+        self.c67 *= ctl.tone_fall;
+        self.c67 -= L::narrow(ib[2]) * dt / C67;
         // ENV5: R280 feeds Q47's base, which Q43 holds off meanwhile.
-        ib[3] = if triggered {
-            0.0
-        } else {
-            VCA.base_current(self.c73, R280, &mut self.vbe[3])
-        };
-        self.c73 -= ib[3] as f32 * dt / C73;
+        ib[3] = VCA.base_current_where(idle, self.c73, R280, &mut self.vbe[3]);
+        self.c73 -= L::narrow(ib[3]) * dt / C73;
 
         // The noise network and its two VCAs.
-        let mut injected = [0.0f32; NOISE_UNKNOWNS];
-        injected[NOISE_IN] = c.noise * STIFF;
-        let x = sh.noise.open(&self.noise, 0, &injected);
-        let z = sh.noise.impedance(0, T80, T80) as f64;
-        let open80 = x[T80] as f64;
-        let (ie48, i48) = if ib[2] > OFF {
-            vca_port(&mut self.vc48, open80, z + R299, R_COLLECTOR, ib[2])
+        let mut injected = [c(0.0); NOISE_UNKNOWNS];
+        injected[NOISE_IN] = ctl.noise * STIFF;
+        let open = L::closed([]);
+        let x = sh.noise.open(&self.noise, open, &injected);
+        let z = L::wide(sh.noise.impedance::<L>(open, T80, T80));
+        let open80 = L::wide(x[T80]);
+        let on48 = ib[2].gt(c(OFF));
+        let (ie48, i48) = if on48.all() {
+            vca_port(on48, &mut self.vc48, open80, z + R299, R_COLLECTOR, ib[2])
         } else {
-            (0.0, open80 / (z + R299 + R_COLLECTOR))
+            let idle = open80 / (z + R299 + R_COLLECTOR);
+            if on48.any() {
+                let (ie, i) = vca_port(on48, &mut self.vc48, open80, z + R299, R_COLLECTOR, ib[2]);
+                (L::D::select(on48, ie, c(0.0)), L::D::select(on48, i, idle))
+            } else {
+                (c(0.0), idle)
+            }
         };
         // IC39a's output drives R278 without moving.
-        let ie47 = if ib[3] > OFF {
-            vca_port(&mut self.vc47, x[HIGH] as f64, R278, R_COLLECTOR, ib[3]).0
+        let on47 = ib[3].gt(c(OFF));
+        let ie47 = if on47.any() {
+            let high = L::wide(x[HIGH]);
+            let ie = vca_port(on47, &mut self.vc47, high, c(R278), R_COLLECTOR, ib[3]).0;
+            L::D::select(on47, ie, c(0.0))
         } else {
-            0.0
+            c(0.0)
         };
-        sh.noise.close(&mut self.noise, 0, x, &[(T80, -i48 as f32)]);
+        sh.noise
+            .close(&mut self.noise, open, x, &[(T80, -L::narrow(i48))]);
 
-        let snappy = -(c.snappy * (ie47 + ie48)) as f32;
-        let snappy = snappy.clamp(-VSAT, VSAT);
+        let snappy = L::narrow(-((ie47 + ie48) * ctl.snappy)).clamp(c(-VSAT), c(VSAT));
         // C78 couples IC39b into IC40b through R294.
         let i294 = (snappy - self.c78) / R294;
         self.c78 += i294 * dt / C78;
 
-        let ie50 = if ib[0] > OFF {
-            SHAPER1.solve(&mut self.d1, &mut self.vc50, self.vco1.tri as f64, ib[0])
+        let on50 = ib[0].gt(c(OFF));
+        let ie50 = if on50.any() {
+            let tri = L::wide(self.vco1.tri);
+            let ie = SHAPER1.solve(on50, &mut self.d1, &mut self.vc50, tri, ib[0]);
+            L::D::select(on50, ie, c(0.0))
         } else {
-            0.0
+            c(0.0)
         };
-        let ie51 = if ib[1] > OFF {
-            SHAPER2.solve(&mut self.d2, &mut self.vc51, self.vco2.tri as f64, ib[1])
+        let on51 = ib[1].gt(c(OFF));
+        let ie51 = if on51.any() {
+            let tri = L::wide(self.vco2.tri);
+            let ie = SHAPER2.solve(on51, &mut self.d2, &mut self.vc51, tri, ib[1]);
+            L::D::select(on51, ie, c(0.0))
         } else {
-            0.0
+            c(0.0)
         };
-        let out = (-(R_LEVEL * (ie50 + ie51 + i294 as f64)) as f32).clamp(-VSAT, VSAT);
+        let out = L::narrow(-((ie50 + ie51 + L::wide(i294)) * R_LEVEL)).clamp(c(-VSAT), c(VSAT));
         self.quiet.track(out, sh.timing.quiet_fall);
         out
     }

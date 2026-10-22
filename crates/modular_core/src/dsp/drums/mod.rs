@@ -7,7 +7,13 @@ use crate::types::{ModuleSchema, SampleableConstructor};
 
 mod analog;
 mod clap;
+mod group;
+mod input;
+mod lanes;
 mod mna;
+mod pitch_level;
+#[cfg(test)]
+mod tests;
 pub mod tr808;
 pub mod tr909;
 mod voice;

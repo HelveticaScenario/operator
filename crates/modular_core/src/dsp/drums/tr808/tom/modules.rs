@@ -1,9 +1,77 @@
+use std::ops::Range;
+
 use super::*;
+use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::voice::rails;
 
 /// Seeds each channel's noise from the module's [`seed_base`].
 fn seed(base: u64, channels: &mut [Channel]) {
     for (ch, cs) in channels.iter_mut().enumerate() {
         cs.noise.seed(base, ch);
+    }
+}
+
+/// The inputs every channel of a tom or conga reads.
+struct TomInputs<'a, I> {
+    parts: &'static Parts,
+    st: &'a TomState,
+    trigger: I,
+    freq: I,
+    decay: I,
+}
+
+impl<I: Input> Channels<TomDrum> for TomInputs<'_, I> {
+    type Channel = Channel;
+
+    fn voices(channel: &mut Channel) -> &mut Voices<Voice> {
+        &mut channel.voices
+    }
+
+    #[inline(always)]
+    fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, Controls) {
+        let freq = self.freq.at(ch);
+        let decay = self.decay.at(ch);
+        if freq != cs.network.freq || decay != cs.network.decay {
+            cs.network = Network::new(self.parts, freq, decay, self.st.rest_hz);
+        }
+        let controls = Controls {
+            t: cs.network.t,
+            white: cs.noise.next(self.st.noise_scale),
+            level: cs.network.level,
+        };
+        (self.trigger.at(ch), controls)
+    }
+}
+
+impl TomModule {
+    /// Runs one sample of every channel of the drum built from `parts` on
+    /// its `[trigger, accent, freq, decay]`, handing `out` each one's
+    /// output.
+    #[inline(always)]
+    fn tick<I: Input>(
+        &mut self,
+        parts: &'static Parts,
+        channels: &mut [Channel],
+        restart: bool,
+        [trigger, accent, freq, decay]: [I; 4],
+        mut out: impl FnMut(usize, f32),
+    ) {
+        let run = Run {
+            accent,
+            restart,
+            fade_samples: self.st.timing.fade_samples,
+            shared: &self.st,
+        };
+        let inputs = TomInputs {
+            parts,
+            st: &self.st,
+            trigger,
+            freq,
+            decay,
+        };
+        self.groups.run(&inputs, channels, &run, |ch, v| {
+            out(ch, rails(v * parts.gain))
+        });
     }
 }
 
@@ -20,7 +88,7 @@ macro_rules! tom_module {
         decay_doc = $decay_doc:literal $(,)?
     ) => {
         paste::paste! {
-            #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+            #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
             #[serde(rename_all = "camelCase")]
             #[deserr(rename_all = camelCase, deny_unknown_fields)]
             struct [<$Struct Params>] {
@@ -46,7 +114,7 @@ macro_rules! tom_module {
                 /// to the ring, as on the hardware (default false)
                 #[serde(default)]
                 #[deserr(default)]
-                choke: bool,
+                restart: bool,
             }
 
             #[derive(Outputs, JsonSchema)]
@@ -57,35 +125,70 @@ macro_rules! tom_module {
             }
 
             $(#[$doc])*
-            #[module(name = $name, has_init, patch_update, args(trigger))]
+            #[module(name = $name, has_init, patch_update, args(trigger), block)]
             pub struct $Struct {
                 outputs: [<$Struct Outputs>],
                 params: [<$Struct Params>],
-                state: TomState,
+                state: TomModule,
                 channel_state: Box<[Channel]>,
             }
 
             impl $Struct {
                 fn init(&mut self, sample_rate: f32) {
-                    self.state.init(&$parts, sample_rate);
+                    self.state.st.init(&$parts, sample_rate);
+                    self.state.groups = Groups::new();
                 }
 
                 fn update(&mut self, _sample_rate: f32) {
                     let channels = self.channel_count();
                     let p = &self.params;
-                    process(
+                    let inputs = [
+                        Live::new(&p.trigger),
+                        Live::or(&p.accent, [<$Struct Params>]::ACCENT_DEFAULT),
+                        Live::or(&p.freq, [<$Struct Params>]::FREQ_DEFAULT),
+                        Live::or(&p.decay, [<$Struct Params>]::DECAY_DEFAULT),
+                    ];
+                    let out = &mut self.outputs.sample;
+                    self.state.tick(
                         &$parts,
-                        &self.state,
                         &mut self.channel_state[..channels],
-                        &p.trigger,
-                        &p.accent,
-                        &p.freq,
-                        &p.decay,
-                        p.choke,
-                        $freq,
-                        $decay,
-                        &mut self.outputs.sample,
+                        p.restart,
+                        inputs,
+                        |ch, v| out.set(ch, v),
                     );
+                }
+
+                fn process_block(
+                    &mut self,
+                    outputs: &mut [<$Struct BlockOutputs>],
+                    range: Range<usize>,
+                    _sample_rate: f32,
+                ) -> Option<()> {
+                    let channels = self.channel_count();
+                    let p = &self.params;
+                    let mut scratch = Default::default();
+                    let [<$Struct ParamsBlockInputs>] {
+                        trigger,
+                        accent,
+                        freq,
+                        decay,
+                    } = p.block_inputs(range.clone(), channels, &mut scratch)?;
+                    let channel_state = &mut self.channel_state[..channels];
+                    each_slot(
+                        &mut outputs.sample,
+                        range,
+                        [trigger, accent, freq, decay],
+                        |inputs, mut slot| {
+                            self.state.tick(
+                                &$parts,
+                                channel_state,
+                                p.restart,
+                                inputs,
+                                |ch, v| slot.set(ch, v),
+                            )
+                        },
+                    );
+                    Some(())
                 }
             }
 
@@ -93,6 +196,10 @@ macro_rules! tom_module {
                 fn on_patch_update(&mut self) {
                     let base = seed_base(self);
                     seed(base, &mut self.channel_state);
+                    let count = self.channel_count();
+                    self.state
+                        .groups
+                        .layout::<TomInputs<&[f32]>>(&mut self.channel_state, count);
                 }
             }
 
@@ -114,9 +221,9 @@ tom_module! {
     /// **±10 V**.
     ///
     /// ```js
-    /// $tr808.lt($clock.beatTrigger).out()
+    /// $tr808.lowTom($clock.beatTrigger).out()
     /// ```
-    name = "$tr808.lt",
+    name = "$tr808.lowTom",
     ident = Lt808,
     parts = LT,
     freq = -1.5959,
@@ -139,9 +246,9 @@ tom_module! {
     /// **±10 V**.
     ///
     /// ```js
-    /// $tr808.mt($clock.beatTrigger).out()
+    /// $tr808.midTom($clock.beatTrigger).out()
     /// ```
-    name = "$tr808.mt",
+    name = "$tr808.midTom",
     ident = Mt808,
     parts = MT,
     freq = -0.9623,
@@ -164,9 +271,9 @@ tom_module! {
     /// **±10 V**.
     ///
     /// ```js
-    /// $tr808.ht($clock.beatTrigger).out()
+    /// $tr808.highTom($clock.beatTrigger).out()
     /// ```
-    name = "$tr808.ht",
+    name = "$tr808.highTom",
     ident = Ht808,
     parts = HT,
     freq = -0.5216,
@@ -188,9 +295,9 @@ tom_module! {
     /// **±10 V**.
     ///
     /// ```js
-    /// $tr808.lc($clock.beatTrigger).out()
+    /// $tr808.lowConga($clock.beatTrigger).out()
     /// ```
-    name = "$tr808.lc",
+    name = "$tr808.lowConga",
     ident = Lc808,
     parts = LC,
     freq = -0.4471,
@@ -212,9 +319,9 @@ tom_module! {
     /// **±10 V**.
     ///
     /// ```js
-    /// $tr808.mc($clock.beatTrigger).out()
+    /// $tr808.midConga($clock.beatTrigger).out()
     /// ```
-    name = "$tr808.mc",
+    name = "$tr808.midConga",
     ident = Mc808,
     parts = MC,
     freq = 0.0792,
@@ -236,9 +343,9 @@ tom_module! {
     /// **±10 V**.
     ///
     /// ```js
-    /// $tr808.hc($clock.beatTrigger).out()
+    /// $tr808.highConga($clock.beatTrigger).out()
     /// ```
-    name = "$tr808.hc",
+    name = "$tr808.highConga",
     ident = Hc808,
     parts = HC,
     freq = 0.629,

@@ -11,7 +11,8 @@
 //! what pulls the envelope's node down, so the VCA's output swings between
 //! the envelope and a saturation floor in time with the band's peaks.
 
-use crate::dsp::drums::analog::VT;
+use crate::dsp::drums::analog::{Exp, Junction, VT, converged};
+use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{Mna, MnaState};
 
 /// The 2SC945's saturation current and forward current gain.
@@ -22,7 +23,7 @@ const C_COUPLE: f64 = 0.022e-6;
 const R_BIAS: f64 = 2.0e6;
 const R_EMIT: f64 = 100.0;
 /// Newton's tolerance and iteration limit on the base-emitter voltage.
-const TOLERANCE: f64 = 1.0e-7;
+const DONE: f64 = converged(1.0e-7, VT as f64);
 const ITERATIONS: usize = 30;
 /// Above this the base-emitter voltage moves at most `LIMIT_STEP` per
 /// Newton step, so the junction's exponential cannot overshoot.
@@ -38,13 +39,24 @@ const DIODE_NVT: f32 = 1.752 * VT;
 const DIODE_MAX: f32 = 0.7;
 
 /// A swing VCA's base: the coupling capacitor's trapezoidal history and the
-/// base-emitter voltage on the last sample.
+/// base-emitter voltage, with its exponential, on the last sample; and the
+/// node voltage that last saturated the collector.
 #[derive(Clone, Copy, Default)]
-pub struct SwingState {
-    couple_v: f32,
-    couple_i: f32,
-    vbe: f64,
+pub struct SwingState<L: Lanes = Mono> {
+    couple_v: L::S,
+    couple_i: L::S,
+    vbe: L::D,
+    e: Exp<L>,
+    saturated: Junction<L>,
 }
+
+lanewise!(SwingState {
+    couple_v,
+    couple_i,
+    vbe,
+    e,
+    saturated
+});
 
 impl SwingState {
     /// The base at rest with no band and no envelope: R_BIAS's current all
@@ -64,100 +76,118 @@ impl SwingState {
             couple_v: -base as f32,
             couple_i: 0.0,
             vbe,
+            e: Exp::default(),
+            saturated: Junction::default(),
         }
     }
+}
 
+impl<L: Lanes> SwingState<L> {
     /// Advances one time step `dt` with the band at `band` and the collector
     /// able to sink at most `available` amps, returning the collector
     /// current.
-    #[inline]
-    fn step(&mut self, band: f32, available: f32, dt: f32) -> f32 {
+    #[inline(always)]
+    fn step(&mut self, band: L::S, available: L::S, dt: f32) -> L::S {
         let gc = 2.0 * C_COUPLE / dt as f64;
-        let history = gc * self.couple_v as f64 + self.couple_i as f64;
-        let (band, avail) = (band as f64, available.max(0.0) as f64);
-        let vt = VT as f64;
+        let history = L::wide(self.couple_v) * gc + L::wide(self.couple_i);
+        let (band, avail) = (L::wide(band), L::wide(available.max(c(0.0))));
+        let inv_vt = 1.0 / VT as f64;
+        let g = gc + 1.0 / R_BIAS;
         let mut vbe = self.vbe;
-        let mut base = 0.0;
-        let mut ic = 0.0;
+        let mut e = self.e.at(vbe, inv_vt);
+        let mut base = c::<L::D>(0.0);
+        let mut ic = c::<L::D>(0.0);
+        let mut done = L::DM::default();
         for _ in 0..ITERATIONS {
-            let e = (vbe / vt).min(80.0).exp();
-            let ie = IS * (e - 1.0);
-            let die = IS * e / vt;
-            base = vbe + R_EMIT * ie;
+            let ie = (e.value - 1.0) * IS;
+            let die = e.value * IS * inv_vt;
+            let at = vbe + ie * R_EMIT;
             // The collector takes α·Ie while it can; past that it saturates
             // and the base carries the rest.
-            let (ib, dib) = if ALPHA * ie < avail {
-                ic = ALPHA * ie;
-                ((1.0 - ALPHA) * ie, (1.0 - ALPHA) * die)
-            } else {
-                ic = avail;
-                (ie - avail, die)
-            };
-            let f = gc * (band - base) - history + (RAIL - base) / R_BIAS - ib;
-            let df = -(gc + 1.0 / R_BIAS) * (1.0 + R_EMIT * die) - dib;
-            let mut next = vbe - f / df;
-            if next > LIMIT_ABOVE {
-                next = vbe + (next - vbe).clamp(-LIMIT_STEP * 8.0, LIMIT_STEP);
-            }
-            let moved = (next - vbe).abs();
-            vbe = next;
-            if moved < TOLERANCE {
+            let linear = (ie * ALPHA).lt(avail);
+            let ic_now = L::D::select(linear, ie * ALPHA, avail);
+            let ib = L::D::select(linear, ie * (1.0 - ALPHA), ie - avail);
+            let dib = L::D::select(linear, die * (1.0 - ALPHA), die);
+            let f = band * gc - history + RAIL * (1.0 / R_BIAS) - at * g - ib;
+            let df = (die * R_EMIT + 1.0) * -g - dib;
+            let next = vbe - f / df;
+            let limited = vbe + (next - vbe).clamp(c(-LIMIT_STEP * 8.0), c(LIMIT_STEP));
+            let next = L::D::select(next.gt(c(LIMIT_ABOVE)), limited, next);
+            let moved = next - vbe;
+            vbe = L::D::select(done, vbe, next);
+            base = L::D::select(done, base, at);
+            ic = L::D::select(done, ic, ic_now);
+            done = done | (moved * moved).lt(c(DONE));
+            if done.all() {
                 break;
             }
+            e = e.at_where(!done, vbe, inv_vt);
         }
         self.vbe = vbe;
-        let v = (band - base) as f32;
-        self.couple_i = (gc * v as f64 - history) as f32;
+        self.e = e;
+        let v = L::narrow(band - base);
+        self.couple_i = L::narrow(L::wide(v) * gc - history);
         self.couple_v = v;
-        ic as f32
+        L::narrow(ic)
     }
 }
 
 /// The most current a VCA's node can push through its diode into a
 /// saturated collector, from the node's open-circuit voltage `open` and
-/// impedance `z`, starting Newton from `guess` (the node's last voltage).
-#[inline]
-fn saturated_current(open: f32, z: f32, guess: f32) -> f32 {
-    if open <= VCE_SAT {
-        return 0.0;
+/// impedance `z`, by Newton on the node voltage from its last solution.
+#[inline(always)]
+fn saturated_current<L: Lanes>(open: L::S, z: L::S, node: &mut Junction<L>) -> L::S {
+    let on = open.gt(c(VCE_SAT));
+    if !on.any() {
+        return c(0.0);
     }
     // Newton on the node voltage n: n = open − z·Id(n − VCE_SAT).
-    let mut n = guess.clamp(VCE_SAT, open.min(VCE_SAT + DIODE_MAX));
+    const DONE: f64 = converged(1.0e-6, DIODE_NVT as f64);
+    let (open, z, sat) = (L::wide(open), L::wide(z), VCE_SAT as f64);
+    let a = z * DIODE_IS as f64;
+    let inv_nvt = 1.0 / DIODE_NVT as f64;
+    let mut n = node.v.clamp(c(sat), open.min(c(sat + DIODE_MAX as f64)));
+    let mut e = node.e.at(n - sat, inv_nvt);
+    let on_d = L::wide_mask(on);
+    let mut done = !on_d;
     for _ in 0..12 {
-        let e = ((n - VCE_SAT) / DIODE_NVT).min(80.0).exp();
-        let f = n - open + z * DIODE_IS * (e - 1.0);
-        let df = 1.0 + z * DIODE_IS * e / DIODE_NVT;
-        let next = (n - f / df).clamp(VCE_SAT, open);
-        let moved = (next - n).abs();
-        n = next;
-        if moved < 1.0e-6 {
+        let f = n - open + (e.value - 1.0) * a;
+        let df = e.value * a * inv_nvt + 1.0;
+        let next = (n - f / df).clamp(c(sat), open);
+        let moved = next - n;
+        n = L::D::select(done, n, next);
+        done = done | (moved * moved).lt(c(DONE));
+        if done.all() {
             break;
         }
+        e = e.at_where(!done, n - sat, inv_nvt);
     }
-    (open - n) / z
+    *node = Junction {
+        v: L::D::select(on_d, n, node.v),
+        e: Exp::select(on_d, e, node.e),
+    };
+    L::S::select(on, L::narrow((open - n) / z), c(0.0))
 }
 
 /// Solves one sample of a VCA whose collector pulls on unknown `node` of
 /// `net`: the node's open-circuit voltage and impedance give how much
 /// current the saturated collector can sink, the base then sets the
-/// collector current, and that current pulls the node down. `last` is the
-/// node's voltage on the last sample.
+/// collector current, and that current pulls the node down.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub fn vca<const U: usize, const C: usize, const S: usize, const K: usize>(
+pub fn vca<L: Lanes, const U: usize, const C: usize, const S: usize, const K: usize>(
     net: &Mna<U, C, S, K>,
-    state: &mut MnaState<C>,
-    closed: usize,
+    state: &mut MnaState<C, L>,
+    closed: L::Closed,
     node: usize,
-    base: &mut SwingState,
-    band: f32,
-    injected: &[f32; U],
-    last: f32,
+    base: &mut SwingState<L>,
+    band: L::S,
+    injected: &[L::S; U],
     dt: f32,
-) -> [f32; U] {
+) -> [L::S; U] {
     let x = net.open(state, closed, injected);
-    let z = net.impedance(closed, node, node);
-    let available = saturated_current(x[node], z, last);
+    let z = net.impedance::<L>(closed, node, node);
+    let available = saturated_current(x[node], z, &mut base.saturated);
     let ic = base.step(band, available, dt);
     net.close(state, closed, x, &[(node, -ic)])
 }

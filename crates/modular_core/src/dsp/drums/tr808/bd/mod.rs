@@ -15,10 +15,13 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{DIODE_DROP, SILENCE, T60_TO_RATE, Timing, VSAT, pulse_volts, trapezoid};
+use super::levels;
 use crate::dsp::drums::analog::{high_pass, low_pass, one_pole_coeff};
-use crate::dsp::drums::voice::{Circuit, Pulse, Voices};
-use crate::dsp::utils::{sanitize, voct_to_hz};
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices};
+use crate::dsp::utils::voct_to_hz;
+use crate::poly::{PolyOutput, PolySignal};
 
 mod module;
 
@@ -76,78 +79,94 @@ const OUTPUT_HP_HZ: f32 = 1.0 / (std::f32::consts::TAU * 100.0e3 * 0.47e-6);
 const MIN_DECAY: f32 = 0.01;
 const MAX_DECAY: f32 = 10.0;
 
-const DEFAULT_TONE: f32 = 2.5;
-const DEFAULT_DECAY: f32 = 1.0;
-/// Bridged-T centre frequency at rest, ≈ 49.45 Hz, in V/Oct.
-const DEFAULT_FREQ: f32 = -2.4035;
 /// Scales the circuit's output voltage so an unaccented hit at stock pitch
 /// peaks near 5 V.
 const OUTPUT_GAIN: f32 = 1.23;
 
 /// The circuit's state for one hit sequence.
 #[derive(Clone, Copy)]
-struct Voice {
-    pulse: Pulse,
+struct Voice<L: Lanes = Mono> {
+    pulse: Pulse<L>,
     /// Voltage across C40.
-    shaper: f32,
+    shaper: L::S,
     /// Voltage across C38; charged at rest, so Venv starts low.
-    c38: f32,
+    c38: L::S,
     /// Voltage across C39, Venv side minus Vrp side.
-    c39: f32,
+    c39: L::S,
     /// Voltages across C41 (inverting input to Vcomm) and C42 (Vcomm to Vbt).
-    arm1: f32,
-    arm2: f32,
-    vcomm: f32,
-    tone_lp: f32,
-    level_hp: f32,
-    output_hp: f32,
+    arm1: L::S,
+    arm2: L::S,
+    vcomm: L::S,
+    tone_lp: L::S,
+    level_hp: L::S,
+    output_hp: L::S,
 }
 
-impl Default for Voice {
+lanewise!(Voice {
+    pulse,
+    shaper,
+    c38,
+    c39,
+    arm1,
+    arm2,
+    vcomm,
+    tone_lp,
+    level_hp,
+    output_hp,
+});
+
+impl<L: Lanes> Default for Voice<L> {
     fn default() -> Self {
         Self {
             pulse: Pulse::default(),
-            shaper: 0.0,
-            c38: RAIL,
-            c39: 0.0,
-            arm1: 0.0,
-            arm2: 0.0,
-            vcomm: 0.0,
-            tone_lp: 0.0,
-            level_hp: 0.0,
-            output_hp: 0.0,
+            shaper: c(0.0),
+            c38: c(RAIL),
+            c39: c(0.0),
+            arm1: c(0.0),
+            arm2: c(0.0),
+            vcomm: c(0.0),
+            tone_lp: c(0.0),
+            level_hp: c(0.0),
+            output_hp: c(0.0),
         }
     }
 }
 
-impl Circuit for Voice {
-    type Shared = Bd808State;
-    type Controls = Controls;
-
+impl Fire for Voice {
     fn fire(&mut self, accent: f32, st: &Bd808State) {
         self.pulse
             .fire(pulse_volts(accent), st.timing.pulse_samples);
     }
+}
 
-    fn settled(&self) -> bool {
-        !self.pulse.active()
-            && self.c38 > Q42_ON_START + Q42_ON_WIDTH
-            && [
-                self.shaper,
-                self.c39,
-                self.arm1,
-                self.arm2,
-                self.tone_lp,
-                self.level_hp,
-                self.output_hp,
-            ]
-            .iter()
-            .all(|v| v.abs() < SILENCE)
+impl<L: Lanes> Circuit<L> for Voice<L> {
+    type Shared = Bd808State;
+    type Controls = Controls<L>;
+
+    fn settled(&self) -> L::SM {
+        let silent = |v: L::S| v.abs().lt(c(SILENCE));
+        (!self.pulse.active())
+            .and_then(|| self.c38.gt(c(Q42_ON_START + Q42_ON_WIDTH)))
+            .and_then(|| silent(self.shaper) & silent(self.c39))
+            .and_then(|| silent(self.arm1) & silent(self.arm2))
+            .and_then(|| silent(self.tone_lp) & silent(self.level_hp) & silent(self.output_hp))
     }
 
-    fn step(&mut self, st: &Bd808State, c: &Controls) -> f32 {
-        self.advance(st, c)
+    fn step(&mut self, st: &Bd808State, controls: &Controls<L>) -> L::S {
+        self.advance(st, controls) * controls.level
     }
+}
+
+/// The bass drum at every width.
+struct BassDrum;
+
+impl Drum for BassDrum {
+    type Shared = Bd808State;
+    type Circuit<L: Lanes> = Voice<L>;
+    type Controls<L: Lanes> = Controls<L>;
+    type Sources<L: Lanes> = ();
+    const QUAD: bool = true;
+    const PAIR: bool = false;
 }
 
 #[derive(Default)]
@@ -178,6 +197,8 @@ struct Network {
     /// 1 / (R167·C).
     a: f32,
     g: f32,
+    /// Output gain levelling `freq`.
+    level: f32,
 }
 
 impl Default for Network {
@@ -189,6 +210,7 @@ impl Default for Network {
             c: C41_42,
             a: 0.0,
             g: 0.0,
+            level: 1.0,
         }
     }
 }
@@ -214,73 +236,89 @@ impl Network {
             c,
             a,
             g,
+            level: levels::KICK.gain(freq),
         }
     }
 }
 
 /// The settings for one sample: the bridged-T tuned for `freq` and
-/// `decay`, and the tone low-pass coefficient.
-#[derive(Clone, Copy)]
-struct Controls {
-    network: Network,
-    tone_coeff: f32,
+/// `decay` (its arm capacitance, 1 / (R167·C), and the feedback gain), and
+/// the tone low-pass coefficient, and the output gain levelling `freq`.
+#[derive(Clone, Copy, Default)]
+struct Controls<L: Lanes = Mono> {
+    c: L::S,
+    a: L::S,
+    g: L::S,
+    tone_coeff: L::S,
+    level: L::S,
 }
 
-impl Voice {
+lanewise!(Controls {
+    c,
+    a,
+    g,
+    tone_coeff,
+    level
+});
+
+impl<L: Lanes> Voice<L> {
     /// Advances the circuit one sample and returns the output stage's voltage.
     #[inline]
-    fn advance(&mut self, st: &Bd808State, controls: &Controls) -> f32 {
+    fn advance(&mut self, st: &Bd808State, controls: &Controls<L>) -> L::S {
         let dt = st.dt;
         let vtrig = self.pulse.next();
 
         // Pulse shaper: the shelf passes the edges, and D53 stops the
         // falling edge a diode drop below ground by discharging C40.
         let mut vplus = vtrig - self.shaper;
-        if vplus < 0.0 {
-            vplus = -DIODE_DROP * (1.0 - (vplus / DIODE_DROP).exp());
-            self.shaper = vtrig - vplus;
+        let clamped = vplus.lt(c(0.0));
+        if clamped.any() {
+            let e = (vplus / DIODE_DROP).map_where(clamped, c(0.0), f32::exp);
+            vplus = L::S::select(clamped, (c::<L::S>(1.0) - e) * -DIODE_DROP, vplus);
+            self.shaper = L::S::select(clamped, vtrig - vplus, self.shaper);
         }
         let shaper_rest = vtrig * R163 / (R162 + R163);
         self.shaper = shaper_rest + (self.shaper - shaper_rest) * st.shaper_mul;
 
         // Envelope generator: the trigger pulse holds C38 empty, and Q43
         // grounds the R165/R166 junction for as long as Venv stays high.
-        if vtrig > 0.0 {
-            self.c38 = 0.0;
-        } else {
-            self.c38 += (RAIL - self.c38) * st.c38_coeff;
-        }
-        let q42 = ((self.c38 - Q42_ON_START) / Q42_ON_WIDTH).clamp(0.0, 1.0);
-        let attack = 1.0 - q42 * q42 * (3.0 - 2.0 * q42);
-        let venv = VENV_HIGH * attack;
+        let charging = self.c38 + (c::<L::S>(RAIL) - self.c38) * st.c38_coeff;
+        self.c38 = L::S::select(vtrig.gt(c(0.0)), c(0.0), charging);
+        let q42 = ((self.c38 - Q42_ON_START) / Q42_ON_WIDTH).clamp(c(0.0), c(1.0));
+        let attack = c::<L::S>(1.0) - q42 * q42 * (c::<L::S>(3.0) - q42 * 2.0);
+        let venv = attack * VENV_HIGH;
 
         // Retriggering pulse: D52 shaves Venv's rising edge, so its
         // falling edge reaches the bridged-T as a large negative pulse.
-        let mut vrp = venv - self.c39;
-        if vrp > DIODE_DROP {
-            vrp = DIODE_DROP;
-            self.c39 = venv - DIODE_DROP;
-        }
+        let vrp = venv - self.c39;
+        let shaved = vrp.gt(c(DIODE_DROP));
+        let vrp = L::S::select(shaved, c(DIODE_DROP), vrp);
+        self.c39 = L::S::select(shaved, venv - DIODE_DROP, self.c39);
         self.c39 += (vrp - self.vcomm) * st.c39_step;
 
         // Q43 leakage on negative swings feeds Vcomm a current I(Vcomm)
         // that pulls it back towards ground. Linearised about the last
         // Vcomm as I0 − G·(Vcomm − V0), its slope G joins the implicit
         // solve as a conductance, which keeps it stable at any pitch.
-        let (leak_g, leak_i) = if self.vcomm < LEAK_FLOOR {
-            let x = LEAK_ALPHA * (-self.vcomm - LEAK_V0);
-            let softplus = if x > 20.0 { x } else { x.exp().ln_1p() };
-            let share = (1.0 - attack) * R165 / (R165 + R166);
+        let leaking = self.vcomm.lt(c(LEAK_FLOOR));
+        let (leak_g, leak_i) = if leaking.any() {
+            let x = (-self.vcomm - LEAK_V0) * LEAK_ALPHA;
+            let soft = !x.gt(c(20.0));
+            let softplus = x.map_where(soft, x, |x| x.exp().ln_1p());
+            let share = (c::<L::S>(1.0) - attack) * R165 / (R165 + R166);
             let current = share * (LEAK_M / LEAK_ALPHA) * softplus;
-            let slope = share * LEAK_M / (1.0 + (-x).exp());
-            (slope, current + slope * self.vcomm)
+            let slope = share * LEAK_M / ((-x).map(f32::exp) + 1.0);
+            (
+                L::S::select(leaking, slope, c(0.0)),
+                L::S::select(leaking, current + slope * self.vcomm, c(0.0)),
+            )
         } else {
-            (0.0, 0.0)
+            (c(0.0), c(0.0))
         };
-        let g_ground = (1.0 - attack) / (R165 + R166) + attack / R166 + leak_g;
+        let g_ground = (c::<L::S>(1.0) - attack) / (R165 + R166) + attack / R166 + leak_g;
 
-        let Network { c, a, g, .. } = controls.network;
-        let g_total = 1.0 / R161 + 1.0 / R170 + g_ground;
+        let Controls { c: cap, a, g, .. } = *controls;
+        let g_total = g_ground + (1.0 / R161 + 1.0 / R170);
 
         // States u = (arm1, arm2), the voltages across C41 and C42, with
         // u1' = −a·(u1 + u2) and C·u2' the current into Vcomm less the
@@ -298,37 +336,45 @@ impl Voice {
             [
                 -a,
                 -a,
-                (-1.0 / R167 + g_total + fb) / c,
-                (-1.0 / R167 + fb) / c,
+                (g_total - 1.0 / R167 + fb) / cap,
+                (fb - 1.0 / R167) / cap,
             ],
-            (drive - vplus * (g_total + fb)) / c,
+            (drive - vplus * (g_total + fb)) / cap,
             dt,
         );
         let mut vcomm = vplus - linear.0;
         let mut vbt = vcomm - linear.1;
-        let (arm1, arm2) = if vbt.abs() > VSAT {
-            vbt = VSAT.copysign(vbt);
+        let over = vbt.abs().gt(c(VSAT));
+        let (arm1, arm2) = if over.any() {
+            let pinned_bt = L::S::select(vbt.lt(c(0.0)), c(-VSAT), c(VSAT));
             let pinned = trapezoid(
                 (self.arm1, self.arm2),
-                [-a, -a, -1.0 / (R167 * c), (-1.0 / R167 - g_total) / c],
-                (drive - vbt * (g_total + fb)) / c,
+                [
+                    -a,
+                    -a,
+                    c::<L::S>(-1.0) / (cap * R167),
+                    (c::<L::S>(-1.0 / R167) - g_total) / cap,
+                ],
+                (drive - pinned_bt * (g_total + fb)) / cap,
                 dt,
             );
-            vcomm = vbt + pinned.1;
-            pinned
+            vcomm = L::S::select(over, pinned_bt + pinned.1, vcomm);
+            vbt = L::S::select(over, pinned_bt, vbt);
+            (
+                L::S::select(over, pinned.0, linear.0),
+                L::S::select(over, pinned.1, linear.1),
+            )
         } else {
             linear
         };
-        self.arm1 = sanitize(arm1);
-        self.arm2 = sanitize(arm2);
+        self.arm1 = arm1.sanitize();
+        self.arm2 = arm2.sanitize();
         self.vcomm = vcomm;
 
         // Tone low-pass, then the level and output coupling high-passes.
         let lp = low_pass(&mut self.tone_lp, vbt, controls.tone_coeff);
-        let level = high_pass(&mut self.level_hp, lp, st.level_hp_coeff);
-        let out = high_pass(&mut self.output_hp, level, st.output_hp_coeff);
-
-        out
+        let level = high_pass(&mut self.level_hp, lp, c(st.level_hp_coeff));
+        high_pass(&mut self.output_hp, level, c(st.output_hp_coeff))
     }
 }
 
