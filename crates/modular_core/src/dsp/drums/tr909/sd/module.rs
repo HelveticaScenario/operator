@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
 use crate::dsp::drums::voice::rails;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
@@ -16,10 +16,11 @@ struct Sd909Params {
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// tune control, 0–5 V: the drum's pitch (default 2.5)
-    #[signal(default = 2.5, range = (0.0, 5.0))]
+    /// resting pitch of the lower VCO in V/Oct, scaling both VCOs and
+    /// their bend; stock is ≈148 Hz (default -0.8243)
+    #[signal(type = pitch, default = -0.8243, range = (-2.3, 0.7))]
     #[deserr(default)]
-    tune: Option<PolySignal>,
+    freq: Option<PolySignal>,
     /// tone control, 0–5 V: how long the low noise lasts (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
@@ -47,7 +48,7 @@ struct Sd909Outputs {
 ///
 /// Each rising edge on **trigger** fires the 909's trigger into a circuit
 /// model of its snare: two triangle VCOs rounded toward sines, their pitch
-/// bent up at the strike, over filtered noise. **tune** sets the pitch,
+/// bent up at the strike, over filtered noise. **freq** sets the pitch,
 /// **tone** how long the low noise lasts, **snappy** the noise's level, and
 /// **accent**, sampled at each strike, drives it harder.
 ///
@@ -74,6 +75,7 @@ struct SdState {
 struct Channel {
     voices: Voices<Snare>,
     noise: Noise,
+    rate: Cached<f32, f32>,
 }
 
 impl Sd909 {
@@ -108,7 +110,7 @@ impl Sd909 {
         let inputs = [
             Live::new(&p.trigger),
             Live::or(&p.accent, Sd909Params::ACCENT_DEFAULT),
-            Live::or(&p.tune, Sd909Params::TUNE_DEFAULT),
+            Live::or(&p.freq, Sd909Params::FREQ_DEFAULT),
             Live::or(&p.tone, Sd909Params::TONE_DEFAULT),
             Live::or(&p.snappy, Sd909Params::SNAPPY_DEFAULT),
         ];
@@ -133,7 +135,7 @@ impl Sd909 {
         let Sd909ParamsBlockInputs {
             trigger,
             accent,
-            tune,
+            freq,
             tone,
             snappy,
         } = p.block_inputs(range.clone(), channels, &mut scratch)?;
@@ -141,7 +143,7 @@ impl Sd909 {
         each_slot(
             &mut outputs.sample,
             range,
-            [trigger, accent, tune, tone, snappy],
+            [trigger, accent, freq, tone, snappy],
             |inputs, mut slot| {
                 self.state
                     .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
@@ -152,14 +154,14 @@ impl Sd909 {
 }
 
 impl SdState {
-    /// Runs one sample of every channel on its `[trigger, accent, tune, tone,
+    /// Runs one sample of every channel on its `[trigger, accent, freq, tone,
     /// snappy]`, handing `out` each one's output.
     #[inline(always)]
     fn tick<I: Input>(
         &mut self,
         channels: &mut [Channel],
         restart: bool,
-        [trigger, accent, tune, tone, snappy]: [I; 5],
+        [trigger, accent, freq, tone, snappy]: [I; 5],
         mut out: impl FnMut(usize, f32),
     ) {
         let run = Run {
@@ -170,7 +172,7 @@ impl SdState {
         };
         let inputs = SdInputs {
             trigger,
-            tune,
+            freq,
             tone,
             snappy,
             noise_rate: self.shared.noise_rate,
@@ -185,7 +187,7 @@ impl SdState {
 /// The inputs every channel of the snare reads.
 struct SdInputs<I> {
     trigger: I,
-    tune: I,
+    freq: I,
     tone: I,
     snappy: I,
     noise_rate: f32,
@@ -202,10 +204,11 @@ impl<I: Input> Channels<SnareDrum> for SdInputs<I> {
     #[inline(always)]
     fn inputs(&self, ch: usize, channel: &mut Channel) -> (f32, SnareControls) {
         let knob = |s: I| s.at(ch).clamp(0.0, 5.0) / 5.0;
-        let tune = knob(self.tune);
         let tone = 1.0 / (R254 + VR7 * knob(self.tone));
         let controls = SnareControls {
-            tune: RAIL * (R284 + VR6 * tune) / (R287 + VR6 + R284),
+            rate: channel
+                .rate
+                .get(self.freq.at(ch), |f| (f - Sd909Params::FREQ_DEFAULT).exp2()),
             tone_fall: (-tone * self.dt / C67).exp(),
             snappy: VR9 * knob(self.snappy) as f64,
             noise: channel.noise.next(self.noise_rate),

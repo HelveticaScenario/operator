@@ -38,12 +38,13 @@ const ACCENT_GAIN: f32 = 1.0 + 10.0e3 / 4.7e3;
 /// The accent voltage of an unaccented hit.
 const ACCENT_LOW: f32 = 1.8;
 
-// The tune voltage: R287, the tune pot VR6 and R284 divide the rail; its
-// wiper feeds IC35a through R249, and C66 through R249 and R248 in series.
-// The trigger charges C66 through D56 and R247.
+// The tune voltage: R287, the tune pot VR6 at mid-travel and R284 divide
+// the rail; its wiper feeds IC35a through R249, and C66 through R249 and
+// R248 in series. The trigger charges C66 through D56 and R247.
 const R287: f32 = 100.0e3;
 const VR6: f32 = 10.0e3;
 const R284: f32 = 10.0e3;
+const TUNE: f32 = RAIL * (R284 + 0.5 * VR6) / (R287 + VR6 + R284);
 const R249: f32 = 100.0e3;
 const R248: f32 = 470.0e3;
 const R247: f32 = 47.0e3;
@@ -237,8 +238,8 @@ struct SnareShared {
 
 #[derive(Clone, Copy, Default)]
 struct SnareControls<L: Lanes = Mono> {
-    /// The tune pot's wiper voltage.
-    tune: L::S,
+    /// Both VCOs' rate relative to stock.
+    rate: L::S,
     /// C67's fall per sample as the tone pot and R254 drain it.
     tone_fall: L::S,
     /// The snappy pot's resistance.
@@ -247,7 +248,7 @@ struct SnareControls<L: Lanes = Mono> {
 }
 
 lanewise!(SnareControls {
-    tune,
+    rate,
     tone_fall,
     snappy,
     noise
@@ -302,12 +303,14 @@ impl<L: Lanes> Circuit<L> for Snare<L> {
         let mul = L::S::select(charging, c(sh.c66_charge), c(sh.c66_bleed));
         let g_tune = 1.0 / (R248 + R249);
         let total = pulse + g_tune;
-        let settle = (pulse * (trig - DIODE_DROP) + ctl.tune * g_tune) / total;
+        let settle = (pulse * (trig - DIODE_DROP) + TUNE * g_tune) / total;
         self.c66 = settle + (self.c66 - settle) * mul;
-        let vdd = (ctl.tune * R248 + self.c66 * R249) / (R248 + R249);
+        let vdd = (self.c66 * R249 + TUNE * R248) / (R248 + R249);
 
-        self.vco1.advance(triggered, vdd / VCO1_RC, dt, sh.reset1);
-        self.vco2.advance(triggered, vdd / VCO2_RC, dt, sh.reset2);
+        self.vco1
+            .advance(triggered, vdd * ctl.rate / VCO1_RC, dt, sh.reset1);
+        self.vco2
+            .advance(triggered, vdd * ctl.rate / VCO2_RC, dt, sh.reset2);
 
         // The envelopes: charged from the gated accent while the trigger
         // lasts, the drum VCAs' second stages held empty meanwhile.

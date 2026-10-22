@@ -84,10 +84,12 @@ const ACCENT_GAIN: f32 = 1.0 + 10.0e3 / 47.0e3;
 /// The accent voltage of an unaccented hit.
 const ACCENT_LOW: f32 = 2.6;
 
-// The tune voltage: R113, the tune pot VR10 and R112 divide the rail.
+// The tune voltage: R113, the tune pot VR10 at mid-travel and R112
+// divide the rail.
 const R113: f32 = 68.0e3;
 const VR10: f32 = 10.0e3;
 const R112: f32 = 10.0e3;
+const TUNE: f32 = RAIL * (R112 + 0.5 * VR10) / (R113 + VR10 + R112);
 // IC14b: R66 feedback over R64 from VDD, R60 from C16 and R61 from C17,
 // which the trigger charges through D14 and D15.
 const R60: f32 = 2.2e6;
@@ -228,13 +230,14 @@ struct TomShared {
 
 #[derive(Clone, Copy, Default)]
 struct TomControls<L: Lanes = Mono> {
-    tune: L::S,
+    /// The VCOs' rate relative to stock.
+    rate: L::S,
     /// Conductance draining C21 through the decay pot and R111.
     decay: L::S,
     noise: L::S,
 }
 
-lanewise!(TomControls { tune, decay, noise });
+lanewise!(TomControls { rate, decay, noise });
 
 impl Fire for Tom {
     fn fire(&mut self, accent: f32, shared: &TomShared) {
@@ -284,7 +287,7 @@ impl<L: Lanes> Circuit<L> for Tom<L> {
         self.c17 *= sh.fall17;
 
         // The inverters' supply and the VCOs.
-        let vdd = ctl.tune;
+        let vdd = c::<L::S>(TUNE);
         let vss = vdd + self.c16 * (100.0e3 / R60) + self.c17 * (100.0e3 / R61);
         for (k, vco) in self.vcos.iter_mut().enumerate() {
             let reset = Vco {
@@ -296,7 +299,7 @@ impl<L: Lanes> Circuit<L> for Tom<L> {
             } else {
                 let rc = R_INTEGRATOR * parts.vco[k];
                 let mut run = *vco;
-                run.run(vss / rc, vdd / rc, dt);
+                run.run(vss * ctl.rate / rc, vdd * ctl.rate / rc, dt);
                 run
             };
             *vco = Vco::select(triggered, reset, run);

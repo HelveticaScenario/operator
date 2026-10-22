@@ -225,9 +225,9 @@ fn bd_sweeps_down_to_rest() {
 }
 
 #[test]
-fn bd_tune_lengthens_the_sweep() {
-    let hz = |tune: f32| {
-        let x = render(BD, json!({ "attack": 0.0, "tune": tune }), 0.1);
+fn bd_sweep_lengthens_the_sweep() {
+    let hz = |sweep: f32| {
+        let x = render(BD, json!({ "attack": 0.0, "sweep": sweep }), 0.1);
         crossing_hz(&x, 0.03, 0.06)
     };
     let (short, long) = (hz(0.0), hz(5.0));
@@ -265,15 +265,38 @@ fn sd_snappy_adds_noise() {
 }
 
 #[test]
-fn sd_tune_raises_the_pitch() {
-    let hz = |tune: f32| {
-        crossing_hz(
-            &render(SD, json!({ "snappy": 0.0, "tune": tune }), 0.15),
-            0.04,
-            0.12,
-        )
-    };
-    assert!(hz(5.0) > 1.4 * hz(0.0));
+fn freq_tracks_volts_per_octave() {
+    // Each voice with its noise turned down, its stock freq, and a window
+    // of its ring clear of the strike.
+    let voices = [
+        (
+            BD,
+            json!({ "attack": 0.0, "decay": 5.0 }),
+            -2.2235,
+            0.15,
+            0.3,
+        ),
+        (SD, json!({ "snappy": 0.0 }), -0.8243, 0.04, 0.12),
+        (LT, json!({}), -2.0993, 0.1, 0.3),
+        (MT, json!({}), -1.8098, 0.1, 0.3),
+        (HT, json!({}), -1.5143, 0.1, 0.3),
+    ];
+    for (voice, params, stock, from, to) in voices {
+        let hz = |freq: f32| {
+            let mut params = params.clone();
+            params["freq"] = json!(freq);
+            let x = render(voice, params, to);
+            crossing_hz(&x, from, to)
+        };
+        let base = hz(stock);
+        for octaves in [-1.0f32, 1.0] {
+            let ratio = hz(stock + octaves) / base;
+            assert!(
+                (ratio / octaves.exp2() - 1.0).abs() < 0.02,
+                "{voice} {octaves}: {ratio}"
+            );
+        }
+    }
 }
 
 #[test]

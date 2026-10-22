@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
 use crate::dsp::drums::voice::rails;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
@@ -16,11 +16,16 @@ struct Bd909Params {
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// tune control, 0–5 V: how long the pitch takes to fall to rest
-    /// (default 2.5)
+    /// resting pitch in V/Oct, scaling the VCO and the whole sweep with it;
+    /// stock is ≈56 Hz (default -2.2235)
+    #[signal(type = pitch, default = -2.2235, range = (-3.7, -0.7))]
+    #[deserr(default)]
+    freq: Option<PolySignal>,
+    /// sweep control, 0–5 V: how long the pitch takes to fall to rest, the
+    /// 909's tune knob (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
-    tune: Option<PolySignal>,
+    sweep: Option<PolySignal>,
     /// attack control, 0–5 V: the level of the click (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
@@ -49,8 +54,8 @@ struct Bd909Outputs {
 /// Each rising edge on **trigger** fires the 909's trigger into a circuit
 /// model of its bass drum: a triangle VCO rounded toward a sine, its pitch
 /// swept down from about 300 Hz to rest near 56 Hz, with a click and a
-/// burst of noise at the attack. **tune** sets how long the sweep takes,
-/// **attack** the click's level, **decay** how long the drum rings, and
+/// burst of noise at the attack. **freq** sets the resting pitch, **sweep**
+/// how long the fall to it takes, **attack** the click's level, **decay** how long the drum rings, and
 /// **accent**, sampled at each strike, drives it harder.
 ///
 /// An unaccented hit peaks near **±5 V**.
@@ -76,7 +81,8 @@ struct BdState {
 struct Channel {
     voices: Voices<BassDrum>,
     noise: Noise,
-    tune: TaperedPot,
+    rate: Cached<f32, f32>,
+    sweep: TaperedPot,
     decay: TaperedPot,
 }
 
@@ -114,7 +120,8 @@ impl Bd909 {
         let inputs = [
             Live::new(&p.trigger),
             Live::or(&p.accent, Bd909Params::ACCENT_DEFAULT),
-            Live::or(&p.tune, Bd909Params::TUNE_DEFAULT),
+            Live::or(&p.freq, Bd909Params::FREQ_DEFAULT),
+            Live::or(&p.sweep, Bd909Params::SWEEP_DEFAULT),
             Live::or(&p.decay, Bd909Params::DECAY_DEFAULT),
             Live::or(&p.attack, Bd909Params::ATTACK_DEFAULT),
         ];
@@ -139,7 +146,8 @@ impl Bd909 {
         let Bd909ParamsBlockInputs {
             trigger,
             accent,
-            tune,
+            freq,
+            sweep,
             decay,
             attack,
         } = p.block_inputs(range.clone(), channels, &mut scratch)?;
@@ -147,7 +155,7 @@ impl Bd909 {
         each_slot(
             &mut outputs.sample,
             range,
-            [trigger, accent, tune, decay, attack],
+            [trigger, accent, freq, sweep, decay, attack],
             |inputs, mut slot| {
                 self.state
                     .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
@@ -158,14 +166,14 @@ impl Bd909 {
 }
 
 impl BdState {
-    /// Runs one sample of every channel on its `[trigger, accent, tune, decay,
-    /// attack]`, handing `out` each one's output.
+    /// Runs one sample of every channel on its `[trigger, accent, freq,
+    /// sweep, decay, attack]`, handing `out` each one's output.
     #[inline(always)]
     fn tick<I: Input>(
         &mut self,
         channels: &mut [Channel],
         restart: bool,
-        [trigger, accent, tune, decay, attack]: [I; 5],
+        [trigger, accent, freq, sweep, decay, attack]: [I; 6],
         mut out: impl FnMut(usize, f32),
     ) {
         let run = Run {
@@ -176,7 +184,8 @@ impl BdState {
         };
         let inputs = BdInputs {
             trigger,
-            tune,
+            freq,
+            sweep,
             decay,
             attack,
             noise_rate: self.shared.noise_rate,
@@ -190,7 +199,8 @@ impl BdState {
 /// The inputs every channel of the bass drum reads.
 struct BdInputs<I> {
     trigger: I,
-    tune: I,
+    freq: I,
+    sweep: I,
     decay: I,
     attack: I,
     noise_rate: f32,
@@ -207,7 +217,10 @@ impl<I: Input> Channels<BassDrumFamily> for BdInputs<I> {
     fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, DrumControls) {
         let knob = |s: I| s.at(ch).clamp(0.0, 5.0) / 5.0;
         let controls = DrumControls {
-            tune: cs.tune.conductance(knob(self.tune), R57, VR2),
+            rate: cs
+                .rate
+                .get(self.freq.at(ch), |f| (f - Bd909Params::FREQ_DEFAULT).exp2()),
+            sweep: cs.sweep.conductance(knob(self.sweep), R57, VR2),
             decay: cs.decay.conductance(knob(self.decay), R58, VR5),
             attack: VR3 * (1.0 - knob(self.attack)),
             noise: cs.noise.next(self.noise_rate),

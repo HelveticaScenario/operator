@@ -224,15 +224,18 @@ struct DrumShared {
 
 #[derive(Clone, Copy, Default)]
 struct DrumControls<L: Lanes = Mono> {
-    /// Conductances draining C9 and C8, VR3's resistance, and the noise.
-    tune: L::S,
+    /// The VCO's rate relative to stock, conductances draining C9 and C8,
+    /// VR3's resistance, and the noise.
+    rate: L::S,
+    sweep: L::S,
     decay: L::S,
     attack: L::S,
     noise: L::S,
 }
 
 lanewise!(DrumControls {
-    tune,
+    rate,
+    sweep,
     decay,
     attack,
     noise
@@ -252,10 +255,11 @@ impl group::Drum for BassDrumFamily {
 
 impl<L: Lanes> BassDrum<L> {
     /// Advances the triangle one sample at control voltage `cv` (its
-    /// magnitude sets the slope), reflecting off IC13b's thresholds.
+    /// magnitude sets the slope) times `rate`, reflecting off IC13b's
+    /// thresholds.
     #[inline]
-    fn vco(&mut self, cv: L::S, dt: f32) {
-        let mut travel = cv.abs() / (R59 * C14) * dt;
+    fn vco(&mut self, cv: L::S, rate: L::S, dt: f32) {
+        let mut travel = cv.abs() * rate / (R59 * C14) * dt;
         let mut active = travel.gt(c(0.0));
         while active.any() {
             let room = L::S::select(
@@ -312,7 +316,7 @@ impl<L: Lanes> Circuit<L> for BassDrum<L> {
         let charging = triggered & (trig - DIODE_DROP).gt(self.c9);
         let g_charge = L::S::select(charging, c(1.0 / R21), c(0.0));
         let target = L::S::select(charging, trig - DIODE_DROP, c(0.0));
-        let g = g_charge + ctl.tune + 1.0 / R26;
+        let g = g_charge + ctl.sweep + 1.0 / R26;
         let settle = g_charge * target / g;
         self.c9 = settle + (self.c9 - settle) * (-g * dt / C9).map(f32::exp);
         let cv = self.c9 * -(R28 / R26) - (R28 / R27) * RAIL;
@@ -320,7 +324,7 @@ impl<L: Lanes> Circuit<L> for BassDrum<L> {
         // The VCO, held by Q11 while the trigger lasts.
         let held = self.tri * sh.sync_coeff;
         if !triggered.all() {
-            self.vco(cv, dt);
+            self.vco(cv, ctl.rate, dt);
         }
         self.tri = L::S::select(triggered, held, self.tri);
         self.rising = triggered | self.rising;

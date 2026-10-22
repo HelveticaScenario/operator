@@ -3334,7 +3334,7 @@
   },
   {
     "name": "$tr909.kick",
-    "documentation": "TR-909 bass drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its bass drum: a triangle VCO rounded toward a sine, its pitch\nswept down from about 300 Hz to rest near 56 Hz, with a click and a\nburst of noise at the attack. **tune** sets how long the sweep takes,\n**attack** the click's level, **decay** how long the drum rings, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.kick($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 bass drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its bass drum: a triangle VCO rounded toward a sine, its pitch\nswept down from about 300 Hz to rest near 56 Hz, with a click and a\nburst of noise at the attack. **freq** sets the resting pitch, **sweep**\nhow long the fall to it takes, **attack** the click's level, **decay** how long the drum rings, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.kick($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Bd909Params",
@@ -3373,17 +3373,8 @@
             }
           ]
         },
-        "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
-        "trigger": {
-          "description": "rising edges strike the drum",
-          "$ref": "#/$defs/PolySignal"
-        },
-        "tune": {
-          "description": "tune control, 0–5 V: how long the pitch takes to fall to rest\n(default 2.5)",
+        "freq": {
+          "description": "resting pitch in V/Oct, scaling the VCO and the whole sweep with it;\nstock is ≈56 Hz (default -2.2235)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3392,6 +3383,26 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "sweep": {
+          "description": "sweep control, 0–5 V: how long the pitch takes to fall to rest, the\n909's tune knob (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
         }
       },
       "required": [
@@ -3486,8 +3497,16 @@
         "maxValue": 5.0
       },
       {
-        "name": "tune",
-        "description": "tune control, 0–5 V: how long the pitch takes to fall to rest\n(default 2.5)",
+        "name": "freq",
+        "description": "resting pitch in V/Oct, scaling the VCO and the whole sweep with it;\nstock is ≈56 Hz (default -2.2235)",
+        "signalType": "pitch",
+        "defaultValue": -2.2235,
+        "minValue": -3.7,
+        "maxValue": -0.7
+      },
+      {
+        "name": "sweep",
+        "description": "sweep control, 0–5 V: how long the pitch takes to fall to rest, the\n909's tune knob (default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -3518,7 +3537,7 @@
   },
   {
     "name": "$tr909.snare",
-    "documentation": "TR-909 snare drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its snare: two triangle VCOs rounded toward sines, their pitch\nbent up at the strike, over filtered noise. **tune** sets the pitch,\n**tone** how long the low noise lasts, **snappy** the noise's level, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.snare($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 snare drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its snare: two triangle VCOs rounded toward sines, their pitch\nbent up at the strike, over filtered noise. **freq** sets the pitch,\n**tone** how long the low noise lasts, **snappy** the noise's level, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.snare($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Sd909Params",
@@ -3526,6 +3545,17 @@
       "properties": {
         "accent": {
           "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe accent voltage, for a hit up to twice as loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "resting pitch of the lower VCO in V/Oct, scaling both VCOs and\ntheir bend; stock is ≈148 Hz (default -0.8243)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3565,17 +3595,6 @@
         "trigger": {
           "description": "rising edges strike the drum",
           "$ref": "#/$defs/PolySignal"
-        },
-        "tune": {
-          "description": "tune control, 0–5 V: the drum's pitch (default 2.5)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
@@ -3670,12 +3689,12 @@
         "maxValue": 5.0
       },
       {
-        "name": "tune",
-        "description": "tune control, 0–5 V: the drum's pitch (default 2.5)",
-        "signalType": "control",
-        "defaultValue": 2.5,
-        "minValue": 0.0,
-        "maxValue": 5.0
+        "name": "freq",
+        "description": "resting pitch of the lower VCO in V/Oct, scaling both VCOs and\ntheir bend; stock is ≈148 Hz (default -0.8243)",
+        "signalType": "pitch",
+        "defaultValue": -0.8243,
+        "minValue": -2.3,
+        "maxValue": 0.7
       },
       {
         "name": "tone",
@@ -3956,7 +3975,7 @@
   },
   {
     "name": "$tr909.lowTom",
-    "documentation": "TR-909 low tom.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its low tom: three triangle VCOs, their pitch bent down from\nthe strike, one clipped ever harder as it fades, the others rounded\ntoward sines, over a burst of noise. **tune** sets the pitch, **decay**\nhow long the drum rings, and **accent**, sampled at each strike,\ndrives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.lowTom($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 low tom.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its low tom: three triangle VCOs, their pitch bent down from\nthe strike, one clipped ever harder as it fades, the others rounded\ntoward sines, over a burst of noise. **freq** sets the pitch, **decay**\nhow long the drum rings, and **accent**, sampled at each strike,\ndrives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.lowTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Lt909Params",
@@ -3984,17 +4003,8 @@
             }
           ]
         },
-        "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
-        "trigger": {
-          "description": "rising edges strike the drum",
-          "$ref": "#/$defs/PolySignal"
-        },
-        "tune": {
-          "description": "tune control, 0–5 V: the drum's pitch (default 2.5)",
+        "freq": {
+          "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈61 Hz (default -2.0993)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -4003,6 +4013,15 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
         }
       },
       "required": [
@@ -4097,12 +4116,12 @@
         "maxValue": 5.0
       },
       {
-        "name": "tune",
-        "description": "tune control, 0–5 V: the drum's pitch (default 2.5)",
-        "signalType": "control",
-        "defaultValue": 2.5,
-        "minValue": 0.0,
-        "maxValue": 5.0
+        "name": "freq",
+        "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈61 Hz (default -2.0993)",
+        "signalType": "pitch",
+        "defaultValue": -2.0993,
+        "minValue": -3.6,
+        "maxValue": -0.6
       },
       {
         "name": "decay",
@@ -4121,7 +4140,7 @@
   },
   {
     "name": "$tr909.midTom",
-    "documentation": "TR-909 mid tom.\n\nThe low tom's circuit with smaller capacitors: it rings higher and\nshorter. **tune** sets the pitch, **decay** how long the drum rings,\nand **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.midTom($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 mid tom.\n\nThe low tom's circuit with smaller capacitors: it rings higher and\nshorter. **freq** sets the pitch, **decay** how long the drum rings,\nand **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.midTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Mt909Params",
@@ -4149,17 +4168,8 @@
             }
           ]
         },
-        "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
-        "trigger": {
-          "description": "rising edges strike the drum",
-          "$ref": "#/$defs/PolySignal"
-        },
-        "tune": {
-          "description": "tune control, 0–5 V: the drum's pitch (default 2.5)",
+        "freq": {
+          "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈75 Hz (default -1.8098)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -4168,6 +4178,15 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
         }
       },
       "required": [
@@ -4262,12 +4281,12 @@
         "maxValue": 5.0
       },
       {
-        "name": "tune",
-        "description": "tune control, 0–5 V: the drum's pitch (default 2.5)",
-        "signalType": "control",
-        "defaultValue": 2.5,
-        "minValue": 0.0,
-        "maxValue": 5.0
+        "name": "freq",
+        "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈75 Hz (default -1.8098)",
+        "signalType": "pitch",
+        "defaultValue": -1.8098,
+        "minValue": -3.3,
+        "maxValue": -0.3
       },
       {
         "name": "decay",
@@ -4286,7 +4305,7 @@
   },
   {
     "name": "$tr909.highTom",
-    "documentation": "TR-909 high tom.\n\nThe low tom's circuit with smaller capacitors still: the highest and\nshortest of the three. **tune** sets the pitch, **decay** how long\nthe drum rings, and **accent**, sampled at each strike, drives it\nharder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.highTom($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 high tom.\n\nThe low tom's circuit with smaller capacitors still: the highest and\nshortest of the three. **freq** sets the pitch, **decay** how long\nthe drum rings, and **accent**, sampled at each strike, drives it\nharder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.highTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Ht909Params",
@@ -4314,17 +4333,8 @@
             }
           ]
         },
-        "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
-          "type": "boolean",
-          "default": false
-        },
-        "trigger": {
-          "description": "rising edges strike the drum",
-          "$ref": "#/$defs/PolySignal"
-        },
-        "tune": {
-          "description": "tune control, 0–5 V: the drum's pitch (default 2.5)",
+        "freq": {
+          "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈92 Hz (default -1.5143)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -4333,6 +4343,15 @@
               "type": "null"
             }
           ]
+        },
+        "restart": {
+          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
         }
       },
       "required": [
@@ -4427,12 +4446,12 @@
         "maxValue": 5.0
       },
       {
-        "name": "tune",
-        "description": "tune control, 0–5 V: the drum's pitch (default 2.5)",
-        "signalType": "control",
-        "defaultValue": 2.5,
-        "minValue": 0.0,
-        "maxValue": 5.0
+        "name": "freq",
+        "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈92 Hz (default -1.5143)",
+        "signalType": "pitch",
+        "defaultValue": -1.5143,
+        "minValue": -3.0,
+        "maxValue": 0.0
       },
       {
         "name": "decay",

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
 use crate::dsp::drums::voice::rails;
 
 fn noise_network(dt: f32) -> Mna<NOISE_UNKNOWNS, NOISE_CAPS, 0, 1> {
@@ -40,6 +40,7 @@ struct TomState {
 struct Channel {
     voices: Voices<Tom>,
     noise: Noise,
+    rate: Cached<f32, f32>,
 }
 
 /// Sets up a tom of `parts` at `sample_rate`.
@@ -70,8 +71,10 @@ fn init(state: &mut TomState, parts: TomParts, sample_rate: f32) {
 /// The inputs every tom reads.
 struct TomInputs<I> {
     trigger: I,
-    tune: I,
+    freq: I,
     decay: I,
+    /// The stock pitch, V/Oct.
+    stock: f32,
     noise_rate: f32,
 }
 
@@ -85,9 +88,10 @@ impl<I: Input> Channels<TomDrum> for TomInputs<I> {
     #[inline(always)]
     fn inputs(&self, ch: usize, channel: &mut Channel) -> (f32, TomControls) {
         let knob = |s: I| s.at(ch).clamp(0.0, 5.0) / 5.0;
-        let tune = knob(self.tune);
         let controls = TomControls {
-            tune: RAIL * (R112 + VR10 * tune) / (R113 + VR10 + R112),
+            rate: channel
+                .rate
+                .get(self.freq.at(ch), |f| (f - self.stock).exp2()),
             decay: 1.0 / (R111 + VR11 * knob(self.decay)),
             noise: channel.noise.next(self.noise_rate),
         };
@@ -96,14 +100,16 @@ impl<I: Input> Channels<TomDrum> for TomInputs<I> {
 }
 
 impl TomState {
-    /// Runs one sample of every channel on its `[trigger, accent, tune, decay]`,
-    /// handing `out` each one's output.
+    /// Runs one sample of every channel on its `[trigger, accent, freq,
+    /// decay]`, with `stock` the tom's stock pitch, handing `out` each one's
+    /// output.
     #[inline(always)]
     fn tick<I: Input>(
         &mut self,
         channels: &mut [Channel],
         restart: bool,
-        [trigger, accent, tune, decay]: [I; 4],
+        stock: f32,
+        [trigger, accent, freq, decay]: [I; 4],
         mut out: impl FnMut(usize, f32),
     ) {
         let run = Run {
@@ -114,8 +120,9 @@ impl TomState {
         };
         let inputs = TomInputs {
             trigger,
-            tune,
+            freq,
             decay,
+            stock,
             noise_rate: self.shared.noise_rate,
         };
         self.groups.run(&inputs, channels, &run, |ch, v| {
@@ -136,7 +143,10 @@ macro_rules! tom_module {
         $(#[$doc:meta])*
         name = $name:literal,
         ident = $Struct:ident,
-        parts = $parts:ident $(,)?
+        parts = $parts:ident,
+        freq = $freq:literal,
+        freq_range = ($freq_min:literal, $freq_max:literal),
+        freq_doc = $freq_doc:literal $(,)?
     ) => {
         paste::paste! {
             #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
@@ -152,10 +162,10 @@ macro_rules! tom_module {
                 #[signal(default = 0.0, range = (0.0, 5.0))]
                 #[deserr(default)]
                 accent: Option<PolySignal>,
-                /// tune control, 0–5 V: the drum's pitch (default 2.5)
-                #[signal(default = 2.5, range = (0.0, 5.0))]
+                #[doc = $freq_doc]
+                #[signal(type = pitch, default = $freq, range = ($freq_min, $freq_max))]
                 #[deserr(default)]
-                tune: Option<PolySignal>,
+                freq: Option<PolySignal>,
                 /// decay control, 0–5 V: how long the drum rings (default 2.5)
                 #[signal(default = 2.5, range = (0.0, 5.0))]
                 #[deserr(default)]
@@ -195,14 +205,18 @@ macro_rules! tom_module {
                     let inputs = [
                         Live::new(&p.trigger),
                         Live::or(&p.accent, [<$Struct Params>]::ACCENT_DEFAULT),
-                        Live::or(&p.tune, [<$Struct Params>]::TUNE_DEFAULT),
+                        Live::or(&p.freq, [<$Struct Params>]::FREQ_DEFAULT),
                         Live::or(&p.decay, [<$Struct Params>]::DECAY_DEFAULT),
                     ];
                     let out = &mut self.outputs.sample;
                     self.state
-                        .tick(&mut self.channel_state[..channels], p.restart, inputs, |ch, v| {
-                            out.set(ch, v)
-                        });
+                        .tick(
+                            &mut self.channel_state[..channels],
+                            p.restart,
+                            [<$Struct Params>]::FREQ_DEFAULT,
+                            inputs,
+                            |ch, v| out.set(ch, v),
+                        );
                 }
 
                 fn process_block(
@@ -217,17 +231,23 @@ macro_rules! tom_module {
                     let [<$Struct ParamsBlockInputs>] {
                         trigger,
                         accent,
-                        tune,
+                        freq,
                         decay,
                     } = p.block_inputs(range.clone(), channels, &mut scratch)?;
                     let channel_state = &mut self.channel_state[..channels];
                     each_slot(
                         &mut outputs.sample,
                         range,
-                        [trigger, accent, tune, decay],
+                        [trigger, accent, freq, decay],
                         |inputs, mut slot| {
                             self.state
-                                .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
+                                .tick(
+                                    channel_state,
+                                    p.restart,
+                                    [<$Struct Params>]::FREQ_DEFAULT,
+                                    inputs,
+                                    |ch, v| slot.set(ch, v),
+                                )
                         },
                     );
                     Some(())
@@ -256,7 +276,7 @@ tom_module! {
     /// Each rising edge on **trigger** fires the 909's trigger into a circuit
     /// model of its low tom: three triangle VCOs, their pitch bent down from
     /// the strike, one clipped ever harder as it fades, the others rounded
-    /// toward sines, over a burst of noise. **tune** sets the pitch, **decay**
+    /// toward sines, over a burst of noise. **freq** sets the pitch, **decay**
     /// how long the drum rings, and **accent**, sampled at each strike,
     /// drives it harder.
     ///
@@ -268,13 +288,16 @@ tom_module! {
     name = "$tr909.lowTom",
     ident = Lt909,
     parts = LOW,
+    freq = -2.0993,
+    freq_range = (-3.6, -0.6),
+    freq_doc = "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈61 Hz (default -2.0993)",
 }
 
 tom_module! {
     /// TR-909 mid tom.
     ///
     /// The low tom's circuit with smaller capacitors: it rings higher and
-    /// shorter. **tune** sets the pitch, **decay** how long the drum rings,
+    /// shorter. **freq** sets the pitch, **decay** how long the drum rings,
     /// and **accent**, sampled at each strike, drives it harder.
     ///
     /// An unaccented hit peaks near **±5 V**.
@@ -285,13 +308,16 @@ tom_module! {
     name = "$tr909.midTom",
     ident = Mt909,
     parts = MID,
+    freq = -1.8098,
+    freq_range = (-3.3, -0.3),
+    freq_doc = "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈75 Hz (default -1.8098)",
 }
 
 tom_module! {
     /// TR-909 high tom.
     ///
     /// The low tom's circuit with smaller capacitors still: the highest and
-    /// shortest of the three. **tune** sets the pitch, **decay** how long
+    /// shortest of the three. **freq** sets the pitch, **decay** how long
     /// the drum rings, and **accent**, sampled at each strike, drives it
     /// harder.
     ///
@@ -303,4 +329,7 @@ tom_module! {
     name = "$tr909.highTom",
     ident = Ht909,
     parts = HIGH,
+    freq = -1.5143,
+    freq_range = (-3.0, 0.0),
+    freq_doc = "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈92 Hz (default -1.5143)",
 }
