@@ -531,6 +531,8 @@ export interface Scope {
   triggerThreshold?: [number, ScopeMode]
   /** Voltage range for display (default [-5.0, 5.0]). The scope displays from range[0] to range[1]. */
   range: [number, number]
+  /** Draw each channel in its own scope instead of overlaying them. */
+  split?: ScopeSplit
 }
 
 export interface ScopeBufferKey {
@@ -549,6 +551,12 @@ export interface ScopeChannel {
 
 export type ScopeMode =  'Wait'|
 'Roll';
+
+/** How a split scope arranges its per-channel views. */
+export type ScopeSplit = /** Stacked top to bottom at full width. */
+'vertical'|
+/** Side by side in equal shares of the width. */
+'horizontal';
 
 /** Statistics computed from scope buffer data */
 export interface ScopeStats {

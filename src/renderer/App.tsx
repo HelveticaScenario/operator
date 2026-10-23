@@ -1979,6 +1979,7 @@ function App() {
                         file: activeBufferId,
                         key: scopeKey,
                         range: scope.range ?? [-5, 5],
+                        split: scope.split ?? null,
                     });
 
                     if (range) {

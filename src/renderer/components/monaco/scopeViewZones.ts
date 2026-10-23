@@ -50,8 +50,8 @@ export function createScopeViewZones({
     const viewZoneIds: (string | null)[] = [];
     /** Retained delegate objects so we can mutate afterLineNumber + layoutZone */
     const viewZoneDelegates: (editor.IViewZone | null)[] = [];
-    /** Scope keys corresponding 1:1 with viewZoneIds, for canvas unregistration */
-    const viewKeys: string[] = [];
+    /** Each zone's canvas keys, 1:1 with viewZoneIds, for canvas unregistration */
+    const viewCanvasKeys: string[][] = [];
     /** Each zone's decoration index, for re-resolving positions on reposition */
     const viewDecorationIndexes: (number | null)[] = [];
     const scopeCanvasMap = new Map<string, HTMLCanvasElement>();
@@ -71,7 +71,7 @@ export function createScopeViewZones({
         }
         viewZoneIds.length = 0;
         viewZoneDelegates.length = 0;
-        viewKeys.length = 0;
+        viewCanvasKeys.length = 0;
         viewDecorationIndexes.length = 0;
 
         scopeCanvasMap.forEach((_canvas, key) => {
@@ -104,6 +104,7 @@ export function createScopeViewZones({
         typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
     const layoutInfo = editor.getLayoutInfo();
     const scopeHeight = 80; // Increased height for legend and stats
+    const splitGap = 4;
 
     const zones = views.map((view) => {
         // A view without a resolvable anchor (null decorationIndex, or a
@@ -116,56 +117,90 @@ export function createScopeViewZones({
         );
         if (resolvedLine === null) {
             return {
+                canvasKeys: [],
                 decorationIndex: view.decorationIndex,
                 delegate: null,
-                key: view.key,
             };
         }
 
+        // A split view draws one canvas per channel, each registered under its
+        // own key so the render loop treats it as an independent scope.
+        const canvasSpecs =
+            view.split && view.channelKeys.length > 1
+                ? view.channelKeys.map((channelKey, i) => ({
+                      channelKeys: [channelKey],
+                      key: `${view.key}#${i}`,
+                  }))
+                : [{ channelKeys: view.channelKeys, key: view.key }];
+        const stacked = view.split === 'vertical';
+        const count = canvasSpecs.length;
+        const zoneHeight = stacked
+            ? count * scopeHeight + (count - 1) * splitGap
+            : scopeHeight;
+        const seedWidth = stacked
+            ? layoutInfo.contentWidth
+            : (layoutInfo.contentWidth - (count - 1) * splitGap) / count;
+
         const container = document.createElement('div');
         container.className = 'scope-view-zone';
-        container.style.height = `${scopeHeight}px`;
+        container.style.height = `${zoneHeight}px`;
         container.style.width = '100%';
-        container.style.display = 'flex';
 
-        const canvas = document.createElement('canvas');
-        canvas.style.width = '100%';
-        canvas.style.height = `${scopeHeight}px`;
-        canvas.dataset.scopeKey = view.key;
-        canvas.dataset.scopeRangeMin = String(view.range[0]);
-        canvas.dataset.scopeRangeMax = String(view.range[1]);
-        canvas.dataset.scopeChannelKeys = JSON.stringify(view.channelKeys);
+        // Monaco owns the zone node's `display` (it toggles it to hide zones),
+        // so the flex layout lives on an inner element.
+        const layout = document.createElement('div');
+        layout.style.height = '100%';
+        layout.style.display = 'flex';
+        layout.style.flexDirection = stacked ? 'column' : 'row';
+        layout.style.gap = `${splitGap}px`;
+        container.appendChild(layout);
 
-        // Seed the backing store from the editor content width; the canvas is
-        // still detached here so its own clientWidth is 0. resizeCanvases()
-        // below re-syncs it to the real display size once attached.
-        canvas.width = Math.max(1, Math.floor(layoutInfo.contentWidth * dpr));
-        canvas.height = Math.max(1, Math.floor(scopeHeight * dpr));
+        for (const spec of canvasSpecs) {
+            const canvas = document.createElement('canvas');
+            if (stacked || count === 1) {
+                canvas.style.width = '100%';
+            } else {
+                canvas.style.flex = '1 1 0';
+                canvas.style.minWidth = '0';
+            }
+            canvas.style.height = `${scopeHeight}px`;
+            canvas.dataset.scopeKey = spec.key;
+            canvas.dataset.scopeRangeMin = String(view.range[0]);
+            canvas.dataset.scopeRangeMax = String(view.range[1]);
+            canvas.dataset.scopeChannelKeys = JSON.stringify(spec.channelKeys);
 
-        container.appendChild(canvas);
+            // Seed the backing store from the editor content width; the canvas
+            // is still detached here so its own clientWidth is 0.
+            // resizeCanvases() below re-syncs it to the real display size once
+            // attached.
+            canvas.width = Math.max(1, Math.floor(seedWidth * dpr));
+            canvas.height = Math.max(1, Math.floor(scopeHeight * dpr));
 
-        scopeCanvasMap.set(view.key, canvas);
-        onRegisterScopeCanvas?.(view.key, canvas);
+            layout.appendChild(canvas);
+
+            scopeCanvasMap.set(spec.key, canvas);
+            onRegisterScopeCanvas?.(spec.key, canvas);
+        }
 
         const delegate: editor.IViewZone = {
             afterLineNumber: resolvedLine,
             domNode: container,
-            heightInPx: scopeHeight,
+            heightInPx: zoneHeight,
             marginDomNode: undefined,
         };
 
         return {
+            canvasKeys: canvasSpecs.map((spec) => spec.key),
             decorationIndex: view.decorationIndex,
             delegate,
-            key: view.key,
         };
     });
 
     editor.changeViewZones((accessor) => {
-        for (const { decorationIndex, delegate, key } of zones) {
+        for (const { canvasKeys, decorationIndex, delegate } of zones) {
             viewZoneDelegates.push(delegate);
             viewZoneIds.push(delegate ? accessor.addZone(delegate) : null);
-            viewKeys.push(key);
+            viewCanvasKeys.push(canvasKeys);
             viewDecorationIndexes.push(decorationIndex);
         }
     });
@@ -195,10 +230,11 @@ export function createScopeViewZones({
                 viewZoneIds[i] = null;
                 viewZoneDelegates[i] = null;
 
-                const key = viewKeys[i];
-                if (scopeCanvasMap.has(key)) {
-                    onUnregisterScopeCanvas?.(key);
-                    scopeCanvasMap.delete(key);
+                for (const key of viewCanvasKeys[i]) {
+                    if (scopeCanvasMap.has(key)) {
+                        onUnregisterScopeCanvas?.(key);
+                        scopeCanvasMap.delete(key);
+                    }
                 }
 
                 needsLayout = true;

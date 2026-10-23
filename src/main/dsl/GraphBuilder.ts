@@ -5,6 +5,7 @@ import type {
     Scope,
     ScopeChannel,
     ScopeMode,
+    ScopeSplit,
 } from '@modular/core';
 import type { VuMeterDef } from '../../shared/dsl/vuMeterTypes';
 import {
@@ -46,6 +47,15 @@ export type ScopeWithLocation = Scope & {
     /** Feeds an editor panel, never drawn as a scope view of its own. */
     headless?: boolean;
 };
+
+/** Options accepted by `.scope()`. */
+export interface ScopeConfig {
+    msPerFrame?: number;
+    triggerThreshold?: number;
+    triggerWaitToRender?: boolean;
+    range?: [number, number];
+    split?: ScopeSplit;
+}
 
 // Extended OutputSchema interface that includes optional range
 export interface OutputSchemaWithRange {
@@ -501,12 +511,7 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
     /**
      * Add scope visualization for all outputs in the collection
      */
-    scope(config?: {
-        msPerFrame?: number;
-        triggerThreshold?: number;
-        triggerWaitToRender?: boolean;
-        range?: [number, number];
-    }): this {
+    scope(config?: ScopeConfig): this {
         if (this.items.length > 0) {
             const loc = captureSourceLocation();
             this.items[0].builder.addScope(this.items, config, loc);
@@ -1959,15 +1964,24 @@ export class GraphBuilder {
 
     addScope(
         value: ModuleOutput | ModuleOutput[],
-        config: {
-            msPerFrame?: number;
-            triggerThreshold?: number;
-            triggerWaitToRender?: boolean;
-            range?: [number, number];
-        } = {},
+        config: ScopeConfig = {},
         sourceLocation?: { line: number; column: number },
     ) {
-        const { msPerFrame = 500, triggerThreshold, range = [-5, 5] } = config;
+        const {
+            msPerFrame = 500,
+            triggerThreshold,
+            range = [-5, 5],
+            split,
+        } = config;
+        if (
+            split !== undefined &&
+            split !== 'vertical' &&
+            split !== 'horizontal'
+        ) {
+            throw new Error(
+                `scope split must be 'vertical' or 'horizontal', got ${JSON.stringify(split)}`,
+            );
+        }
         const realTriggerThreshold: number | undefined =
             triggerThreshold !== undefined
                 ? triggerThreshold * 1000
@@ -1993,6 +2007,7 @@ export class GraphBuilder {
             msPerFrame,
             range,
             sourceLocation,
+            split,
             triggerThreshold: thresh,
         });
     }
@@ -2243,12 +2258,7 @@ export class ModuleOutput {
         return factory(this, factor) as Collection;
     }
 
-    scope(config?: {
-        msPerFrame?: number;
-        triggerThreshold?: number;
-        triggerWaitToRender?: boolean;
-        range?: [number, number];
-    }): this {
+    scope(config?: ScopeConfig): this {
         const loc = captureSourceLocation();
         this.builder.addScope(this, config, loc);
         return this;

@@ -46,6 +46,9 @@ export interface ScopeDrawOptions {
     };
 }
 
+/** Narrower canvases (CSS px) drop the stats column to keep room for the waveform. */
+const MIN_WIDTH_FOR_STATS = 360;
+
 export const drawOscilloscope = (
     channels: Float32Array[],
     canvas: HTMLCanvasElement,
@@ -75,7 +78,8 @@ export const drawOscilloscope = (
 
     const dpr = window.devicePixelRatio || 1;
     const legendWidth = 40 * dpr; // Reserve space for legend on left
-    const statsWidth = 140 * dpr; // Reserve space for stats on right
+    const showStats = Boolean(stats) && w / dpr >= MIN_WIDTH_FOR_STATS;
+    const statsWidth = showStats ? 140 * dpr : 0; // Reserve space for stats on right
     const waveformLeft = legendWidth;
     const waveformWidth = w - legendWidth - statsWidth;
     const waveformRight = waveformLeft + waveformWidth;
@@ -137,7 +141,7 @@ export const drawOscilloscope = (
     );
 
     // Draw stats on right
-    if (stats) {
+    if (showStats) {
         ctx.textAlign = 'left';
         const statsX = waveformRight + 8 * dpr;
         const lineHeight = 14 * dpr;
