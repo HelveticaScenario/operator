@@ -706,8 +706,9 @@ pub struct ScopeBuffer {
     recording: bool,
     buffer_idx: usize,
     read_idx: usize,
-    /// Set after a gap in the pushed samples: the next sample only seeds the
-    /// trigger state, since an edge against pre-gap history is not a crossing.
+    /// Set when there is no previous sample to compare against (a new buffer,
+    /// or after a gap): the next sample only seeds the trigger state, since an
+    /// edge against missing history is not a crossing.
     awaiting_seed: bool,
     /// The sample pushed before the current one, to locate trigger crossings
     /// between samples.
@@ -744,7 +745,7 @@ impl ScopeBuffer {
             recording: false,
             buffer_idx: 0,
             read_idx: 0,
-            awaiting_seed: false,
+            awaiting_seed: true,
             prev_value: 0.0,
             trigger_offset: [0.0; 2],
         }
@@ -762,36 +763,38 @@ impl ScopeBuffer {
     }
 
     pub fn push(&mut self, value: f32) {
-        if self.trigger_threshold.is_none() {
-            self.trigger.reset();
-            self.recording = true;
-            self.read_idx = self.buffer_idx;
-        } else if let Some((threshold, _)) = self.trigger_threshold {
-            let rising = self.trigger.process(value) && !std::mem::take(&mut self.awaiting_seed);
-            if rising && !self.recording {
+        let write_buf = if self.buffer_select { 1 } else { 0 };
+        match self.trigger_threshold {
+            None => {
                 self.trigger.reset();
                 self.recording = true;
-                self.buffer_idx = 0;
-                self.read_idx = 0;
-                self.sample_counter = 0;
-                // The crossing lies `frac` of the way from the previous sample
-                // to this one, which becomes the capture's first sample.
-                let rise = value - self.prev_value;
-                let frac = if rise > 0.0 {
-                    ((threshold - self.prev_value) / rise).clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
-                let write_buf = if self.buffer_select { 1 } else { 0 };
-                self.trigger_offset[write_buf] = (1.0 - frac) / (self.skip_rate + 1) as f32;
+                self.read_idx = self.buffer_idx;
+            }
+            Some((threshold, _)) => {
+                let edge = self.trigger.process(value);
+                let seeding = std::mem::take(&mut self.awaiting_seed);
+                if edge && !seeding && !self.recording {
+                    self.trigger.reset();
+                    self.recording = true;
+                    self.buffer_idx = 0;
+                    self.read_idx = 0;
+                    self.sample_counter = 0;
+                    // The crossing lies `frac` of the way from the previous
+                    // sample to this one, which becomes the capture's first.
+                    let rise = value - self.prev_value;
+                    let frac = if rise > 0.0 {
+                        ((threshold - self.prev_value) / rise).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    self.trigger_offset[write_buf] = (1.0 - frac) / (self.skip_rate + 1) as f32;
+                }
             }
         }
         self.prev_value = value;
 
         self.buffer_idx %= SCOPE_CAPACITY as usize;
         self.read_idx %= SCOPE_CAPACITY as usize;
-
-        let write_buf = if self.buffer_select { 1 } else { 0 };
 
         if self.recording {
             if self.sample_counter == 0 {
@@ -856,6 +859,90 @@ impl ScopeBuffer {
             read_offset: self.read_idx as u32,
             trigger_offset: self.trigger_offset[self.read_buffer_idx()] as f64,
         }
+    }
+}
+
+/// Holds one block of scope samples taken while the renderer held the scope
+/// collection lock, so the audio thread can push them on its next locked block
+/// instead of leaving a gap. Built on the main thread with room for one block
+/// per tap; the audio thread only writes into it.
+#[derive(Default)]
+pub struct ScopeStash {
+    /// Scope keys in a fixed order: `samples` holds one block per key, in turn.
+    taps: Vec<ScopeBufferKey>,
+    samples: Vec<f32>,
+    block_size: usize,
+    /// Samples stashed per tap; 0 when nothing is waiting.
+    len: usize,
+    /// A second block was missed before the first could be pushed.
+    overflowed: bool,
+}
+
+impl ScopeStash {
+    pub fn new(taps: Vec<ScopeBufferKey>, block_size: usize) -> Self {
+        Self {
+            samples: vec![0.0; taps.len() * block_size],
+            taps,
+            block_size,
+            len: 0,
+            overflowed: false,
+        }
+    }
+
+    /// Record block slots `range` while the collection is locked elsewhere.
+    /// `value` reads a tap at a block slot, or `None` if its module is gone.
+    pub fn stash(
+        &mut self,
+        range: std::ops::Range<usize>,
+        mut value: impl FnMut(&ScopeBufferKey, usize) -> Option<f32>,
+    ) {
+        if self.taps.is_empty() {
+            return;
+        }
+        let n = range.len();
+        if self.len > 0 || n > self.block_size {
+            self.overflowed = true;
+            return;
+        }
+        for (key, dst) in self
+            .taps
+            .iter()
+            .zip(self.samples.chunks_exact_mut(self.block_size))
+        {
+            for (d, i) in dst.iter_mut().zip(range.clone()) {
+                match value(key, i) {
+                    Some(v) => *d = v,
+                    None => {
+                        self.overflowed = true;
+                        return;
+                    }
+                }
+            }
+        }
+        self.len = n;
+    }
+
+    /// Push whatever was stashed into `scopes`, which the caller holds locked.
+    /// If samples were lost outright, every buffer resyncs instead.
+    pub fn settle(&mut self, scopes: &mut HashMap<ScopeBufferKey, ScopeBuffer>) {
+        if std::mem::take(&mut self.overflowed) {
+            for buffer in scopes.values_mut() {
+                buffer.resync();
+            }
+        } else if self.len > 0 {
+            for (key, stashed) in self
+                .taps
+                .iter()
+                .zip(self.samples.chunks_exact(self.block_size))
+            {
+                if let Some(buffer) = scopes.get_mut(key) {
+                    for &v in &stashed[..self.len] {
+                        buffer.push(v);
+                    }
+                }
+            }
+        }
+        self.len = 0;
     }
 }
 
@@ -1451,6 +1538,8 @@ impl AudioState {
                 (key, buffer)
             })
             .collect();
+        update.scope_stash_next =
+            ScopeStash::new(update.scope_next.keys().cloned().collect(), self.block_size);
 
         // Build the complete next VU meter membership. Running levels carry
         // over from any current entry metering the same tap so a patch update
@@ -1756,9 +1845,8 @@ struct AudioProcessor {
     stopped: Arc<AtomicBool>,
     /// Shared scope collection
     scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
-    /// Set when a block's scope samples were dropped because the main thread
-    /// held the collection lock; the next locked block resyncs every buffer.
-    scope_samples_dropped: bool,
+    /// Scope samples from a block whose `try_lock` lost to the renderer.
+    scope_stash: ScopeStash,
     /// Shared VU meter collection. Membership is swapped in wholesale on patch
     /// updates (built on the main thread); the per-sample path only mutates
     /// entries in place under a per-block `try_lock`.
@@ -1829,7 +1917,7 @@ impl AudioProcessor {
             garbage_tx,
             stopped: shared.stopped,
             scope_collection: shared.scope_collection,
-            scope_samples_dropped: false,
+            scope_stash: ScopeStash::default(),
             vu_collection: shared.vu_collection,
             module_states: shared.module_states,
             midi_manager: shared.midi_manager,
@@ -2092,6 +2180,8 @@ impl AudioProcessor {
         // back for main-thread drop.
         {
             let mut scope_collection = self.scope_collection.lock();
+            // Samples stashed against the outgoing membership land first.
+            self.scope_stash.settle(&mut scope_collection);
             for (key, buffer) in update.scope_next.iter_mut() {
                 if let Some(live) = scope_collection.get_mut(key) {
                     std::mem::swap(buffer, live);
@@ -2099,6 +2189,7 @@ impl AudioProcessor {
             }
             std::mem::swap(&mut *scope_collection, &mut update.scope_next);
         }
+        std::mem::swap(&mut self.scope_stash, &mut update.scope_stash_next);
 
         // Profiler-map swap: `swap_records` updates the audio thread's TLS
         // records, `try_swap_shared` updates the cross-thread snapshot. Both
@@ -2530,14 +2621,22 @@ where
                             if end > audio_processor.block_pos {
                                 let mut scope_guard = audio_processor.scope_collection.try_lock();
                                 match scope_guard.as_mut() {
-                                    Some(scopes) if audio_processor.scope_samples_dropped => {
-                                        for buffer in scopes.values_mut() {
-                                            buffer.resync();
-                                        }
-                                        audio_processor.scope_samples_dropped = false;
+                                    Some(scopes) => audio_processor.scope_stash.settle(scopes),
+                                    None => {
+                                        let sampleables = &audio_processor.patch.sampleables;
+                                        audio_processor.scope_stash.stash(
+                                            audio_processor.block_pos..end,
+                                            |key, i| {
+                                                sampleables.get(&key.module_id).map(|module| {
+                                                    module.get_value_at(
+                                                        &key.port_name,
+                                                        key.channel as usize,
+                                                        i,
+                                                    )
+                                                })
+                                            },
+                                        );
                                     }
-                                    Some(_) => {}
-                                    None => audio_processor.scope_samples_dropped = true,
                                 }
                                 let mut recording_guard = recording_feed.try_lock();
                                 let mut vu_guard = audio_processor.vu_collection.try_lock();
@@ -4638,6 +4737,91 @@ mod tests {
             }
         }
         assert!(checked > 10, "captures completed between gaps: {checked}");
+    }
+
+    fn sine_at(n: u64, freq: f32) -> f32 {
+        5.0 * (std::f32::consts::TAU * freq * n as f32 / 48_000.0).sin()
+    }
+
+    #[test]
+    fn a_stashed_block_leaves_the_capture_as_if_never_missed() {
+        let key = scope_key("osc");
+        let mut reference = ScopeBuffer::new(500, Some((0, ScopeMode::Wait)), 48_000.0);
+        let mut scopes = HashMap::new();
+        scopes.insert(
+            key.clone(),
+            ScopeBuffer::new(500, Some((0, ScopeMode::Wait)), 48_000.0),
+        );
+        let mut stash = ScopeStash::new(vec![key.clone()], 128);
+        let mut n: u64 = 0;
+        for block in 0..2_000 {
+            let start = n;
+            for i in 0..128 {
+                reference.push(sine_at(start + i, 261.6));
+            }
+            // Every fifth block loses the lock; the next one settles it.
+            if block % 5 == 2 {
+                stash.stash(0..128, |_, i| Some(sine_at(start + i as u64, 261.6)));
+            } else {
+                stash.settle(&mut scopes);
+                let buffer = scopes.get_mut(&key).unwrap();
+                for i in 0..128 {
+                    buffer.push(sine_at(start + i, 261.6));
+                }
+            }
+            n += 128;
+        }
+        stash.settle(&mut scopes);
+        let buffer = &scopes[&key];
+        assert_eq!(buffer.buffer, reference.buffer);
+        assert_eq!(buffer.buffer_select, reference.buffer_select);
+        assert_eq!(buffer.trigger_offset, reference.trigger_offset);
+    }
+
+    #[test]
+    fn two_missed_blocks_in_a_row_resync_the_capture() {
+        let key = scope_key("osc");
+        let mut scopes = HashMap::new();
+        scopes.insert(
+            key.clone(),
+            ScopeBuffer::new(500, Some((0, ScopeMode::Wait)), 48_000.0),
+        );
+        for n in 0..1_000 {
+            scopes.get_mut(&key).unwrap().push(sine_at(n, 261.6));
+        }
+        assert!(scopes[&key].recording);
+        let mut stash = ScopeStash::new(vec![key.clone()], 128);
+        stash.stash(0..128, |_, _| Some(0.0));
+        stash.stash(0..128, |_, _| Some(0.0));
+        stash.settle(&mut scopes);
+        assert!(
+            !scopes[&key].recording,
+            "the capture spanning the gap is abandoned"
+        );
+    }
+
+    #[test]
+    fn resync_rearms_on_the_first_real_crossing() {
+        let mut scope = ScopeBuffer::new(500, Some((0, ScopeMode::Wait)), 48_000.0);
+        scope.resync();
+        // The first sample after the gap is below the threshold: it only seeds.
+        scope.push(-1.0);
+        assert!(!scope.recording);
+        scope.push(1.0);
+        assert!(
+            scope.recording,
+            "the first rising crossing after a gap triggers"
+        );
+    }
+
+    #[test]
+    fn a_new_buffer_waits_for_a_crossing() {
+        let mut scope = ScopeBuffer::new(500, Some((0, ScopeMode::Wait)), 48_000.0);
+        scope.push(3.0);
+        assert!(!scope.recording, "a signal already high is not a crossing");
+        scope.push(-1.0);
+        scope.push(1.0);
+        assert!(scope.recording);
     }
 
     #[test]
