@@ -706,6 +706,9 @@ pub struct ScopeBuffer {
     recording: bool,
     buffer_idx: usize,
     read_idx: usize,
+    /// Set after a gap in the pushed samples: the next sample only seeds the
+    /// trigger state, since an edge against pre-gap history is not a crossing.
+    awaiting_seed: bool,
 }
 
 fn ms_to_samples(ms: u32, sample_rate: f32) -> u32 {
@@ -735,6 +738,18 @@ impl ScopeBuffer {
             recording: false,
             buffer_idx: 0,
             read_idx: 0,
+            awaiting_seed: false,
+        }
+    }
+
+    /// Called when samples were dropped since the last push. A triggered scope
+    /// abandons its capture in progress so the gap never splices two stretches
+    /// of signal into one trace; it re-arms on the next real crossing.
+    pub fn resync(&mut self) {
+        if self.trigger_threshold.is_some() {
+            self.recording = false;
+            self.trigger.reset();
+            self.awaiting_seed = true;
         }
     }
 
@@ -743,12 +758,15 @@ impl ScopeBuffer {
             self.trigger.reset();
             self.recording = true;
             self.read_idx = self.buffer_idx;
-        } else if self.trigger.process(value) && !self.recording {
-            self.trigger.reset();
-            self.recording = true;
-            self.buffer_idx = 0;
-            self.read_idx = 0;
-            self.sample_counter = 0;
+        } else {
+            let rising = self.trigger.process(value) && !std::mem::take(&mut self.awaiting_seed);
+            if rising && !self.recording {
+                self.trigger.reset();
+                self.recording = true;
+                self.buffer_idx = 0;
+                self.read_idx = 0;
+                self.sample_counter = 0;
+            }
         }
 
         self.buffer_idx %= SCOPE_CAPACITY as usize;
@@ -1718,6 +1736,9 @@ struct AudioProcessor {
     stopped: Arc<AtomicBool>,
     /// Shared scope collection
     scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+    /// Set when a block's scope samples were dropped because the main thread
+    /// held the collection lock; the next locked block resyncs every buffer.
+    scope_samples_dropped: bool,
     /// Shared VU meter collection. Membership is swapped in wholesale on patch
     /// updates (built on the main thread); the per-sample path only mutates
     /// entries in place under a per-block `try_lock`.
@@ -1788,6 +1809,7 @@ impl AudioProcessor {
             garbage_tx,
             stopped: shared.stopped,
             scope_collection: shared.scope_collection,
+            scope_samples_dropped: false,
             vu_collection: shared.vu_collection,
             module_states: shared.module_states,
             midi_manager: shared.midi_manager,
@@ -2487,6 +2509,16 @@ where
                             // `FinalStateProcessor` used to provide per-frame.
                             if end > audio_processor.block_pos {
                                 let mut scope_guard = audio_processor.scope_collection.try_lock();
+                                match scope_guard.as_mut() {
+                                    Some(scopes) if audio_processor.scope_samples_dropped => {
+                                        for buffer in scopes.values_mut() {
+                                            buffer.resync();
+                                        }
+                                        audio_processor.scope_samples_dropped = false;
+                                    }
+                                    Some(_) => {}
+                                    None => audio_processor.scope_samples_dropped = true,
+                                }
                                 let mut recording_guard = recording_feed.try_lock();
                                 let mut vu_guard = audio_processor.vu_collection.try_lock();
                                 for i in audio_processor.block_pos..end {
@@ -4542,6 +4574,50 @@ mod tests {
         assert_eq!(old_hits.load(Ordering::SeqCst), 0, "old id is gone");
         assert!(!processor.patch.sampleables.contains_key("old-id"));
         assert!(processor.patch.sampleables.contains_key("new-id"));
+    }
+
+    // ============================================================================
+    // Scope buffer tests
+    // ============================================================================
+
+    #[test]
+    fn triggered_scope_capture_never_spans_a_sample_gap() {
+        // 523 Hz at 48 kHz moves at most ~0.35 V per sample at 5 V amplitude.
+        let sample_rate = 48_000.0;
+        let freq = 523.25;
+        let max_step = 0.5;
+        let mut scope = ScopeBuffer::new(0, Some((0, ScopeMode::Wait)), sample_rate);
+        let mut checked = 0;
+        let mut last_read: Option<usize> = None;
+        let mut n: u64 = 0;
+        for round in 0..200 {
+            for _ in 0..256 {
+                let t = n as f32 / sample_rate;
+                scope.push(5.0 * (std::f32::consts::TAU * freq * t).sin());
+                n += 1;
+            }
+            // Every seventh block is dropped, as when the reader holds the lock.
+            if round % 7 == 3 {
+                n += 256;
+                scope.resync();
+            }
+            let read = scope.read_buffer_idx();
+            if last_read != Some(read) {
+                last_read = Some(read);
+                if round > 0 {
+                    let buf = &scope.buffer[read];
+                    assert!(
+                        buf[0] >= 0.0 && buf[1] > buf[0],
+                        "capture starts on a rising crossing"
+                    );
+                    for w in buf.windows(2) {
+                        assert!((w[1] - w[0]).abs() < max_step, "capture is continuous");
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 10, "captures completed between gaps: {checked}");
     }
 
     // ============================================================================
