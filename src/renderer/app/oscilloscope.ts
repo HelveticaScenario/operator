@@ -48,8 +48,9 @@ export interface ScopeDrawOptions {
     };
 }
 
-/** Narrower canvases (CSS px) drop the stats column to keep room for the waveform. */
+/** Narrower canvases (CSS px) drop the stats column, then the voltage legend, to keep room for the waveform. */
 const MIN_WIDTH_FOR_STATS = 360;
+const MIN_WIDTH_FOR_LEGEND = 160;
 
 export const drawOscilloscope = (
     channels: Float32Array[],
@@ -79,12 +80,16 @@ export const drawOscilloscope = (
     ctx.globalAlpha = 1;
 
     const dpr = window.devicePixelRatio || 1;
-    const legendWidth = 40 * dpr; // Reserve space for legend on left
+    const showLegend = w / dpr >= MIN_WIDTH_FOR_LEGEND;
+    const legendWidth = showLegend ? 40 * dpr : 0; // Reserve space for legend on left
     const showStats = Boolean(stats) && w / dpr >= MIN_WIDTH_FOR_STATS;
     const statsWidth = showStats ? 140 * dpr : 0; // Reserve space for stats on right
     const waveformLeft = legendWidth;
     const waveformWidth = w - legendWidth - statsWidth;
     const waveformRight = waveformLeft + waveformWidth;
+    if (waveformWidth <= 0) {
+        return;
+    }
 
     const voltageRange = maxVoltage - minVoltage;
     const pixelsPerVolt = h / voltageRange;
@@ -123,24 +128,26 @@ export const drawOscilloscope = (
     // Draw legend on left
     ctx.fillStyle = mutedColor;
     ctx.font = `${10 * dpr}px "Fira Code", monospace`;
-    ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
 
-    const legendX = legendWidth - 4 * dpr;
-    const textVerticalOffset = 10 * dpr;
-    ctx.fillText(
-        `${maxVoltage.toFixed(1)}v`,
-        legendX,
-        topY + textVerticalOffset,
-    );
-    if (minVoltage <= 0 && maxVoltage >= 0) {
-        ctx.fillText('0v', legendX, zeroY);
+    if (showLegend) {
+        ctx.textAlign = 'right';
+        const legendX = legendWidth - 4 * dpr;
+        const textVerticalOffset = 10 * dpr;
+        ctx.fillText(
+            `${maxVoltage.toFixed(1)}v`,
+            legendX,
+            topY + textVerticalOffset,
+        );
+        if (minVoltage <= 0 && maxVoltage >= 0) {
+            ctx.fillText('0v', legendX, zeroY);
+        }
+        ctx.fillText(
+            `${minVoltage.toFixed(1)}v`,
+            legendX,
+            bottomY - textVerticalOffset,
+        );
     }
-    ctx.fillText(
-        `${minVoltage.toFixed(1)}v`,
-        legendX,
-        bottomY - textVerticalOffset,
-    );
 
     // Draw stats on right
     if (showStats) {

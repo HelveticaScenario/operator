@@ -57,6 +57,9 @@ export function createScopeViewZones({
     const scopeCanvasMap = new Map<string, HTMLCanvasElement>();
     let resizeObserver: ResizeObserver | null = null;
     let dprQuery: MediaQueryList | null = null;
+    /** Each zone's layout element, kept at the editor's visible content width. */
+    const zoneLayouts: HTMLElement[] = [];
+    let layoutListener: { dispose: () => void } | null = null;
 
     const dispose = () => {
         const idsToRemove = viewZoneIds.filter(
@@ -78,6 +81,10 @@ export function createScopeViewZones({
             onUnregisterScopeCanvas?.(key);
         });
         scopeCanvasMap.clear();
+
+        zoneLayouts.length = 0;
+        layoutListener?.dispose();
+        layoutListener = null;
 
         if (resizeObserver) {
             resizeObserver.disconnect();
@@ -146,14 +153,18 @@ export function createScopeViewZones({
         container.style.height = `${zoneHeight}px`;
         container.style.width = '100%';
 
-        // Monaco owns the zone node's `display` (it toggles it to hide zones),
-        // so the flex layout lives on an inner element.
+        // Monaco owns the zone node's `display` and `width`, so layout lives on
+        // an inner element. The zone spans the editor's scroll width, which a
+        // long line widens past the visible area; the layout is pinned to the
+        // visible content width instead.
         const layout = document.createElement('div');
+        layout.style.width = `${layoutInfo.contentWidth}px`;
         layout.style.height = '100%';
         layout.style.display = 'flex';
         layout.style.flexDirection = stacked ? 'column' : 'row';
         layout.style.gap = `${splitGap}px`;
         container.appendChild(layout);
+        zoneLayouts.push(layout);
 
         for (const spec of canvasSpecs) {
             const canvas = document.createElement('canvas');
@@ -281,6 +292,12 @@ export function createScopeViewZones({
             }
         });
     };
+
+    layoutListener = editor.onDidLayoutChange((info) => {
+        for (const layout of zoneLayouts) {
+            layout.style.width = `${info.contentWidth}px`;
+        }
+    });
 
     // Sync once now that the zones are attached and have a real display width.
     resizeCanvases();

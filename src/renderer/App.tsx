@@ -32,7 +32,7 @@ import { Sidebar } from './components/Sidebar';
 import { ControlPanel } from './components/ControlPanel';
 import electronAPI from './electronAPI';
 import type { ValidationError } from '@modular/core';
-import type { QueuedTrigger } from '@modular/core';
+import type { QueuedTrigger, ScopeStats } from '@modular/core';
 import type { FileTreeEntry, UpdateAvailableInfo } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../shared/dsl/buttonTypes';
@@ -1538,13 +1538,7 @@ function App() {
                         string,
                         {
                             data: Float32Array;
-                            stats: {
-                                min: number;
-                                max: number;
-                                peakToPeak: number;
-                                readOffset: number;
-                                triggerOffset: number;
-                            };
+                            stats: ScopeStats;
                         }
                     >();
                     for (const [bufferKey, data, stats] of scopeData) {

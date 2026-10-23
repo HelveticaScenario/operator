@@ -2258,7 +2258,7 @@ export class ModuleOutput {
         return factory(this, factor) as Collection;
     }
 
-    scope(config?: ScopeConfig): this {
+    scope(config?: Omit<ScopeConfig, 'split'>): this {
         const loc = captureSourceLocation();
         this.builder.addScope(this, config, loc);
         return this;
