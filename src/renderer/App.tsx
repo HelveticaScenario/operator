@@ -1543,6 +1543,7 @@ function App() {
                                 max: number;
                                 peakToPeak: number;
                                 readOffset: number;
+                                triggerOffset: number;
                             };
                         }
                     >();
@@ -1576,6 +1577,7 @@ function App() {
                         ) as string[];
                         const channels: Float32Array[] = [];
                         const readOffsets: number[] = [];
+                        const triggerOffsets: number[] = [];
                         let globalMin = Infinity;
                         let globalMax = -Infinity;
 
@@ -1584,6 +1586,7 @@ function App() {
                             if (entry) {
                                 channels.push(entry.data);
                                 readOffsets.push(entry.stats.readOffset);
+                                triggerOffsets.push(entry.stats.triggerOffset);
                                 if (entry.stats.min < globalMin) {
                                     globalMin = entry.stats.min;
                                 }
@@ -1602,6 +1605,7 @@ function App() {
                                     min: globalMin,
                                     peakToPeak: globalMax - globalMin,
                                     readOffset: readOffsets,
+                                    triggerOffset: triggerOffsets,
                                 },
                             });
                         }

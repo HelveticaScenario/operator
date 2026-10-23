@@ -2888,6 +2888,10 @@ pub struct ScopeStats {
     pub max: f64,
     pub peak_to_peak: f64,
     pub read_offset: u32,
+    /// How far, in buffer samples, the trigger crossing lies before the first
+    /// sample (0 to 1); 0 for an untriggered scope. Drawing each sample this
+    /// much later pins the crossing to the same spot every frame.
+    pub trigger_offset: f64,
 }
 
 /// One VU meter's loudness snapshot, joined to its `VuMeterSpec` by `module_id`.

@@ -564,6 +564,12 @@ export interface ScopeStats {
   max: number
   peakToPeak: number
   readOffset: number
+  /**
+   * How far, in buffer samples, the trigger crossing lies before the first
+   * sample (0 to 1); 0 for an untriggered scope. Drawing each sample this
+   * much later pins the crossing to the same spot every frame.
+   */
+  triggerOffset: number
 }
 
 export interface SignalParamSchema {

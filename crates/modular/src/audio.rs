@@ -709,6 +709,12 @@ pub struct ScopeBuffer {
     /// Set after a gap in the pushed samples: the next sample only seeds the
     /// trigger state, since an edge against pre-gap history is not a crossing.
     awaiting_seed: bool,
+    /// The sample pushed before the current one, to locate trigger crossings
+    /// between samples.
+    prev_value: f32,
+    /// Per buffer: how far, in captured samples, the trigger crossing lies
+    /// before the buffer's first sample (0 to 1).
+    trigger_offset: [f32; 2],
 }
 
 fn ms_to_samples(ms: u32, sample_rate: f32) -> u32 {
@@ -739,6 +745,8 @@ impl ScopeBuffer {
             buffer_idx: 0,
             read_idx: 0,
             awaiting_seed: false,
+            prev_value: 0.0,
+            trigger_offset: [0.0; 2],
         }
     }
 
@@ -758,7 +766,7 @@ impl ScopeBuffer {
             self.trigger.reset();
             self.recording = true;
             self.read_idx = self.buffer_idx;
-        } else {
+        } else if let Some((threshold, _)) = self.trigger_threshold {
             let rising = self.trigger.process(value) && !std::mem::take(&mut self.awaiting_seed);
             if rising && !self.recording {
                 self.trigger.reset();
@@ -766,8 +774,19 @@ impl ScopeBuffer {
                 self.buffer_idx = 0;
                 self.read_idx = 0;
                 self.sample_counter = 0;
+                // The crossing lies `frac` of the way from the previous sample
+                // to this one, which becomes the capture's first sample.
+                let rise = value - self.prev_value;
+                let frac = if rise > 0.0 {
+                    ((threshold - self.prev_value) / rise).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let write_buf = if self.buffer_select { 1 } else { 0 };
+                self.trigger_offset[write_buf] = (1.0 - frac) / (self.skip_rate + 1) as f32;
             }
         }
+        self.prev_value = value;
 
         self.buffer_idx %= SCOPE_CAPACITY as usize;
         self.read_idx %= SCOPE_CAPACITY as usize;
@@ -835,6 +854,7 @@ impl ScopeBuffer {
             max: max as f64,
             peak_to_peak: (max - min) as f64,
             read_offset: self.read_idx as u32,
+            trigger_offset: self.trigger_offset[self.read_buffer_idx()] as f64,
         }
     }
 }
@@ -4618,6 +4638,39 @@ mod tests {
             }
         }
         assert!(checked > 10, "captures completed between gaps: {checked}");
+    }
+
+    #[test]
+    fn trigger_offset_locates_the_crossing_between_samples() {
+        // 4186 Hz is not a whole number of samples per cycle at 48 kHz, so each
+        // capture's first sample lands at a different phase after the crossing.
+        let sample_rate = 48_000.0;
+        let freq = 4186.0;
+        let mut scope = ScopeBuffer::new(0, Some((0, ScopeMode::Wait)), sample_rate);
+        let mut last_read = scope.read_buffer_idx();
+        let mut offsets = Vec::new();
+        for n in 0..200_000u32 {
+            let t = n as f64 / sample_rate as f64;
+            scope.push((5.0 * (std::f64::consts::TAU * freq * t).sin()) as f32);
+            let read = scope.read_buffer_idx();
+            if read != last_read {
+                last_read = read;
+                let offset = scope.trigger_offset[read];
+                // Sample 0 sits `offset` samples after a rising zero crossing.
+                let phase = std::f32::consts::TAU * freq as f32 * offset / sample_rate;
+                let expected = 5.0 * phase.sin();
+                assert!(
+                    (scope.buffer[read][0] - expected).abs() < 0.1,
+                    "first sample {} vs {expected} at offset {offset}",
+                    scope.buffer[read][0]
+                );
+                offsets.push(offset);
+            }
+        }
+        assert!(offsets.len() > 20);
+        let spread = offsets.iter().cloned().fold(0.0f32, f32::max)
+            - offsets.iter().cloned().fold(1.0f32, f32::min);
+        assert!(spread > 0.5, "captures start at varied sub-sample phases");
     }
 
     // ============================================================================

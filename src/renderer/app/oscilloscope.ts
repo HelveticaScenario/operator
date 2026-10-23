@@ -43,6 +43,8 @@ export interface ScopeDrawOptions {
         max: number;
         peakToPeak: number;
         readOffset: number[];
+        /** Per channel, in samples: see `ScopeStats.triggerOffset`. */
+        triggerOffset: number[];
     };
 }
 
@@ -179,6 +181,13 @@ export const drawOscilloscope = (
     ctx.strokeStyle = accentColor;
     ctx.lineWidth = 1.5 * dpr;
 
+    // A trigger offset shifts the trace right by under one sample; clip so the
+    // last point never draws into the stats column.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(waveformLeft, 0, waveformWidth, h);
+    ctx.clip();
+
     for (const [ch, data] of channels.entries()) {
         if (!data || data.length < 2) {
             continue;
@@ -186,12 +195,13 @@ export const drawOscilloscope = (
 
         const sampleCount = Math.min(windowSize, data.length);
         const stepX = waveformWidth / (windowSize - 1);
+        const offsetX = (stats.triggerOffset[ch] ?? 0) * stepX;
 
         ctx.beginPath();
 
         for (let i = 0; i < sampleCount; i++) {
             const dataIndex = (i + stats.readOffset[ch]) % data.length;
-            const x = waveformLeft + stepX * i;
+            const x = waveformLeft + offsetX + stepX * i;
             const rawSample = data[dataIndex];
             const clampedSample = Math.max(
                 minVoltage,
@@ -208,4 +218,6 @@ export const drawOscilloscope = (
 
         ctx.stroke();
     }
+
+    ctx.restore();
 };
