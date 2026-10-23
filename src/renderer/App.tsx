@@ -32,7 +32,7 @@ import { Sidebar } from './components/Sidebar';
 import { ControlPanel } from './components/ControlPanel';
 import electronAPI from './electronAPI';
 import type { ValidationError } from '@modular/core';
-import type { QueuedTrigger } from '@modular/core';
+import type { QueuedTrigger, ScopeStats } from '@modular/core';
 import type { FileTreeEntry, UpdateAvailableInfo } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../shared/dsl/buttonTypes';
@@ -1538,12 +1538,7 @@ function App() {
                         string,
                         {
                             data: Float32Array;
-                            stats: {
-                                min: number;
-                                max: number;
-                                peakToPeak: number;
-                                readOffset: number;
-                            };
+                            stats: ScopeStats;
                         }
                     >();
                     for (const [bufferKey, data, stats] of scopeData) {
@@ -1576,6 +1571,7 @@ function App() {
                         ) as string[];
                         const channels: Float32Array[] = [];
                         const readOffsets: number[] = [];
+                        const triggerOffsets: number[] = [];
                         let globalMin = Infinity;
                         let globalMax = -Infinity;
 
@@ -1584,6 +1580,7 @@ function App() {
                             if (entry) {
                                 channels.push(entry.data);
                                 readOffsets.push(entry.stats.readOffset);
+                                triggerOffsets.push(entry.stats.triggerOffset);
                                 if (entry.stats.min < globalMin) {
                                     globalMin = entry.stats.min;
                                 }
@@ -1602,6 +1599,7 @@ function App() {
                                     min: globalMin,
                                     peakToPeak: globalMax - globalMin,
                                     readOffset: readOffsets,
+                                    triggerOffset: triggerOffsets,
                                 },
                             });
                         }
@@ -1979,6 +1977,7 @@ function App() {
                         file: activeBufferId,
                         key: scopeKey,
                         range: scope.range ?? [-5, 5],
+                        split: scope.split ?? null,
                     });
 
                     if (range) {

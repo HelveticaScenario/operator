@@ -1165,14 +1165,15 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
   exp(factor?: Poly<Signal>): Collection;
 
   /**
-   * Add scope visualization for the first output in the collection.
+   * Add scope visualization for all outputs in the collection, overlaid on one scope unless \`split\` is set.
    * @param config Scope configuration options
    * @param config.msPerFrame Time window in milliseconds (default 500)
    * @param config.triggerThreshold Trigger threshold in volts (optional)
    * @param config.triggerWaitToRender Whether the scope should wait to render until the buffer fills (default true). Only applicable if triggerThreshold is set.
    * @param config.range Voltage range for display as [min, max] tuple (default [-5, 5])
+   * @param config.split Draw each channel in its own scope instead of overlaying them: 'vertical' stacks them top to bottom, 'horizontal' fits them side by side
    */
-  scope(config?: { msPerFrame?: number; triggerThreshold?: number; triggerWaitToRender?: boolean; range?: [number, number] }): this;
+  scope(config?: { msPerFrame?: number; triggerThreshold?: number; triggerWaitToRender?: boolean; range?: [number, number]; split?: 'vertical' | 'horizontal' }): this;
 
   /**
    * Send all outputs to speakers as stereo, summed together.

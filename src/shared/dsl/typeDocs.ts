@@ -101,10 +101,10 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'scope',
                 signature:
-                    'scope(config?: { msPerFrame?: number; triggerThreshold?: number; range?: [number, number] }): this',
+                    "scope(config?: { msPerFrame?: number; triggerThreshold?: number; triggerWaitToRender?: boolean; range?: [number, number]; split?: 'vertical' | 'horizontal' }): this",
                 description:
-                    'Add scope visualization for the first output in the collection.',
-                example: '$c(osc1, osc2).scope().out()',
+                    "Add scope visualization for all outputs in the collection, overlaid on one scope. `split: 'vertical'` stacks one scope per channel; `split: 'horizontal'` fits them side by side.",
+                example: "$c(osc1, osc2).scope({ split: 'vertical' }).out()",
             },
             {
                 name: 'out',
@@ -260,7 +260,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'scope',
                 signature:
-                    'scope(config?: { msPerFrame?: number; triggerThreshold?: number; range?: [number, number] }): this',
+                    'scope(config?: { msPerFrame?: number; triggerThreshold?: number; triggerWaitToRender?: boolean; range?: [number, number] }): this',
                 description:
                     'Add an oscilloscope visualization for this output. The scope appears as an overlay in the editor.',
                 example:
