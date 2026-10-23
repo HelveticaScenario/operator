@@ -94,7 +94,7 @@ const C67: f32 = 0.47e-6;
 const VR7: f32 = 500.0e3;
 const R254: f32 = 100.0e3;
 const R297: f32 = 220.0e3;
-const C73: f32 = 0.47e-6;
+const C73: f32 = 470.0e-12;
 const R280: f32 = 220.0e3;
 
 // The noise network: the generator through R286 and R285, C85 with R302,
@@ -135,7 +135,7 @@ const C78: f32 = 0.47e-6;
 const R_LEVEL: f64 = 50.0e3;
 
 /// Scales the output so an unaccented hit peaks near 5 V.
-const OUTPUT_GAIN: f32 = 1.116;
+const OUTPUT_GAIN: f32 = 1.287;
 /// Below this running peak, some 64 dB under an unaccented hit, the drum
 /// has faded out: its envelopes drain only through the VCAs' bases, ever
 /// more slowly, and pass a faint leak for seconds more.
