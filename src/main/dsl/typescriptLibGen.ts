@@ -20,6 +20,12 @@ import {
     generateVideoChainMembers,
     generateVideoNamespace,
 } from './videoLibGen';
+import {
+    MONO_OUT_OPTIONS,
+    STEREO_OUT_OPTIONS,
+    renderOutOptionsJsDocList,
+    renderOutOptionsMembers,
+} from '../../shared/dsl/outOptions';
 export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
@@ -791,20 +797,7 @@ type WavHandle = {
  * @see {@link Collection.out}
  */
 interface StereoOutOptions {
-  /** Base output channel (0-62, default 0). Left plays on baseChannel, right on baseChannel+1 */
-  baseChannel?: number;
-  /** Output gain. If set, a $scaleAndShift module is added after the stereo mix */
-  gain?: Poly<Signal>;
-  /** Pan position (-5 = left, 0 = center, +5 = right). Default 0 */
-  pan?: Poly<Signal>;
-  /** Stereo width/spread (0 = no spread, 5 = full spread). Default 0 */
-  width?: Mono<Signal>;
-  /** Label shown on this output's VU meter. Must be unique across outs */
-  label?: string;
-  /** Silence this output. It is still metered; its VU meter greys out */
-  mute?: boolean;
-  /** When any output is soloed, only soloed outputs are audible */
-  solo?: boolean;
+${renderOutOptionsMembers(STEREO_OUT_OPTIONS)}
 }
 
 /**
@@ -813,16 +806,7 @@ interface StereoOutOptions {
  * @see {@link Collection.outMono}
  */
 interface MonoOutOptions {
-  /** Output channel (0-63, default 0). Wins over the positional channel argument */
-  channel?: number;
-  /** Output gain. If set, a $scaleAndShift module is added after the mix */
-  gain?: Poly<Signal>;
-  /** Label shown on this output's VU meter. Must be unique across outs */
-  label?: string;
-  /** Silence this output. It is still metered; its VU meter greys out */
-  mute?: boolean;
-  /** When any output is soloed, only soloed outputs are audible */
-  solo?: boolean;
+${renderOutOptionsMembers(MONO_OUT_OPTIONS)}
 }
 
 /**
@@ -923,6 +907,9 @@ interface ModuleOutput {
   
   /**
    * Send this output to speakers as stereo.
+   *
+   * Options:
+${renderOutOptionsJsDocList(STEREO_OUT_OPTIONS)}
    * @param options Stereo output options ({@link StereoOutOptions})
    * @example $sine("c4").out({ gain: 2.5, pan: -2 })
    * @example $sine("c4").out({ label: 'lead' })
@@ -931,12 +918,15 @@ interface ModuleOutput {
 
   /**
    * Send this output to speakers as mono.
+   *
+   * Options:
+${renderOutOptionsJsDocList(MONO_OUT_OPTIONS)}
    * @param channelOrOptions Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
-    * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
-    * @example $sine("1hz").outMono(2, 0.3)
-    * @example $sine("c3").outMono({ channel: 2, gain: 2.5, label: 'sub' })
-    */
-   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
+   * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
+   * @example $sine("1hz").outMono(2, 0.3)
+   * @example $sine("c3").outMono({ channel: 2, gain: 2.5, label: 'sub' })
+   */
+  outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
   /**
    * Pipe this output through a transform function.
@@ -1186,6 +1176,9 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
   /**
    * Send all outputs to speakers as stereo, summed together.
+   *
+   * Options:
+${renderOutOptionsJsDocList(STEREO_OUT_OPTIONS)}
    * @param options Stereo output options ({@link StereoOutOptions})
    * @example $saw(['c3', 'e3', 'g3']).out({ label: 'chord' })
    */
@@ -1193,11 +1186,14 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
   /**
    * Send all outputs to speakers as mono, summed together.
+   *
+   * Options:
+${renderOutOptionsJsDocList(MONO_OUT_OPTIONS)}
    * @param channelOrOptions Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
-    * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
-    * @example $saw(['c2', 'c3']).outMono(0, { label: 'bass' })
-    */
-   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
+   * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
+   * @example $saw(['c2', 'c3']).outMono(0, { label: 'bass' })
+   */
+  outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
 
   /**
@@ -1368,9 +1364,30 @@ class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
    * narrower argument across the channels. Bare {@link Signal} literals
    * (numbers, note/Hz strings) are lifted into $signal modules, matching $c —
    * a string is one signal, not spread into characters.
-   * @param polySignal A Poly<Signal> (single signal, array, or iterable) to distribute across outputs
+   * @param polySignal A {@link Poly<Signal>} (single signal, array, or iterable) to distribute across outputs
    */
   set(polySignal: Poly<Signal>): void;
+}
+
+/**
+ * A tap on a labeled out lane, returned by {@link $outLane}. As a
+ * {@link Collection} it is the lane's audio after its gain and mute/solo gate:
+ * two channels, with a mono lane's signal on both.
+ */
+class OutLane extends Collection {
+  private constructor();
+  /** 5V while the lane is audible, 0V while it is muted or silenced by another out's solo. */
+  readonly active: ModuleOutputWithRange;
+  /**
+   * The lane's gain in out-gain units (5 = unity), as the VU fader shows it.
+   * Ranged 0 to 10, or the gain signal's own range when it declares one.
+   */
+  readonly level: ModuleOutputWithRange;
+  /**
+   * The lane's pan (-5 left to +5 right); 0 for mono outs. Ranged -5 to 5, or
+   * the pan signal's own range when it declares one.
+   */
+  readonly pan: ModuleOutputWithRange;
 }
 
 
@@ -1435,7 +1452,7 @@ function $setTempo(tempo: number): void;
 
 /**
  * Set the global output gain applied to the final mix.
- * @param gain Gain as a Mono<Signal> (2.5 is default, 5.0 is unity)
+ * @param gain Gain as a {@link Mono<Signal>} (2.5 is default, 5.0 is unity)
  * @example $setOutputGain(2.5) // 50% gain (default)
  * @example $setOutputGain(5.0) // unity
  * @example $setOutputGain($adsr($clock.beatTrigger, {})) // modulate gain from envelope
@@ -1470,6 +1487,52 @@ function $scopeXY(
  * @example $setTimeSignature(5, 4)  // 5/4 time
  */
 function $setTimeSignature(numerator: number, denominator: number): void;
+
+/**
+ * Groove template: per-step timing offsets and velocities over a grid. Step
+ * offsets are in grid steps (positive = late), and the template repeats every
+ * timing.length steps.
+ */
+interface GrooveTemplate {
+  /** Per-step timing offset in grid steps (positive = late). */
+  timing: number[];
+  /** Per-step velocity (0-1), one per timing entry; every step is 1 when omitted. */
+  velocity?: number[];
+  /** Grid steps per cycle (default 16 = sixteenth notes in a 4/4 bar). */
+  grid?: number;
+  /** Timing strength: scales every offset (0 = straight, default 1 = as written). */
+  amount?: number;
+  /** Velocity strength (0 = every step full, default 1 = as written). */
+  velocityAmount?: number;
+  /** Largest random timing offset per step, in grid steps (default 0). */
+  random?: number;
+  /** Seed for the per-step random offsets. */
+  seed?: number;
+}
+
+/**
+ * Set the global groove. Every $cycle and $drumMap starts its notes on it,
+ * keeping their lengths, unless given its own groove or playhead; $clock.grooveOffset,
+ * $clock.grooveVelocity and $clock.grooveTrigger expose it directly.
+ * @param template Groove template, e.g. from $swing
+ * @example $setGroove($swing(0.6))  // MPC-style 60% sixteenth swing
+ * @example $setGroove({ timing: [0, 0.2, 0, 0.15], velocity: [1, 0.6, 0.8, 0.5] })
+ */
+function $setGroove(template: GrooveTemplate): void;
+
+/**
+ * Swing template: each pair of grid steps is split ratio : (1 - ratio).
+ * @param ratio Share of each pair given to its first step (0.5 = straight, 0.66 = triplet feel)
+ * @param config.grid Grid steps per cycle (default 16 = sixteenth swing; 8 = eighth swing)
+ * @param config.humanize Largest random timing offset per step, in grid steps (default 0)
+ * @example $setGroove($swing(0.58))
+ * @example $setGroove($swing(0.66, { grid: 8 }))
+ * @example $setGroove($swing(0.6, { humanize: 0.05 }))  // swing with a little looseness
+ */
+function $swing(
+  ratio: number,
+  config?: { grid?: number; humanize?: number },
+): GrooveTemplate;
 
 /**
  * Create a DeferredCollection with placeholder signals that can be assigned later.
@@ -1618,6 +1681,25 @@ class Bus {
  * $sine('a2').send(reverb, 0.4);
  */
 function $bus(cb: (mixed: Collection) => unknown): Bus;
+
+/**
+ * Tap the out labeled \`label\`: its audio after gain and mute/solo, plus its
+ * \`.active\` gate, \`.level\` gain, and \`.pan\` as ranged signals. Follows
+ * live VU-panel changes. The out may be declared before or after the tap; a
+ * label no out declares is an error.
+ *
+ * @param label Label of the out lane to follow
+ * @returns An {@link OutLane}
+ *
+ * @example
+ * $saw('c2').out({ label: 'bass' });
+ * const bass = $outLane('bass');
+ * // Follows the bass fader and pan
+ * $sine('c5').gain(bass.level).out({ pan: bass.pan });
+ * // Silent while bass is muted or soloed out
+ * $sine('g5').gain(bass.active).out();
+ */
+function $outLane(label: string): OutLane;
 
 /**
  * Set a custom end-of-chain processor applied to the final mix before output gain.

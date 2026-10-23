@@ -1,5 +1,8 @@
 use crate::{
-    dsp::{shape::shapers::tanh_driven, utils::sanitize},
+    dsp::{
+        shape::shapers::tanh_driven,
+        utils::{cached::Cached, sanitize},
+    },
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
 use deserr::Deserr;
@@ -45,37 +48,13 @@ struct MotionFollowerOutputs {
     neg: PolyOutput,
 }
 
-/// One-pole coefficient cached against the time it was computed from, so a
-/// constant time costs no `exp` per sample.
-#[derive(Clone, Copy)]
-struct CachedCoeff {
-    secs: f32,
-    coeff: f32,
-}
-
-impl Default for CachedCoeff {
-    fn default() -> Self {
-        // NaN never compares equal, so the first `get` always computes.
-        Self {
-            secs: f32::NAN,
-            coeff: 1.0,
-        }
-    }
-}
-
-impl CachedCoeff {
-    /// Coefficient for a one-pole with time constant `secs`; `secs <= 0` is instant.
-    #[inline]
-    fn get(&mut self, secs: f32, sample_rate: f32) -> f32 {
-        if secs != self.secs {
-            self.secs = secs;
-            self.coeff = if secs > 0.0 {
-                1.0 - (-1.0 / (secs * sample_rate)).exp()
-            } else {
-                1.0
-            };
-        }
-        self.coeff
+/// One-pole coefficient for time constant `secs`; `secs <= 0` is instant.
+#[inline]
+fn time_coeff(secs: f32, sample_rate: f32) -> f32 {
+    if secs > 0.0 {
+        1.0 - (-1.0 / (secs * sample_rate)).exp()
+    } else {
+        1.0
     }
 }
 
@@ -107,9 +86,9 @@ struct MotionFollowerChannelState {
     both: Follower,
     rising: Follower,
     falling: Follower,
-    smooth: CachedCoeff,
-    attack: CachedCoeff,
-    release: CachedCoeff,
+    smooth: Cached<f32>,
+    attack: Cached<f32>,
+    release: Cached<f32>,
 }
 
 /// Turns controller movement into a level, like bowing a string: moving the
@@ -156,13 +135,19 @@ impl MotionFollower {
 
             let smooth_c = state
                 .smooth
-                .get(self.params.smooth.value_or(ch, 0.02), sample_rate);
+                .get(self.params.smooth.value_or(ch, 0.02), |secs| {
+                    time_coeff(secs, sample_rate)
+                });
             let attack_c = state
                 .attack
-                .get(self.params.attack.value_or(ch, 0.02), sample_rate);
+                .get(self.params.attack.value_or(ch, 0.02), |secs| {
+                    time_coeff(secs, sample_rate)
+                });
             let release_c = state
                 .release
-                .get(self.params.release.value_or(ch, 0.3), sample_rate);
+                .get(self.params.release.value_or(ch, 0.3), |secs| {
+                    time_coeff(secs, sample_rate)
+                });
 
             let both = state
                 .both

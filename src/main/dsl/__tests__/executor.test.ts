@@ -500,7 +500,7 @@ describe('sequencing', () => {
         const patch = execPatch('$c($p("c4 e4"), "c4", 440).out()');
         expect(findModules(patch, '$cycle').length).toBe(1);
         const lifted = findModules(patch, '$signal').filter(
-            (m) => m.params.source === 'c4' || m.params.source === 440,
+            (m) => m.params.value === 'c4' || m.params.value === 440,
         );
         expect(lifted.length).toBe(2);
     });
@@ -1551,11 +1551,11 @@ describe('control groups', () => {
 // ─── Buttons ─────────────────────────────────────────────────────────────────
 
 describe('buttons', () => {
-    /** Read the constant source volts off a $signal module's params. */
+    /** Read the constant volts off a $signal module's params. */
     function signalSource(patch: PatchGraph, id: string): unknown {
         const m = patch.modules.find((mod) => mod.id === id);
         expect(m).toBeDefined();
-        const source = (m as { params: { source: unknown } }).params.source;
+        const source = (m as { params: { value: unknown } }).params.value;
         return Array.isArray(source) ? source[0] : source;
     }
 
@@ -1674,6 +1674,40 @@ describe('global settings', () => {
         expect(() => execPatch('$setTempo(0)')).toThrow(/\$setTempo/);
         expect(() => execPatch('$setTempo(-120)')).toThrow(/\$setTempo/);
     });
+
+    test('$setGroove puts the template on ROOT_CLOCK', () => {
+        const patch = execPatch('$setGroove($swing(0.75, { grid: 8 }))');
+        const clock = patch.modules.find((m) => m.id === 'ROOT_CLOCK');
+        expect(clock?.params.groove).toEqual({ grid: 8, timing: [0, 0.5] });
+    });
+
+    test('ROOT_CLOCK has no groove param without $setGroove', () => {
+        const patch = execPatch('$setTempo(120)');
+        const clock = patch.modules.find((m) => m.id === 'ROOT_CLOCK');
+        expect(clock?.params.groove).toBeUndefined();
+    });
+
+    test('$setGroove rejects a value without a timing array', () => {
+        expect(() => execPatch('$setGroove(0.6)')).toThrow(/\$setGroove/);
+    });
+
+    test('$swing humanize sets the random timing offset', () => {
+        const patch = execPatch('$setGroove($swing(0.6, { humanize: 0.05 }))');
+        const clock = patch.modules.find((m) => m.id === 'ROOT_CLOCK');
+        expect(clock?.params.groove).toMatchObject({
+            grid: 16,
+            random: 0.05,
+        });
+        expect(() => execPatch('$swing(0.6, { humanize: -0.1 })')).toThrow(
+            /\$swing/,
+        );
+        expect(() => execPatch('$swing(0.6, 8)')).toThrow(/config object/);
+    });
+
+    test('$swing rejects a ratio outside (0, 1)', () => {
+        expect(() => execPatch('$swing(1)')).toThrow(/\$swing/);
+        expect(() => execPatch('$swing(0)')).toThrow(/\$swing/);
+    });
 });
 
 // ─── Built-in modules ────────────────────────────────────────────────────────
@@ -1707,7 +1741,7 @@ describe('built-in modules', () => {
                 inputChannels: channels,
             }).patch;
             const source = patch.modules.find((m) => m.id === 'ROOT_INPUT')!
-                .params.source as unknown[];
+                .params.value as unknown[];
             return source.length;
         };
 

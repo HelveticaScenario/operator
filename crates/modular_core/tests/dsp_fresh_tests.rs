@@ -311,7 +311,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$sine" | "$saw" | "$pulse" | "$supersaw" | "$ramp" => json!({ "freq": 0.0 }),
         "$pSine" | "$pSaw" | "$pPulse" => json!({ "phase": 0.0 }),
         "$macro" => json!({ "freq": 0.0, "engine": "virtualAnalog" }),
-        "$lpf" | "$hpf" | "$jup6f" => json!({ "input": 0.0, "cutoff": 0.0 }),
+        "$lpf" | "$hpf" | "$jup6f" | "$multimode" => json!({ "input": 0.0, "cutoff": 0.0 }),
         "$unstable.filter.lp"
         | "$unstable.filter.hp"
         | "$unstable.filter.bp"
@@ -359,7 +359,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$track" => json!({ "keyframes": [] }),
         "$math" => json!({ "expression": "1+1" }),
         "$spread" => json!({ "min": -1.0, "max": 1.0, "count": 3 }),
-        "$signal" => json!({ "source": 0.0 }),
+        "$signal" => json!({ "value": 0.0 }),
         "$scaleAndShift" => json!({ "input": 0.0 }),
         "$chord" => json!({ "chord": "C[maj]" }),
         "$cheby" | "$fold" | "$segment" => json!({ "input": 0.0, "amount": 0.0 }),
@@ -411,10 +411,12 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$eq" => json!({ "input": 0.0 }),
         "$filterDC" => json!({ "input": 0.0 }),
         "$quantNoise" => json!({ "input": 0.0, "amount": 1.0 }),
+        "$groove" => json!({ "template": { "timing": [0.0, 0.2] } }),
         "$step" => json!({ "steps": [0.0], "next": 0.0 }),
         "$midiCC" => json!({ "cc": 1 }),
         "_clock" => json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),
         "_videoTap" => json!({ "input": 0.0, "slot": 0 }),
+        "_smoothControl" => json!({ "value": 0.0 }),
         _ => json!({}),
     }
 }
@@ -564,7 +566,7 @@ fn from_graph_creates_patch_with_modules() {
 /// device tap uses reports silence there instead.
 #[test]
 fn reads_cycle_past_port_width_unless_no_cycle() {
-    let module = make_module("$signal", "sig", json!({ "source": [1.0, 2.0] }));
+    let module = make_module("$signal", "sig", json!({ "value": [1.0, 2.0] }));
     module.start_block();
     module.ensure_processed();
 
@@ -637,14 +639,14 @@ fn from_graph_params_are_applied() {
 #[test]
 fn from_graph_cable_routing_sine_to_signal() {
     // Sine oscillator → $signal module via cable.
-    // The $signal module passes its `source` input straight through.
+    // The $signal module passes its `value` input straight through.
     let graph = make_graph(vec![
         ("osc", "$sine", json!({ "freq": 0.0 })),
         (
             "sig",
             "$signal",
             json!({
-                "source": { "type": "cable", "module": "osc", "port": "output", "channel": 0 }
+                "value": { "type": "cable", "module": "osc", "port": "output", "channel": 0 }
             }),
         ),
     ]);
@@ -1356,7 +1358,13 @@ fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
             // column, so a stride mismatch would land channel >= 1 cells on
             // the wrong (voice, channel) coordinates.
             "freq": [-2.0, -1.9],
-            "voices": voices
+            "voices": voices,
+            // Constant-high sync: its one rising edge (the trigger's first
+            // sample) resets every voice to phase 0, so the carried voices'
+            // phases at the transfer frame are fixed rather than seeded from
+            // the module's address. The latched trigger state transfers with
+            // the module, so the new patch sees no further edge.
+            "sync": 5.0
         })
     };
 
@@ -1390,13 +1398,20 @@ fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
     process_frame(&new_patch);
     let new_ss = new_patch.sampleables.get("ss").unwrap();
 
-    // The added voices must be silent on the transfer frame: their mute is
-    // armed and releases only at their own first zero crossing.
+    // The added voices must be (near-)silent on the transfer frame: their mute
+    // is armed and releases only at their own first rising zero crossing. A
+    // seeded phase within one step below that crossing releases on this very
+    // frame, contributing at most one ramp step (2 * dt) per input channel, so
+    // the bound is that step summed over both channels at the highest detuned
+    // pitch, times the 5 / sqrt(2) channel-compensated gain (~0.02 V).
+    let max_hz = 261.63 * 2.0f32.powf(-1.9 + 0.09 / 12.0);
+    let max_release_step = 2.0 * max_hz / SAMPLE_RATE;
+    let fresh_bound = 2.0 * max_release_step * 5.0 / 2.0f32.sqrt();
     for voice in 5..7 {
         let v = new_ss.get_value_at(DEFAULT_PORT, voice, 0);
-        assert_eq!(
-            v, 0.0,
-            "fresh voice {voice} must start muted on the transfer frame, got {v}"
+        assert!(
+            v.abs() <= fresh_bound,
+            "fresh voice {voice} must start muted on the transfer frame, got {v} (bound {fresh_bound})"
         );
     }
 
@@ -2782,4 +2797,417 @@ fn eq_sections_accept_shared_and_per_channel_forms() {
     assert!(de(json!({ "input": 0.0, "sections": [[{ "freq": 0.0 }], []] })).is_ok());
     assert!(de(json!({ "input": 0.0, "sections": [[{ "bogus": 0.0 }]] })).is_err());
     assert!(de(json!({ "input": 0.0, "sections": { "freq": 0.0 } })).is_err());
+}
+
+// ─── Groove ───────────────────────────────────────────────────────────────────
+
+/// Rising-edge sample indices of `port` channel 0 on module `id`, plus the
+/// velocity output read on each of those frames.
+fn groove_onsets(patch: &Patch, id: &str, frames: usize) -> Vec<(usize, f32)> {
+    let module = patch.sampleables.get(id).unwrap();
+    let mut onsets = Vec::new();
+    let mut prev_hi = false;
+    for i in 0..frames {
+        process_frame(patch);
+        let hi = module.get_value_at("trig", 0, 0) > 2.5;
+        if hi && !prev_hi {
+            onsets.push((i, module.get_value_at("velocity", 0, 0)));
+        }
+        prev_hi = hi;
+    }
+    onsets
+}
+
+#[test]
+fn cycle_follows_global_groove_and_zero_groove_opts_out() {
+    // 2400 BPM in 4/4 → one bar every 4800 samples, so a sixteenth is 300.
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.0, 0.5], "velocity": [1.0, 0.4] },
+            }),
+        ),
+        (
+            "swung",
+            "$cycle",
+            json!({ "pattern": mini_payload("c4*16"), "channels": 1 }),
+        ),
+        (
+            "straight",
+            "$cycle",
+            json!({
+                "pattern": mini_payload("c4*16"),
+                "channels": 1,
+                "groove": 0.0,
+            }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    let mut swung: Vec<(usize, f32)> = Vec::new();
+    let mut straight: Vec<(usize, f32)> = Vec::new();
+    let mut prev = [false; 2];
+    // One bar, stopping short of the next bar's downbeat.
+    for i in 0..4790 {
+        process_frame(&patch);
+        for (slot, (id, out)) in [("swung", &mut swung), ("straight", &mut straight)]
+            .into_iter()
+            .enumerate()
+        {
+            let m = patch.sampleables.get(id).unwrap();
+            let hi = m.get_value_at("trig", 0, 0) > 2.5;
+            if hi && !prev[slot] {
+                out.push((i, m.get_value_at("velocity", 0, 0)));
+            }
+            prev[slot] = hi;
+        }
+    }
+
+    assert_eq!(swung.len(), 16, "swung onsets: {swung:?}");
+    assert_eq!(straight.len(), 16, "straight onsets: {straight:?}");
+    for k in 0..16 {
+        let expected = k * 300 + if k % 2 == 1 { 150 } else { 0 };
+        let (at, velocity) = swung[k];
+        assert!(
+            at.abs_diff(expected) <= 1,
+            "swung step {k} at {at}, expected {expected}"
+        );
+        let expected_velocity = if k % 2 == 1 { 2.0 } else { 5.0 };
+        assert!(
+            (velocity - expected_velocity).abs() < 1e-4,
+            "swung step {k} velocity {velocity}, expected {expected_velocity}"
+        );
+        let (at, velocity) = straight[k];
+        assert!(
+            at.abs_diff(k * 300) <= 1,
+            "straight step {k} at {at}, expected {}",
+            k * 300
+        );
+        assert_eq!(velocity, 5.0, "a zero groove plays at full velocity");
+    }
+}
+
+#[test]
+fn groove_module_overrides_global_groove() {
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.0, 0.5] },
+            }),
+        ),
+        (
+            "g",
+            "$groove",
+            json!({ "template": { "timing": [0.0, 0.0, 0.0, -0.5], "velocity": [1.0, 1.0, 1.0, 0.2] } }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({
+                "pattern": mini_payload("c4*16"),
+                "channels": 1,
+                "groove": { "type": "cable", "module": "g", "port": "offset", "channel": 0 },
+                "velocity": { "type": "cable", "module": "g", "port": "velocity", "channel": 0 },
+            }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let onsets = groove_onsets(&patch, "seq", 4790);
+    assert_eq!(onsets.len(), 16, "onsets: {onsets:?}");
+    for (k, (at, velocity)) in onsets.into_iter().enumerate() {
+        let early = k % 4 == 3;
+        let expected = k * 300 - if early { 150 } else { 0 };
+        assert!(
+            at.abs_diff(expected) <= 1,
+            "step {k} at {at}, expected {expected}"
+        );
+        let expected_velocity = if early { 1.0 } else { 5.0 };
+        assert!(
+            (velocity - expected_velocity).abs() < 1e-4,
+            "step {k} velocity {velocity}, expected {expected_velocity}"
+        );
+    }
+}
+
+#[test]
+fn grooved_notes_keep_their_length() {
+    // Sixteenth notes on the swung off-beats: each starts half a sixteenth
+    // late and still lasts a full sixteenth (300 samples).
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.0, 0.5] },
+            }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("[~ c4]*8"), "channels": 1 }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let module = patch.sampleables.get("seq").unwrap();
+    // A note runs from its trigger to the gate's fall; the next bar's first
+    // note starts after frame 5000.
+    let mut notes: Vec<(usize, usize)> = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut prev_trig = false;
+    let mut prev_gate = false;
+    for i in 0..5000 {
+        process_frame(&patch);
+        let trig = module.get_value_at("trig", 0, 0) > 2.5;
+        let gate = module.get_value_at("gate", 0, 0) > 2.5;
+        if trig && !prev_trig {
+            open = Some(i);
+        }
+        if !gate
+            && prev_gate
+            && let Some(start) = open.take()
+        {
+            notes.push((start, i - start));
+        }
+        prev_trig = trig;
+        prev_gate = gate;
+    }
+    assert_eq!(notes.len(), 8, "notes: {notes:?}");
+    for (k, (start, len)) in notes.into_iter().enumerate() {
+        let expected = (2 * k + 1) * 300 + 150;
+        assert!(
+            start.abs_diff(expected) <= 1,
+            "note {k} at {start}, expected {expected}"
+        );
+        assert!(
+            len.abs_diff(300) <= 1,
+            "note {k} lasted {len}, expected 300"
+        );
+    }
+}
+
+#[test]
+fn clock_rejects_groove_whose_steps_cross() {
+    let deserializers = get_params_deserializers();
+    let result = deserializers.get("_clock").unwrap()(json!({
+        "tempo": 120.0,
+        "numerator": 4,
+        "denominator": 4,
+        "groove": { "timing": [0.0, 0.9], "random": 0.2 },
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn drum_map_follows_global_groove_and_zero_groove_opts_out() {
+    // 2400 BPM in 4/4: a sixteenth is 300 samples. Full density at the map
+    // corner plays a hit on many sixteenths; every swung off-beat lands 150
+    // samples late.
+    let drums = |groove: Option<f64>| {
+        let mut params =
+            json!({ "x": 0.0, "y": 0.0, "bdDensity": 5.0, "sdDensity": 5.0, "hhDensity": 5.0 });
+        if let Some(g) = groove {
+            params["groove"] = json!(g);
+        }
+        params
+    };
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.0, 0.5] },
+            }),
+        ),
+        ("swung", "$drumMap", drums(None)),
+        ("straight", "$drumMap", drums(Some(0.0))),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    let any_hit = |id: &str| {
+        let m = patch.sampleables.get(id).unwrap();
+        ["bd", "sd", "hh"]
+            .iter()
+            .any(|port| m.get_value_at(port, 0, 0) > 2.5)
+    };
+    let mut hits: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+    let mut prev = [false; 2];
+    for i in 0..4790 {
+        process_frame(&patch);
+        for (slot, id) in ["swung", "straight"].into_iter().enumerate() {
+            let hi = any_hit(id);
+            if hi && !prev[slot] {
+                hits[slot].push(i);
+            }
+            prev[slot] = hi;
+        }
+    }
+    let [swung, straight] = hits;
+    assert!(
+        swung.iter().any(|at| (149..=151).contains(&(at % 300))),
+        "no swung off-beats: {swung:?}"
+    );
+    assert_eq!(swung.len(), straight.len());
+    for (s_at, t_at) in swung.iter().zip(&straight) {
+        let k = (t_at + 1) / 300;
+        assert!(t_at.abs_diff(k * 300) <= 1, "straight hit at {t_at}");
+        let late = if k % 2 == 1 { 150 } else { 0 };
+        assert!(
+            s_at.abs_diff(k * 300 + late) <= 1,
+            "swung hit for sixteenth {k} at {s_at}, expected {}",
+            k * 300 + late
+        );
+    }
+}
+
+/// Apply `graph` to a running patch the way a live edit does: rebuild,
+/// transfer state, reconnect, then `on_patch_update`.
+fn live_edit(old: &Patch, graph: &PatchGraph) -> Patch {
+    let new = from_graph(graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for (id, module) in &new.sampleables {
+        if let Some(old_module) = old.sampleables.get(id) {
+            module.transfer_state_from(old_module.as_ref());
+        }
+    }
+    for module in new.sampleables.values() {
+        module.connect(&new);
+    }
+    for module in new.sampleables.values() {
+        module.on_patch_update();
+    }
+    new
+}
+
+/// Rising-edge frames of `port` on module `id`, starting at frame `from`.
+fn rising_frames(patch: &Patch, id: &str, port: &str, from: usize, to: usize) -> Vec<usize> {
+    let module = patch.sampleables.get(id).unwrap();
+    let mut edges = Vec::new();
+    let mut prev = false;
+    for i in from..to {
+        process_frame(patch);
+        let hi = module.get_value_at(port, 0, 0) > 2.5;
+        if hi && !prev {
+            edges.push(i);
+        }
+        prev = hi;
+    }
+    edges
+}
+
+#[test]
+fn switching_to_a_later_groove_mid_play_never_replays_notes() {
+    // 2400 BPM: a sixteenth is 300 samples, and each note lasts a quarter of
+    // one. The global groove puts each off-beat sixteenth half a sixteenth
+    // late. At frame 420 the straight position is 1.4 sixteenths in;
+    // following the groove from there would map it back to 0.93, behind the
+    // note at 1 that has already played and ended.
+    let clock = (
+        "ROOT_CLOCK",
+        "_clock",
+        json!({
+            "tempo": 2400.0,
+            "numerator": 4,
+            "denominator": 4,
+            "groove": { "timing": [0.0, 0.5] },
+        }),
+    );
+    let straight = make_graph(vec![
+        clock.clone(),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("[c4 ~ ~ ~]*16"), "channels": 1, "groove": 0.0 }),
+        ),
+    ]);
+    let grooved = make_graph(vec![
+        clock,
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("[c4 ~ ~ ~]*16"), "channels": 1 }),
+        ),
+    ]);
+    let before = from_graph(&straight, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let mut onsets = rising_frames(&before, "seq", "trig", 0, 420);
+    let after = live_edit(&before, &grooved);
+    onsets.extend(rising_frames(&after, "seq", "trig", 420, 4790));
+    assert_eq!(onsets.len(), 16, "each note plays once: {onsets:?}");
+}
+
+#[test]
+fn late_first_step_waits_after_transport_start() {
+    // The first sixteenth of every bar is 0.3 of a sixteenth (90 samples)
+    // late, including the very first one.
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.3, 0.0] },
+            }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("c4*16"), "channels": 1 }),
+        ),
+        (
+            "drums",
+            "$drumMap",
+            json!({ "x": 0.0, "y": 0.0, "bdDensity": 5.0, "sdDensity": 5.0, "hhDensity": 5.0 }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let module = |id: &str| patch.sampleables.get(id).unwrap();
+    let mut seq_first: Option<usize> = None;
+    let mut drums_first: Option<usize> = None;
+    for i in 0..300 {
+        process_frame(&patch);
+        if seq_first.is_none() && module("seq").get_value_at("trig", 0, 0) > 2.5 {
+            seq_first = Some(i);
+        }
+        let drums = module("drums");
+        if drums_first.is_none()
+            && ["bd", "sd", "hh"]
+                .iter()
+                .any(|port| drums.get_value_at(port, 0, 0) > 2.5)
+        {
+            drums_first = Some(i);
+        }
+    }
+    let seq_first = seq_first.expect("seq never fired");
+    let drums_first = drums_first.expect("drums never fired");
+    assert!(
+        seq_first.abs_diff(90) <= 1,
+        "$cycle first note at {seq_first}"
+    );
+    assert!(
+        drums_first.abs_diff(90) <= 2,
+        "$drumMap first hit at {drums_first}"
+    );
 }

@@ -53,7 +53,7 @@ export type VideoUniform = {
     | {
           /** A slider or button. */
           kind: 'control';
-          /** Module id of the control's backing `$signal`. */
+          /** Module id of the control's backing module. */
           moduleId: string;
       }
     | {
@@ -146,7 +146,7 @@ export interface VideoPull {
  * program it holds.
  */
 export interface VideoUniformUpdate {
-    /** Module id of the control's backing `$signal`. */
+    /** Module id of the control's backing module. */
     moduleId: string;
     value: number;
 }

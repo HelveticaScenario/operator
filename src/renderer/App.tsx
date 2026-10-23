@@ -807,7 +807,7 @@ function App() {
                     void electronAPI.synthesizer.setModuleParam(
                         muteModuleId,
                         '$signal',
-                        { source: gateAfter },
+                        { value: gateAfter },
                     );
                 }
             }
@@ -925,8 +925,8 @@ function App() {
 
             void electronAPI.synthesizer.setModuleParam(
                 outputs[idx].panModuleId,
-                '$signal',
-                { source: pan },
+                '_smoothControl',
+                { value: pan },
             );
 
             const next = outputs.map((o, i) => (i === idx ? { ...o, pan } : o));
@@ -1349,8 +1349,8 @@ function App() {
 
             void electronAPI.synthesizer.setModuleParam(
                 outputs[idx].gainModuleId,
-                '$signal',
-                { source: gain },
+                '_smoothControl',
+                { value: gain },
             );
 
             const next = outputs.map((o, i) =>
@@ -1465,8 +1465,8 @@ function App() {
 
             void electronAPI.synthesizer.setModuleParam(
                 outputs[idx].gainModuleId,
-                '$signal',
-                { source: resetGain },
+                '_smoothControl',
+                { value: resetGain },
             );
 
             const next = outputs.map((o, i) =>

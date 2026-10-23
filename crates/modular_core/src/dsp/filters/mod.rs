@@ -8,6 +8,7 @@ pub mod eq;
 pub mod highpass;
 pub mod jup6f;
 pub mod lowpass;
+pub mod multimode;
 pub mod surge;
 
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
@@ -15,6 +16,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     highpass::HighpassFilter::install_constructor(map);
     bandpass::BandpassFilter::install_constructor(map);
     jup6f::Jup6f::install_constructor(map);
+    multimode::Multimode::install_constructor(map);
     eq::ParametricEq::install_constructor(map);
     surge::install_constructors(map);
 }
@@ -32,6 +34,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     highpass::HighpassFilter::install_params_deserializer(map);
     bandpass::BandpassFilter::install_params_deserializer(map);
     jup6f::Jup6f::install_params_deserializer(map);
+    multimode::Multimode::install_params_deserializer(map);
     eq::ParametricEq::install_params_deserializer(map);
     surge::install_params_deserializers(map);
 }
@@ -42,6 +45,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         highpass::HighpassFilter::get_schema(),
         bandpass::BandpassFilter::get_schema(),
         jup6f::Jup6f::get_schema(),
+        multimode::Multimode::get_schema(),
         eq::ParametricEq::get_schema(),
     ];
     schemas.extend(surge::schemas());

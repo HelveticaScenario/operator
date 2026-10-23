@@ -2,6 +2,7 @@ extern crate proc_macro;
 extern crate quote;
 extern crate syn;
 
+mod block_inputs;
 mod channel_count;
 mod connect;
 mod enum_tag;
@@ -62,6 +63,15 @@ pub fn signal_params_macro_derive(input: TokenStream) -> TokenStream {
         Err(e) => return e.to_compile_error().into(),
     };
     signal_params::impl_signal_params_macro(&ast)
+}
+
+#[proc_macro_derive(BlockInputs, attributes(signal, block_input))]
+pub fn block_inputs_macro_derive(input: TokenStream) -> TokenStream {
+    let ast: DeriveInput = match syn::parse(input) {
+        Ok(v) => v,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    block_inputs::impl_block_inputs_macro(&ast)
 }
 
 #[proc_macro_attribute]

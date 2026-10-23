@@ -3,6 +3,12 @@
  * Used by both TypeScript lib generator (JSDoc) and HelpWindow (rendered docs).
  */
 
+import {
+    MONO_OUT_OPTIONS,
+    STEREO_OUT_OPTIONS,
+    outOptionsDefinition,
+} from './outOptions';
+
 export interface TypeMethod {
     name: string;
     signature: string;
@@ -33,6 +39,7 @@ export const DSL_TYPE_NAMES = [
     'Note',
     'HZ',
     'StereoOutOptions',
+    'MonoOutOptions',
 ] as const;
 
 export type DslTypeName = (typeof DSL_TYPE_NAMES)[number];
@@ -109,7 +116,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'outMono',
                 signature:
-                    'outMono(channel?: number, gain?: Poly<Signal>): this',
+                    'outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this',
                 description:
                     'Send all outputs to a single speaker channel as mono, summed together.',
                 example: '$c(osc1, osc2).outMono(0, 0.3)',
@@ -269,7 +276,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'outMono',
                 signature:
-                    'outMono(channel?: number, gain?: Poly<Signal>): this',
+                    'outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this',
                 description:
                     'Send this output to a single speaker channel as mono audio.',
                 example: 'lfo.outMono(2, 0.3)',
@@ -413,11 +420,10 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
     },
 
     StereoOutOptions: {
-        definition:
-            'interface { baseChannel?: number; gain?: Poly<Signal>; pan?: Poly<Signal>; width?: Signal }',
+        definition: outOptionsDefinition(STEREO_OUT_OPTIONS),
         description:
             'Options for stereo output routing via the out() method. ' +
-            'Controls base channel, gain, panning, and stereo width.',
+            'Controls base channel, gain, panning, stereo width, and the VU meter label, mute, and solo.',
         examples: [
             "$sine('c').out({ baseChannel: 4 })      // Output of channels 4 and 5",
             "$sine('c').out({ gain: 2.5 })           // 50% gain",
@@ -426,7 +432,21 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             "$sine('c').out({ gain: $perc($pulse('8hz')), pan: $sine('1hz') })  // Modulated",
         ],
         name: 'StereoOutOptions',
-        seeAlso: ['ModuleOutput', 'Collection', 'Poly<Signal>'],
+        seeAlso: ['MonoOutOptions', 'ModuleOutput', 'Collection', 'Poly<Signal>'],
+    },
+
+    MonoOutOptions: {
+        definition: outOptionsDefinition(MONO_OUT_OPTIONS),
+        description:
+            'Options for mono output routing via the outMono() method. ' +
+            'Controls the output channel, gain, and the VU meter label, mute, and solo.',
+        examples: [
+            "$sine('c').outMono({ channel: 2 })              // Output on channel 2",
+            "$sine('c').outMono({ channel: 2, gain: 2.5 })   // 50% gain",
+            "$sine('c').outMono(0, { label: 'sub' })         // Labelled VU meter",
+        ],
+        name: 'MonoOutOptions',
+        seeAlso: ['StereoOutOptions', 'ModuleOutput', 'Collection', 'Poly<Signal>'],
     },
 };
 
@@ -576,6 +596,52 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
         ],
         signature:
             '$setTimeSignature(numerator: number, denominator: number): void',
+    },
+    {
+        description:
+            'Set the global groove. Every $cycle and $drumMap starts its notes on it, keeping their lengths, unless given its own groove or playhead.',
+        examples: [
+            '$setGroove($swing(0.6))  // 60% sixteenth swing',
+            '$setGroove({ timing: [0, 0.2, 0, 0.15], velocity: [1, 0.6, 0.8, 0.5] })',
+        ],
+        group: 'Global Settings',
+        name: '$setGroove',
+        params: [
+            {
+                name: 'template',
+                type: 'GrooveTemplate',
+                description:
+                    'Per-step timing offsets (grid steps) and velocities (0-1), plus grid, amount, velocityAmount, random and seed',
+            },
+        ],
+        signature: '$setGroove(template: GrooveTemplate): void',
+    },
+    {
+        description:
+            'Swing groove template: each pair of grid steps is split ratio : (1 - ratio).',
+        examples: [
+            '$setGroove($swing(0.58))  // light sixteenth swing',
+            '$setGroove($swing(0.66, { grid: 8 }))  // triplet-feel eighths',
+            '$setGroove($swing(0.6, { humanize: 0.05 }))  // swing with a little looseness',
+        ],
+        group: 'Global Settings',
+        name: '$swing',
+        params: [
+            {
+                name: 'ratio',
+                type: 'number',
+                description:
+                    'Share of each pair given to its first step (0.5 = straight)',
+            },
+            {
+                name: 'config',
+                type: '{ grid?: number; humanize?: number }',
+                description:
+                    'grid: grid steps per cycle (default 16); humanize: largest random timing offset per step, in grid steps (default 0)',
+            },
+        ],
+        signature:
+            '$swing(ratio: number, config?: { grid?: number; humanize?: number }): GrooveTemplate',
     },
     {
         description:
@@ -769,6 +835,26 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
         ],
         returns: 'Bus handle passed to .send()',
         signature: '$bus(cb: (mixed: Collection) => unknown): Bus',
+    },
+    {
+        description:
+            'Tap the out labeled `label`: a 2-channel Collection of its audio after gain and mute/solo, ' +
+            'with `.active` (0–5V gate), `.level` (gain, 0–10), and `.pan` (-5–5) as ranged signals. ' +
+            'Follows live VU-panel changes. The out may be declared after the tap; an undeclared label is an error.',
+        examples: [
+            "$saw('c2').out({ label: 'bass' });\nconst bass = $outLane('bass');\n$sine('c5').gain(bass.level).out({ pan: bass.pan });\n$sine('g5').gain(bass.active).out();",
+        ],
+        group: 'Advanced',
+        name: '$outLane',
+        params: [
+            {
+                name: 'label',
+                type: 'string',
+                description: 'Label of the out lane to follow',
+            },
+        ],
+        returns: 'OutLane',
+        signature: '$outLane(label: string): OutLane',
     },
     {
         description:
