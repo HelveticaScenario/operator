@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 
 use super::circuit::{PULSE_V, WhiteNoise, pulse_volts};
 use crate::dsp::drums::analog::{high_pass, one_pole_coeff, rc_hz};
-use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
+use crate::dsp::drums::mna::{DC_STEP, GROUND, Mna, MnaBuilder, MnaState, Switch};
 use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};

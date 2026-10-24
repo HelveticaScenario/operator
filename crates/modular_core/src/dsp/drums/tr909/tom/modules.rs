@@ -49,20 +49,13 @@ fn init(state: &mut TomState, parts: TomParts, sample_rate: f32) {
     let dt = 1.0 / sample_rate;
     state.groups = Groups::new();
     let sh = &mut state.shared;
-    sh.parts = Some(parts);
+    sh.parts = parts;
     sh.timing = Timing::new(TRIG_SECS, sample_rate);
     sh.dt = dt;
     sh.noise_rate = Noise::rate(sample_rate);
-    // The noise network at DC: discretised at a step long enough that its
-    // capacitors carry no current.
-    let dc = noise_network(DC_STEP);
     let mut injected = [0.0f32; NOISE_UNKNOWNS];
     injected[NOISE_IN] = NOISE_MEAN * STIFF;
-    let mut rest = MnaState::default();
-    for _ in 0..DC_ITERATIONS {
-        dc.step(&mut rest, 0, &injected);
-    }
-    sh.noise_rest = rest;
+    sh.noise_rest = noise_network(DC_STEP).settle(0, &injected);
     sh.noise = noise_network(dt);
     sh.reset = parts.vco.map(|c| (-dt / (R_RESET * c)).exp());
     sh.fall16 = (-dt / (R60 * C16)).exp();

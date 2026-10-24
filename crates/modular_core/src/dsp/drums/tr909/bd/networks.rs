@@ -51,7 +51,7 @@ pub(super) fn attack_network(
         .capacitor(PB, GROUND, 100.0e-12)
         .capacitor(PA, PE, 0.0047e-6)
         .opamp(PB, PE, PE, OP9)
-        .resistor(PE, GROUND, 10.0e3)
+        .resistor(PE, GROUND, PE_PULL)
         .capacitor(PE, P4, 0.47e-6)
         .resistor(P4, NB, 22.0e3);
     b.build(

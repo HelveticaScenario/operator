@@ -12,6 +12,7 @@ mod noise;
 pub mod rs;
 pub mod sd;
 pub mod tom;
+mod vco;
 
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     bd::Bd909::install_constructor(map);

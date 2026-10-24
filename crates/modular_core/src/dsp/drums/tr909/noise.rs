@@ -3,6 +3,9 @@
 use super::circuit::RAIL;
 use crate::dsp::utils::rng::LcgRng;
 
+/// The noise generator's mean voltage: high half the time.
+pub const NOISE_MEAN: f32 = 0.5 * RAIL;
+
 /// The 909's noise generator: two 4006 shift registers chained into 32
 /// stages with exclusive-or feedback, clocked by an RC oscillator on IC31
 /// (R185 33 kΩ, C47 100 pF), its output swinging the full 15 V.

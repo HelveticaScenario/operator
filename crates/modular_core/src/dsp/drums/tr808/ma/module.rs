@@ -62,9 +62,6 @@ struct Channel {
     noise: WhiteNoise,
 }
 
-/// A time step long enough that every capacitor in the circuit carries no
-/// current: the networks discretised at it solve for the circuit at DC.
-const DC_STEP: f32 = 1.0e3;
 /// Iterations that settle the switches at DC.
 const DC_ITERATIONS: usize = 20;
 

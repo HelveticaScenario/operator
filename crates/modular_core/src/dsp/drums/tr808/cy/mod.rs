@@ -18,7 +18,7 @@ use super::metal::{MetalBank, MetalFilters, metal_pulse};
 use super::swing::{SwingState, vca};
 use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, QUAD, Run};
 use crate::dsp::drums::lanes::{Lanes, Lanewise, Mono, Real, c, lanewise};
-use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
+use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, STIFF, Switch};
 use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
@@ -97,8 +97,6 @@ const TONE_OUT: usize = 12;
 const TONE_OPAMP: usize = 13;
 const TONE_UNKNOWNS: usize = 14;
 const TONE_CAPS: usize = 6;
-/// Conductance driving each input node to its source's voltage.
-const STIFF: f32 = 10.0;
 
 /// The decay pot, VR2: 2 MΩ linear, after R93.
 const R93: f32 = 470.0e3;

@@ -74,13 +74,13 @@ pub struct Bd909 {
 
 #[derive(Default)]
 struct BdState {
-    shared: DrumShared,
-    groups: Groups<BassDrumFamily>,
+    shared: KickShared,
+    groups: Groups<KickDrum>,
 }
 
 #[derive(Clone, Copy, Default)]
 struct Channel {
-    voices: Voices<BassDrum>,
+    voices: Voices<Kick>,
     noise: Noise,
     rate: Cached<f32, f32>,
     /// The sweep and decay pots' conductances at their knobs' travel.
@@ -97,17 +97,10 @@ impl Bd909 {
         sh.dt = dt;
         sh.noise_rate = Noise::rate(sample_rate);
         sh.envelope = envelope_network(dt);
-        // The attack network at DC: discretised at a step long enough that
-        // its capacitors carry no current.
-        let dc = attack_network(DC_STEP);
         let mut injected = [0.0f32; ATTACK_UNKNOWNS];
         injected[NOISE_IN] = NOISE_MEAN * STIFF;
-        injected[PE] = -RAIL / 10.0e3;
-        let mut rest = MnaState::default();
-        for _ in 0..DC_ITERATIONS {
-            dc.step(&mut rest, 1 << Q8_ON, &injected);
-        }
-        sh.attack_rest = rest;
+        injected[PE] = -RAIL / PE_PULL;
+        sh.attack_rest = attack_network(DC_STEP).settle(1 << Q8_ON, &injected);
         sh.attack = attack_network(dt);
         sh.sync_coeff = (-dt / (R51 * C14)).exp();
         sh.c7_charge = (-dt / (R20 * C7)).exp();
@@ -208,16 +201,16 @@ struct BdInputs<I> {
     noise_rate: f32,
 }
 
-impl<I: Input> ChannelInputs<BassDrumFamily> for BdInputs<I> {
+impl<I: Input> ChannelInputs<KickDrum> for BdInputs<I> {
     type Channel = Channel;
 
-    fn voices(channel: &mut Channel) -> &mut Voices<BassDrum> {
+    fn voices(channel: &mut Channel) -> &mut Voices<Kick> {
         &mut channel.voices
     }
 
     #[inline(always)]
-    fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, DrumControls) {
-        let controls = DrumControls {
+    fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, KickControls) {
+        let controls = KickControls {
             rate: cs
                 .rate
                 .get(self.freq.at(ch), |f| (f - Bd909Params::FREQ_DEFAULT).exp2()),

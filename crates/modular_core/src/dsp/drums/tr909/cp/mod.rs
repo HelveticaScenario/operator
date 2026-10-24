@@ -12,15 +12,19 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{DIODE_DROP, RAIL, TRIG_V, VCA, VSAT, accent_volts, vca_port};
-use super::noise::Noise;
+use super::noise::{NOISE_MEAN, Noise};
 use crate::dsp::drums::analog::Junction;
 use crate::dsp::drums::clap::{Envelope, EnvelopeNetwork, ota_current};
 use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
-use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
+use crate::dsp::drums::mna::{DC_STEP, GROUND, Mna, MnaBuilder, MnaState, STIFF};
 use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
+
+mod module;
+
+pub use module::Cp909;
 
 // IC26a scales the accent voltage by 1 + R212/R206.
 const ACCENT_GAIN: f32 = 1.0 + 10.0e3 / 4.7e3;
@@ -53,7 +57,6 @@ const Q37C: usize = 8;
 const OP26: usize = 9;
 const NOISE_UNKNOWNS: usize = 10;
 const NOISE_CAPS: usize = 5;
-const STIFF: f32 = 10.0;
 
 // The reverb envelope: C59, charged from the gated accent through D32,
 // fills C61 through R233; C61 feeds Q37's base through R234, and D33 holds
@@ -87,8 +90,6 @@ const SETTLED: f32 = 3.0e-4;
 /// through the VCA's base, ever more slowly.
 const ENV_SETTLED: f32 = 0.65;
 
-const NOISE_MEAN: f32 = 0.5 * RAIL;
-const DC_STEP: f32 = 1.0e3;
 const DC_ITERATIONS: usize = 20;
 
 fn noise_network(dt: f32) -> Mna<NOISE_UNKNOWNS, NOISE_CAPS, 0, 1> {
@@ -271,7 +272,3 @@ impl<L: Lanes> Circuit<L> for Clap<L> {
         out
     }
 }
-
-mod module;
-
-pub use module::Cp909;

@@ -16,6 +16,15 @@ pub const GROUND: usize = usize::MAX;
 
 /// A switched conductance `g` from `node` to `other` (which may be
 /// [`GROUND`]) in series with a source of `volts`, positive toward `node`.
+/// A time step long enough that every capacitor carries no current: a
+/// network discretised at it solves for its circuit at DC.
+pub const DC_STEP: f32 = 1.0e3;
+/// Conductance from a node to ground that, with `volts · STIFF` injected,
+/// holds the node at `volts` as an ideal source would.
+pub const STIFF: f32 = 10.0;
+/// Steps of [`DC_STEP`] that settle a linear network at DC.
+const SETTLE_STEPS: usize = 4;
+
 #[derive(Clone, Copy)]
 pub struct Switch {
     pub node: usize,
@@ -212,6 +221,16 @@ impl<const N: usize, const C: usize, const S: usize, const K: usize> Mna<N, C, S
     /// Solves one sample with switch `s` closed where bit `s` of `closed` is
     /// set, plus current `injected[n]` driven into each node `n`, returning
     /// every unknown and advancing the capacitors' history.
+    /// The state a network discretised at [`DC_STEP`] settles to with
+    /// switches `closed` and `injected` held: its circuit at DC.
+    pub fn settle(&self, closed: usize, injected: &[f32; N]) -> MnaState<C> {
+        let mut state = MnaState::default();
+        for _ in 0..SETTLE_STEPS {
+            self.step(&mut state, closed, injected);
+        }
+        state
+    }
+
     #[inline]
     pub fn step<L: Lanes>(
         &self,
@@ -223,8 +242,8 @@ impl<const N: usize, const C: usize, const S: usize, const K: usize> Mna<N, C, S
         self.close(state, closed, x, &[])
     }
 
-    /// The sample's solution with no current into the port node yet: its
-    /// voltage there is the port's open-circuit voltage.
+    /// The sample's solution before [`Self::close`] drives currents into
+    /// its ports: a port node's voltage here is its open-circuit voltage.
     #[inline]
     pub fn open<L: Lanes>(
         &self,

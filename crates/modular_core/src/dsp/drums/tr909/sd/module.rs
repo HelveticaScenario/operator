@@ -76,6 +76,8 @@ struct Channel {
     voices: Voices<Snare>,
     noise: Noise,
     rate: Cached<f32, f32>,
+    /// C67's per-sample fall through the tone pot at its knob's travel.
+    tone_fall: Cached<f32, f32>,
 }
 
 impl Sd909 {
@@ -86,16 +88,9 @@ impl Sd909 {
         sh.timing = Timing::new(TRIG_SECS, sample_rate);
         sh.dt = dt;
         sh.noise_rate = Noise::rate(sample_rate);
-        // The noise network at DC: discretised at a step long enough that
-        // its capacitors carry no current.
-        let dc = noise_network(DC_STEP);
         let mut injected = [0.0f32; NOISE_UNKNOWNS];
         injected[NOISE_IN] = NOISE_MEAN * STIFF;
-        let mut rest = MnaState::default();
-        for _ in 0..DC_ITERATIONS {
-            dc.step(&mut rest, 0, &injected);
-        }
-        sh.noise_rest = rest;
+        sh.noise_rest = noise_network(DC_STEP).settle(0, &injected);
         sh.noise = noise_network(dt);
         sh.reset1 = (-dt / VCO1_RESET).exp();
         sh.reset2 = (-dt / VCO2_RESET).exp();
@@ -203,12 +198,14 @@ impl<I: Input> ChannelInputs<SnareDrum> for SdInputs<I> {
 
     #[inline(always)]
     fn inputs(&self, ch: usize, channel: &mut Channel) -> (f32, SnareControls) {
-        let tone = 1.0 / (R254 + VR7 * knob(self.tone.at(ch)));
+        let tone_fall = channel.tone_fall.get(knob(self.tone.at(ch)), |k| {
+            (-(1.0 / (R254 + VR7 * k)) * self.dt / C67).exp()
+        });
         let controls = SnareControls {
             rate: channel
                 .rate
                 .get(self.freq.at(ch), |f| (f - Sd909Params::FREQ_DEFAULT).exp2()),
-            tone_fall: (-tone * self.dt / C67).exp(),
+            tone_fall,
             snappy: VR9 * knob(self.snappy.at(ch)) as f64,
             noise: channel.noise.next(self.noise_rate),
         };

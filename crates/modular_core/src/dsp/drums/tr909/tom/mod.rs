@@ -18,14 +18,14 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    COLLECTOR, DIODE, DIODE_DROP, RAIL, Shaper, TRIG_V, VCA, VSAT, accent_volts, diode_pair,
-    vca_port,
+    COLLECTOR, DIODE, DIODE_DROP, OFF, RAIL, Shaper, TRIG_V, VCA, VSAT, accent_volts, diode_pair,
+    vca_port, vca_port_gated,
 };
-use super::noise::Noise;
+use super::noise::{NOISE_MEAN, Noise};
 use crate::dsp::drums::analog::{Exp, Junction, VT, converged};
 use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
-use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
+use crate::dsp::drums::mna::{DC_STEP, GROUND, Mna, MnaBuilder, MnaState, STIFF};
 use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
@@ -37,7 +37,7 @@ pub use modules::{Ht909, Lt909, Mt909};
 use vco::*;
 
 /// The capacitors that set a tom apart.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct TomParts {
     /// The VCOs' integrator capacitors: VCO-1 (C18), VCO-2 (C19), VCO-3
     /// (C20).
@@ -92,6 +92,8 @@ const R112: f32 = 10.0e3;
 const TUNE: f32 = RAIL * (R112 + 0.5 * VR10) / (R113 + VR10 + R112);
 // IC14b: R66 feedback over R64 from VDD, R60 from C16 and R61 from C17,
 // which the trigger charges through D14 and D15.
+/// IC14b's feedback; R64 matches it, passing VDD at unity.
+const R66: f32 = 100.0e3;
 const R60: f32 = 2.2e6;
 const C16: f32 = 0.1e-6;
 const R61: f32 = 470.0e3;
@@ -119,9 +121,6 @@ const SHAPER: Shaper = Shaper {
     vca: VCA,
 };
 const R_COLLECTOR: f64 = 47.0;
-/// Below this base current a transistor passes nothing that reaches the
-/// output.
-const OFF: f64 = 1.0e-10;
 
 // The envelopes' base resistors: R107 (ENV1 into Q19), R109 (ENV2 into
 // Q20), R110 (ENV3 into Q21). R108 drains ENV1 into ENV2, R100 joins
@@ -147,7 +146,6 @@ const N53: usize = 5;
 const OP27: usize = 6;
 const NOISE_UNKNOWNS: usize = 7;
 const NOISE_CAPS: usize = 4;
-const STIFF: f32 = 10.0;
 const R195: f64 = 1.0e3;
 const R199: f64 = 47.0;
 const C54: f32 = 0.0047e-6;
@@ -166,10 +164,6 @@ const SETTLED: f32 = 3.0e-4;
 /// Every envelope below this has let its VCA all but close; VCO-3's drains
 /// only through Q21's base, ever more slowly.
 const ENV_SETTLED: f32 = 0.65;
-
-const NOISE_MEAN: f32 = 0.5 * RAIL;
-const DC_STEP: f32 = 1.0e3;
-const DC_ITERATIONS: usize = 4;
 
 /// A tom's circuit state.
 #[derive(Clone, Copy, Default)]
@@ -217,7 +211,7 @@ lanewise!(Tom {
 
 #[derive(Default)]
 struct TomShared {
-    parts: Option<TomParts>,
+    parts: TomParts,
     timing: Timing,
     dt: f32,
     noise_rate: f32,
@@ -262,9 +256,7 @@ impl<L: Lanes> Circuit<L> for Tom<L> {
     }
 
     fn step(&mut self, sh: &TomShared, ctl: &TomControls<L>) -> L::S {
-        let Some(parts) = sh.parts else {
-            return c(0.0);
-        };
+        let parts = sh.parts;
         let dt = sh.dt;
         let trig = self.trigger.next();
         let triggered = trig.gt(c(0.0));
@@ -289,7 +281,7 @@ impl<L: Lanes> Circuit<L> for Tom<L> {
 
         // The inverters' supply and the VCOs.
         let vdd = c::<L::S>(TUNE);
-        let vss = vdd + self.c16 * (100.0e3 / R60) + self.c17 * (100.0e3 / R61);
+        let vss = vdd + self.c16 * (R66 / R60) + self.c17 * (R66 / R61);
         for (k, vco) in self.vcos.iter_mut().enumerate() {
             let reset = Vco {
                 tri: vco.tri * sh.reset[k],
@@ -330,22 +322,7 @@ impl<L: Lanes> Circuit<L> for Tom<L> {
         let x = sh.noise.open(&self.noise, open, &injected);
         let z = L::wide(sh.noise.impedance::<L>(open, N53, N53));
         let open53 = L::wide(x[N53]);
-        let on33 = ib33.gt(c(OFF));
-        let (ie33, drawn) = if on33.all() {
-            vca_port(&VCA, on33, &mut self.vc[3], open53, z + R195, R199, ib33)
-        } else {
-            let idle = open53 / (z + R195 + R199);
-            if on33.any() {
-                let (ie, drawn) =
-                    vca_port(&VCA, on33, &mut self.vc[3], open53, z + R195, R199, ib33);
-                (
-                    L::D::select(on33, ie, c(0.0)),
-                    L::D::select(on33, drawn, idle),
-                )
-            } else {
-                (c(0.0), idle)
-            }
-        };
+        let (ie33, drawn) = vca_port_gated(&VCA, &mut self.vc[3], open53, z + R195, R199, ib33);
         sh.noise
             .close(&mut self.noise, open, x, &[(N53, -L::narrow(drawn))]);
         let burst = (ie33 * -R193).clamp(c(-VSAT as f64), c(VSAT as f64));
@@ -370,25 +347,10 @@ impl<L: Lanes> Circuit<L> for Tom<L> {
             c(0.0)
         };
         let [s2, s3] = &mut self.shape;
-        let on20 = ib20.gt(c(OFF));
-        let ie20 = if on20.any() {
-            let tri = L::wide(self.vcos[1].tri);
-            L::D::select(
-                on20,
-                SHAPER.solve(on20, s2, &mut self.vc[1], tri, ib20),
-                c(0.0),
-            )
-        } else {
-            c(0.0)
-        };
-        let on21 = ib21.gt(c(OFF));
-        let ie21 = if on21.any() {
-            let tri = L::wide(self.vcos[2].tri);
-            let ie = SHAPER.solve_with(on21, s3, &mut self.vc[2], tri, burst, 1.0 / R194, ib21);
-            L::D::select(on21, ie, c(0.0))
-        } else {
-            c(0.0)
-        };
+        let tri2 = L::wide(self.vcos[1].tri);
+        let ie20 = SHAPER.solve_gated(s2, &mut self.vc[1], tri2, ib20);
+        let tri3 = L::wide(self.vcos[2].tri);
+        let ie21 = SHAPER.solve_with_gated(s3, &mut self.vc[2], tri3, burst, 1.0 / R194, ib21);
 
         let out = L::narrow(-((ie19 + ie20 + ie21) * R_LEVEL)).clamp(c(-VSAT), c(VSAT));
         self.quiet.track(out, sh.timing.quiet_fall);

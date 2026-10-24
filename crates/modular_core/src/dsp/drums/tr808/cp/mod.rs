@@ -15,7 +15,7 @@ use crate::dsp::drums::analog::VT;
 use crate::dsp::drums::clap::{Envelope, EnvelopeNetwork, ota_current};
 use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
-use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
+use crate::dsp::drums::mna::{DC_STEP, GROUND, Mna, MnaBuilder, MnaState, STIFF, Switch};
 use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
@@ -59,8 +59,6 @@ const D69: usize = 0;
 const D68: usize = 1;
 const NOISE_SWITCHES: usize = 2;
 const NOISE_COMBOS: usize = 1 << NOISE_SWITCHES;
-/// Conductance driving the noise input to the generator's voltage.
-const STIFF: f32 = 10.0;
 /// Q69's emitter and a diode's resistance as they charge an envelope.
 const R_CHARGE: f32 = 100.0;
 /// Q69's base-emitter drop and the diodes' drop as it charges.

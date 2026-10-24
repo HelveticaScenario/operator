@@ -132,6 +132,10 @@ const COLLECTOR_DONE: f64 = converged(1.0e-8, VT as f64);
 /// a decade tighter than its own tolerance.
 const DIODE_DONE: f64 = converged(1.0e-7, DIODE_NVT);
 
+/// Below this base current a transistor passes nothing that reaches the
+/// output.
+pub const OFF: f64 = 1.0e-10;
+
 /// The scale of the exponential of a VCA's collector voltage that
 /// [`TransistorVca::currents`] takes.
 pub const COLLECTOR: f64 = -INV_VT;
@@ -208,6 +212,43 @@ impl Shaper {
         ib: L::D,
     ) -> L::D {
         self.solve_with(on, d, vc, vi, c(0.0), 0.0, ib)
+    }
+
+    /// [`Self::solve`] in the lanes where `ib` turns the transistor on; the
+    /// others pass nothing.
+    #[inline(always)]
+    pub fn solve_gated<L: Lanes>(
+        &self,
+        d: &mut Junction<L>,
+        vc: &mut Junction<L>,
+        vi: L::D,
+        ib: L::D,
+    ) -> L::D {
+        let on = ib.gt(c(OFF));
+        if !on.any() {
+            return c(0.0);
+        }
+        L::D::select(on, self.solve(on, d, vc, vi, ib), c(0.0))
+    }
+
+    /// [`Self::solve_with`] in the lanes where `ib` turns the transistor on;
+    /// the others pass nothing.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub fn solve_with_gated<L: Lanes>(
+        &self,
+        d: &mut Junction<L>,
+        vc: &mut Junction<L>,
+        vi: L::D,
+        volts: L::D,
+        g: f64,
+        ib: L::D,
+    ) -> L::D {
+        let on = ib.gt(c(OFF));
+        if !on.any() {
+            return c(0.0);
+        }
+        L::D::select(on, self.solve_with(on, d, vc, vi, volts, g, ib), c(0.0))
     }
 
     /// [`Self::solve`] with a source at `volts` also feeding the collector
@@ -296,4 +337,27 @@ pub fn vca_port<L: Lanes>(
         e: Exp::select(on, k, vc.e),
     };
     (vca.currents(ib, k).emitter, (open - v) * g_source)
+}
+
+/// [`vca_port`] in the lanes where `ib` turns the transistor on; in the
+/// others it passes nothing, and the source sees only `ohms` and `r_load`.
+#[inline(always)]
+pub fn vca_port_gated<L: Lanes>(
+    vca: &TransistorVca,
+    vc: &mut Junction<L>,
+    open: L::D,
+    ohms: L::D,
+    r_load: f64,
+    ib: L::D,
+) -> (L::D, L::D) {
+    let on = ib.gt(c(OFF));
+    if on.all() {
+        return vca_port(vca, on, vc, open, ohms, r_load, ib);
+    }
+    let idle = open / (ohms + r_load);
+    if !on.any() {
+        return (c(0.0), idle);
+    }
+    let (ie, drawn) = vca_port(vca, on, vc, open, ohms, r_load, ib);
+    (L::D::select(on, ie, c(0.0)), L::D::select(on, drawn, idle))
 }

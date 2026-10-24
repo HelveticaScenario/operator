@@ -16,20 +16,20 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{DIODE_DROP, MUTING, RAIL, Shaper, TRIG_V, VCA, VSAT, accent_volts, vca_port};
-use super::noise::Noise;
+use super::circuit::{
+    DIODE_DROP, MUTING, RAIL, Shaper, TRIG_V, VCA, VSAT, accent_volts, vca_port_gated,
+};
+use super::noise::{NOISE_MEAN, Noise};
+use super::vco::Vco;
 use crate::dsp::drums::analog::Junction;
 use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
-use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
+use crate::dsp::drums::mna::{DC_STEP, GROUND, Mna, MnaBuilder, MnaState, STIFF};
 use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
 mod module;
-mod vco;
-
-use vco::Vco;
 
 pub use module::Sd909;
 
@@ -118,16 +118,11 @@ const OP_LOW: usize = 10;
 const OP_HIGH: usize = 11;
 const NOISE_UNKNOWNS: usize = 12;
 const NOISE_CAPS: usize = 6;
-/// Conductance driving the noise input to the generator's voltage.
-const STIFF: f32 = 10.0;
 /// R299 and R278 into Q48's and Q47's collectors, each with 47 Ω to
 /// ground.
 const R299: f64 = 4.7e3;
 const R278: f64 = 2.2e3;
 const R_COLLECTOR: f64 = 47.0;
-/// Below this base current a transistor passes nothing that reaches the
-/// output.
-const OFF: f64 = 1.0e-10;
 
 // The outputs: Q47 and Q48 into IC39b, its feedback the snappy pot VR9;
 // IC39b through C78 and R294 into IC40b, whose feedback is the level pot
@@ -145,10 +140,6 @@ const OUTPUT_GAIN: f32 = 1.067;
 const SETTLED: f32 = 3.0e-3;
 /// Every envelope below this has let its VCA all but close.
 const ENV_SETTLED: f32 = 0.65;
-
-const NOISE_MEAN: f32 = 0.5 * RAIL;
-const DC_STEP: f32 = 1.0e3;
-const DC_ITERATIONS: usize = 4;
 
 fn noise_network(dt: f32) -> Mna<NOISE_UNKNOWNS, NOISE_CAPS, 0, 1> {
     let mut b = MnaBuilder::<NOISE_UNKNOWNS>::default();
@@ -310,10 +301,20 @@ impl<L: Lanes> Circuit<L> for Snare<L> {
         self.c66 = settle + (self.c66 - settle) * mul;
         let vdd = (self.c66 * R249 + TUNE * R248) / (R248 + R249);
 
-        self.vco1
-            .advance(triggered, vdd * ctl.rate / VCO1_RC, dt, sh.reset1);
-        self.vco2
-            .advance(triggered, vdd * ctl.rate / VCO2_RC, dt, sh.reset2);
+        self.vco1.advance(
+            triggered,
+            vdd * ctl.rate / VCO1_RC,
+            dt,
+            sh.reset1,
+            THRESHOLD,
+        );
+        self.vco2.advance(
+            triggered,
+            vdd * ctl.rate / VCO2_RC,
+            dt,
+            sh.reset2,
+            THRESHOLD,
+        );
 
         // The envelopes: charged from the gated accent while the trigger
         // lasts, the drum VCAs' second stages held empty meanwhile.
@@ -352,52 +353,17 @@ impl<L: Lanes> Circuit<L> for Snare<L> {
         let x = sh.noise.open(&self.noise, open, &injected);
         let z = L::wide(sh.noise.impedance::<L>(open, T80, T80));
         let open80 = L::wide(x[T80]);
-        let on48 = ib[2].gt(c(OFF));
-        let (ie48, i48) = if on48.all() {
-            vca_port(
-                &MUTING,
-                on48,
-                &mut self.vc48,
-                open80,
-                z + R299,
-                R_COLLECTOR,
-                ib[2],
-            )
-        } else {
-            let idle = open80 / (z + R299 + R_COLLECTOR);
-            if on48.any() {
-                let (ie, i) = vca_port(
-                    &MUTING,
-                    on48,
-                    &mut self.vc48,
-                    open80,
-                    z + R299,
-                    R_COLLECTOR,
-                    ib[2],
-                );
-                (L::D::select(on48, ie, c(0.0)), L::D::select(on48, i, idle))
-            } else {
-                (c(0.0), idle)
-            }
-        };
+        let (ie48, i48) = vca_port_gated(
+            &MUTING,
+            &mut self.vc48,
+            open80,
+            z + R299,
+            R_COLLECTOR,
+            ib[2],
+        );
         // IC39a's output drives R278 without moving.
-        let on47 = ib[3].gt(c(OFF));
-        let ie47 = if on47.any() {
-            let high = L::wide(x[HIGH]);
-            let ie = vca_port(
-                &MUTING,
-                on47,
-                &mut self.vc47,
-                high,
-                c(R278),
-                R_COLLECTOR,
-                ib[3],
-            )
-            .0;
-            L::D::select(on47, ie, c(0.0))
-        } else {
-            c(0.0)
-        };
+        let high = L::wide(x[HIGH]);
+        let (ie47, _) = vca_port_gated(&MUTING, &mut self.vc47, high, c(R278), R_COLLECTOR, ib[3]);
         sh.noise
             .close(&mut self.noise, open, x, &[(T80, -L::narrow(i48))]);
 
@@ -406,22 +372,10 @@ impl<L: Lanes> Circuit<L> for Snare<L> {
         let i294 = (snappy - self.c78) / R294;
         self.c78 += i294 * dt / C78;
 
-        let on50 = ib[0].gt(c(OFF));
-        let ie50 = if on50.any() {
-            let tri = L::wide(self.vco1.tri);
-            let ie = SHAPER1.solve(on50, &mut self.d1, &mut self.vc50, tri, ib[0]);
-            L::D::select(on50, ie, c(0.0))
-        } else {
-            c(0.0)
-        };
-        let on51 = ib[1].gt(c(OFF));
-        let ie51 = if on51.any() {
-            let tri = L::wide(self.vco2.tri);
-            let ie = SHAPER2.solve(on51, &mut self.d2, &mut self.vc51, tri, ib[1]);
-            L::D::select(on51, ie, c(0.0))
-        } else {
-            c(0.0)
-        };
+        let tri1 = L::wide(self.vco1.tri);
+        let ie50 = SHAPER1.solve_gated(&mut self.d1, &mut self.vc50, tri1, ib[0]);
+        let tri2 = L::wide(self.vco2.tri);
+        let ie51 = SHAPER2.solve_gated(&mut self.d2, &mut self.vc51, tri2, ib[1]);
         let out = L::narrow(-((ie50 + ie51 + L::wide(i294)) * R_LEVEL)).clamp(c(-VSAT), c(VSAT));
         self.quiet.track(out, sh.timing.quiet_fall);
         out
