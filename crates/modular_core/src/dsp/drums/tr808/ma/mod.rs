@@ -13,10 +13,10 @@ use crate::dsp::drums::lanes::Mono;
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{PULSE_V, Timing, WhiteNoise, pulse_volts};
+use super::circuit::{PULSE_V, WhiteNoise, pulse_volts};
 use crate::dsp::drums::analog::{high_pass, one_pole_coeff, rc_hz};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -249,7 +249,7 @@ impl Fire for Shake {
         }
         self.level
             .set(volts / PULSE_V, sounding, shared.timing.fade_samples);
-        self.pulse.fire(volts, shared.timing.pulse_samples);
+        self.pulse.fire(volts, shared.timing.trigger_samples);
     }
 }
 

@@ -16,10 +16,10 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    Arms, BridgedT, DiodeCoupler, SILENCE, T60_TO_RATE, Timing, decay_around, pulse_volts,
+    Arms, BridgedT, DiodeCoupler, SILENCE, T60_TO_RATE, decay_around, pulse_volts,
 };
 use crate::dsp::drums::analog::{VT, high_pass, one_pole_coeff, rc_hz};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Timing, Voices};
 use crate::dsp::utils::{sanitize, voct_to_hz};
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -248,7 +248,7 @@ struct RimControls {
 impl Fire for Rim {
     fn fire(&mut self, accent: f32, shared: &RimShared) {
         let volts = pulse_volts(accent);
-        self.pulse.fire(volts, shared.timing.pulse_samples);
+        self.pulse.fire(volts, shared.timing.trigger_samples);
     }
 }
 
@@ -375,7 +375,7 @@ impl Fire for Claves {
 
     fn fire(&mut self, accent: f32, shared: &ClavesShared) {
         let volts = pulse_volts(accent);
-        self.pulse.fire(volts, shared.timing.pulse_samples);
+        self.pulse.fire(volts, shared.timing.trigger_samples);
     }
 }
 

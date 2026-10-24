@@ -17,13 +17,14 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    Arms, Biquad, BiquadState, BridgedT, SILENCE, T60_TO_RATE, Timing, WhiteNoise, decay_around,
-    pulse_volts,
+    Arms, Biquad, BiquadState, BridgedT, PULSE_SECS, SILENCE, T60_TO_RATE, WhiteNoise,
+    decay_around, pulse_volts,
 };
 use crate::dsp::drums::analog::{Exp, VT, converged, high_pass, low_pass, one_pole_coeff, rc_hz};
-use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
+use crate::dsp::drums::input::Cached;
 use crate::dsp::drums::lanes::{Lanes, Lanewise, Mask, Mono, Real, c, lanewise};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal};
@@ -154,7 +155,7 @@ impl TomState {
         self.dt = dt;
         self.accent_trim = parts.accent_trim;
         self.tuning = tuning_table();
-        self.timing = Timing::new(sample_rate);
+        self.timing = Timing::new(PULSE_SECS, sample_rate);
         self.noise = parts.noise.as_ref();
         self.noise_scale = WhiteNoise::scale(sample_rate);
         self.pink =
@@ -181,7 +182,7 @@ impl TomState {
 struct Channel {
     voices: Voices<Voice>,
     noise: WhiteNoise,
-    network: Network,
+    network: Cached<(f32, f32), Network>,
 }
 
 /// The settings for one sample.
@@ -206,8 +207,8 @@ impl Drum for TomDrum {
     type Circuit<L: Lanes> = Voice<L>;
     type Controls<L: Lanes> = Controls<L>;
     type Sources<L: Lanes> = ();
-    const QUAD: bool = true;
-    const PAIR: bool = false;
+    const RUNS_IN_QUADS: bool = true;
+    const RUNS_IN_PAIRS: bool = false;
 }
 
 impl Fire for Voice {
@@ -217,7 +218,7 @@ impl Fire for Voice {
 
     fn fire(&mut self, accent: f32, st: &TomState) {
         self.pulse
-            .fire(pulse_volts(accent), st.timing.pulse_samples);
+            .fire(pulse_volts(accent), st.timing.trigger_samples);
     }
 }
 

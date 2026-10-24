@@ -2,7 +2,8 @@ use std::ops::Range;
 
 use super::*;
 use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
-use crate::dsp::drums::voice::rails;
+use crate::dsp::drums::tr909::circuit::{TRIG_SECS, tapered_pot};
+use crate::dsp::drums::voice::{Timing, knob, rails};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
@@ -82,8 +83,9 @@ struct Channel {
     voices: Voices<BassDrum>,
     noise: Noise,
     rate: Cached<f32, f32>,
-    sweep: TaperedPot,
-    decay: TaperedPot,
+    /// The sweep and decay pots' conductances at their knobs' travel.
+    sweep: Cached<f32, f32>,
+    decay: Cached<f32, f32>,
 }
 
 impl Bd909 {
@@ -91,7 +93,7 @@ impl Bd909 {
         let dt = 1.0 / sample_rate;
         self.state.groups = Groups::new();
         let sh = &mut self.state.shared;
-        sh.timing = Timing::new(sample_rate);
+        sh.timing = Timing::new(TRIG_SECS, sample_rate);
         sh.dt = dt;
         sh.noise_rate = Noise::rate(sample_rate);
         sh.envelope = envelope_network(dt);
@@ -206,7 +208,7 @@ struct BdInputs<I> {
     noise_rate: f32,
 }
 
-impl<I: Input> Channels<BassDrumFamily> for BdInputs<I> {
+impl<I: Input> ChannelInputs<BassDrumFamily> for BdInputs<I> {
     type Channel = Channel;
 
     fn voices(channel: &mut Channel) -> &mut Voices<BassDrum> {
@@ -215,14 +217,17 @@ impl<I: Input> Channels<BassDrumFamily> for BdInputs<I> {
 
     #[inline(always)]
     fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, DrumControls) {
-        let knob = |s: I| s.at(ch).clamp(0.0, 5.0) / 5.0;
         let controls = DrumControls {
             rate: cs
                 .rate
                 .get(self.freq.at(ch), |f| (f - Bd909Params::FREQ_DEFAULT).exp2()),
-            sweep: cs.sweep.conductance(knob(self.sweep), R57, VR2),
-            decay: cs.decay.conductance(knob(self.decay), R58, VR5),
-            attack: VR3 * (1.0 - knob(self.attack)),
+            sweep: cs
+                .sweep
+                .get(knob(self.sweep.at(ch)), |k| tapered_pot(k, R57, VR2)),
+            decay: cs
+                .decay
+                .get(knob(self.decay.at(ch)), |k| tapered_pot(k, R58, VR5)),
+            attack: VR3 * (1.0 - knob(self.attack.at(ch))),
             noise: cs.noise.next(self.noise_rate),
         };
         (self.trigger.at(ch), controls)

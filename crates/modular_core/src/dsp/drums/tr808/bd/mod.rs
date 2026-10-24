@@ -14,14 +14,12 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{
-    DIODE_DROP, SILENCE, T60_TO_RATE, Timing, VSAT, decay_secs, pulse_volts, trapezoid,
-};
+use super::circuit::{DIODE_DROP, SILENCE, T60_TO_RATE, VSAT, decay_secs, pulse_volts, trapezoid};
 use super::levels;
 use crate::dsp::drums::analog::{high_pass, low_pass, one_pole_coeff};
-use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Timing, Voices, knob};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -139,7 +137,7 @@ impl<L: Lanes> Default for Voice<L> {
 impl Fire for Voice {
     fn fire(&mut self, accent: f32, st: &Bd808State) {
         self.pulse
-            .fire(pulse_volts(accent), st.timing.pulse_samples);
+            .fire(pulse_volts(accent), st.timing.trigger_samples);
     }
 }
 
@@ -169,8 +167,8 @@ impl Drum for BassDrum {
     type Circuit<L: Lanes> = Voice<L>;
     type Controls<L: Lanes> = Controls<L>;
     type Sources<L: Lanes> = ();
-    const QUAD: bool = true;
-    const PAIR: bool = false;
+    const RUNS_IN_QUADS: bool = true;
+    const RUNS_IN_PAIRS: bool = false;
 }
 
 #[derive(Default)]
@@ -192,10 +190,8 @@ struct Bd808State {
 /// Bridged-T coefficients for one `freq` and `decay`. Scaling both arm
 /// capacitors by 1/r scales every frequency by r; the feedback buffer gain
 /// (Vfb = −g·Vbt) then sets the decay rate.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Network {
-    freq: f32,
-    decay: f32,
     /// Arm capacitance, F.
     c: f32,
     /// 1 / (R167·C).
@@ -203,20 +199,6 @@ struct Network {
     g: f32,
     /// Output gain levelling `freq`.
     level: f32,
-}
-
-impl Default for Network {
-    fn default() -> Self {
-        // NaN never compares equal, so the first sample always computes.
-        Self {
-            freq: f32::NAN,
-            decay: f32::NAN,
-            c: C41_42,
-            a: 0.0,
-            g: 0.0,
-            level: 1.0,
-        }
-    }
 }
 
 impl Network {
@@ -235,8 +217,6 @@ impl Network {
         let g_crit = R170 * (1.0 / R167 + c * a);
         let g = (R170 * (1.0 / R167 + c * (a - 2.0 * rate))).clamp(0.0, g_crit * 0.999);
         Self {
-            freq,
-            decay,
             c,
             a,
             g,
@@ -385,7 +365,7 @@ impl<L: Lanes> Voice<L> {
 /// Cutoff of the tone low-pass for a `tone` of 0–5 V. VR5 is a reverse-log
 /// pot, so turning it up removes resistance quickly at first.
 fn tone_hz(tone: f32) -> f32 {
-    let rotation = 1.0 - tone.clamp(0.0, 5.0) / 5.0;
+    let rotation = 1.0 - knob(tone);
     let vr5 = VR5 * (10f32.powf(2.0 * rotation) - 1.0) / 99.0;
     let r_eq = R171 + R172 * vr5 / (R172 + vr5);
     1.0 / (std::f32::consts::TAU * r_eq * C45)

@@ -1,8 +1,9 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Input, Live, each_slot};
-use crate::dsp::drums::voice::rails;
+use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
+use crate::dsp::drums::tr808::circuit::PULSE_SECS;
+use crate::dsp::drums::voice::{Timing, knob, rails};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
@@ -46,27 +47,12 @@ struct Sd808Outputs {
     sample: PolyOutput,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct ChannelState {
     voices: Voices<Voice>,
     noise: WhiteNoise,
-    tuning: Tuning,
-}
-
-impl Default for ChannelState {
-    fn default() -> Self {
-        Self {
-            voices: Voices::default(),
-            noise: WhiteNoise::default(),
-            tuning: Tuning {
-                // NaN never compares equal, so the first sample always tunes.
-                freq: f32::NAN,
-                low: LOW,
-                high: HIGH,
-                level: 1.0,
-            },
-        }
-    }
+    /// The resonators tuned for the channel's `freq`.
+    tuning: Cached<f32, Tuning>,
 }
 
 /// TR-808 snare drum.
@@ -103,7 +89,7 @@ impl Sd808 {
         let st = &mut self.state.st;
         let dt = 1.0 / sample_rate;
         st.dt = dt;
-        st.timing = Timing::new(sample_rate);
+        st.timing = Timing::new(PULSE_SECS, sample_rate);
         st.rest_hz = LOW.rest_hz(1.0 / R196);
         st.low_decay = T60_TO_RATE / LOW.decay_rate();
         st.high_decay = T60_TO_RATE / HIGH.decay_rate();
@@ -209,7 +195,7 @@ struct SdInputs<'a, I> {
     snappy: I,
 }
 
-impl<I: Input> Channels<Snare> for SdInputs<'_, I> {
+impl<I: Input> ChannelInputs<Snare> for SdInputs<'_, I> {
     type Channel = ChannelState;
 
     fn voices(channel: &mut ChannelState) -> &mut Voices<Voice> {
@@ -218,17 +204,16 @@ impl<I: Input> Channels<Snare> for SdInputs<'_, I> {
 
     #[inline(always)]
     fn inputs(&self, ch: usize, cs: &mut ChannelState) -> (f32, Controls) {
-        let freq = self.freq.at(ch);
-        if freq != cs.tuning.freq {
-            cs.tuning = Tuning::new(self.st, freq);
-        }
+        let tuning = cs
+            .tuning
+            .get(self.freq.at(ch), |freq| Tuning::new(self.st, freq));
         let controls = Controls {
-            low: cs.tuning.low,
-            high: cs.tuning.high,
-            tone: self.tone.at(ch).clamp(0.0, 5.0) / 5.0,
-            snappy: self.snappy.at(ch).clamp(0.0, 5.0) / 5.0,
+            low: tuning.low,
+            high: tuning.high,
+            tone: knob(self.tone.at(ch)),
+            snappy: knob(self.snappy.at(ch)),
             white: cs.noise.next(self.st.noise_scale),
-            level: cs.tuning.level,
+            level: tuning.level,
         };
         (self.trigger.at(ch), controls)
     }

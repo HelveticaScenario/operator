@@ -13,13 +13,13 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{Timing, pulse_volts};
+use super::circuit::pulse_volts;
 use super::metal::{MetalBank, MetalFilters, metal_pulse};
 use super::swing::{SwingState, vca};
-use crate::dsp::drums::group::{Channels, Drum, Groups, QUAD, Run};
+use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, QUAD, Run};
 use crate::dsp::drums::lanes::{Lanes, Lanewise, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -194,8 +194,8 @@ impl Drum for CymbalDrum {
     type Circuit<L: Lanes> = Cymbal<L>;
     type Controls<L: Lanes> = CymbalControls<L>;
     type Sources<L: Lanes> = MetalBank<L>;
-    const QUAD: bool = true;
-    const PAIR: bool = true;
+    const RUNS_IN_QUADS: bool = true;
+    const RUNS_IN_PAIRS: bool = true;
 }
 
 /// Brings a fully accented hit to twice the level of an unaccented one.
@@ -213,7 +213,7 @@ impl Fire for Cymbal {
             self.primed = true;
         }
         self.pulse
-            .fire(metal_pulse(volts), shared.timing.pulse_samples);
+            .fire(metal_pulse(volts), shared.timing.trigger_samples);
     }
 }
 

@@ -1,8 +1,9 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Input, Live, each_slot};
-use crate::dsp::drums::voice::rails;
+use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
+use crate::dsp::drums::tr808::circuit::PULSE_SECS;
+use crate::dsp::drums::voice::{Timing, rails};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
@@ -78,25 +79,13 @@ struct BdModule {
     groups: Groups<BassDrum>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct ChannelState {
     voices: Voices<Voice>,
-    network: Network,
-    /// `tone` the low-pass coefficient is computed for.
-    tone: f32,
-    tone_coeff: f32,
-}
-
-impl Default for ChannelState {
-    fn default() -> Self {
-        Self {
-            voices: Voices::default(),
-            network: Network::default(),
-            // NaN never compares equal, so the first sample always computes.
-            tone: f32::NAN,
-            tone_coeff: 0.0,
-        }
-    }
+    /// The bridged-T for the channel's `freq` and `decay`.
+    network: Cached<(f32, f32), Network>,
+    /// The tone low-pass coefficient for its `tone`.
+    tone: Cached<f32, f32>,
 }
 
 impl Bd808 {
@@ -104,7 +93,7 @@ impl Bd808 {
         self.state.groups = Groups::new();
         let st = &mut self.state.st;
         let dt = 1.0 / sample_rate;
-        st.timing = Timing::new(sample_rate);
+        st.timing = Timing::new(PULSE_SECS, sample_rate);
         st.dt = dt;
         st.sample_rate = sample_rate;
         let shaper_tau = C40 * R162 * R163 / (R162 + R163);
@@ -205,7 +194,7 @@ struct BdInputs<'a, I> {
     tone: I,
 }
 
-impl<I: Input> Channels<BassDrum> for BdInputs<'_, I> {
+impl<I: Input> ChannelInputs<BassDrum> for BdInputs<'_, I> {
     type Channel = ChannelState;
 
     fn voices(channel: &mut ChannelState) -> &mut Voices<Voice> {
@@ -214,22 +203,20 @@ impl<I: Input> Channels<BassDrum> for BdInputs<'_, I> {
 
     #[inline(always)]
     fn inputs(&self, ch: usize, cs: &mut ChannelState) -> (f32, Controls) {
-        let freq = self.freq.at(ch);
-        let decay = self.decay.at(ch);
-        if freq != cs.network.freq || decay != cs.network.decay {
-            cs.network = Network::new(freq, decay, self.st.rest_hz);
-        }
-        let tone = self.tone.at(ch);
-        if tone != cs.tone {
-            cs.tone = tone;
-            cs.tone_coeff = one_pole_coeff(tone_hz(tone), self.st.sample_rate);
-        }
+        let network = cs
+            .network
+            .get((self.freq.at(ch), self.decay.at(ch)), |(freq, decay)| {
+                Network::new(freq, decay, self.st.rest_hz)
+            });
+        let tone_coeff = cs.tone.get(self.tone.at(ch), |tone| {
+            one_pole_coeff(tone_hz(tone), self.st.sample_rate)
+        });
         let controls = Controls {
-            c: cs.network.c,
-            a: cs.network.a,
-            g: cs.network.g,
-            tone_coeff: cs.tone_coeff,
-            level: cs.network.level,
+            c: network.c,
+            a: network.a,
+            g: network.g,
+            tone_coeff,
+            level: network.level,
         };
         (self.trigger.at(ch), controls)
     }

@@ -2,7 +2,8 @@ use std::ops::Range;
 
 use super::*;
 use crate::dsp::drums::input::{Input, Live, each_slot};
-use crate::dsp::drums::voice::rails;
+use crate::dsp::drums::tr808::circuit::PULSE_SECS;
+use crate::dsp::drums::voice::{Timing, knob, rails};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
@@ -84,7 +85,7 @@ impl Cy808 {
     fn init(&mut self, sample_rate: f32) {
         let dt = 1.0 / sample_rate;
         let sh = &mut self.state.shared;
-        sh.timing = Timing::new(sample_rate);
+        sh.timing = Timing::new(PULSE_SECS, sample_rate);
         sh.dt = dt;
         sh.smooth_coeff = 1.0 - (-dt / SMOOTH_TAU).exp();
         sh.env = envelope_network(dt);
@@ -185,8 +186,8 @@ impl<I: Input> CyInputs<'_, I> {
     /// Channel `ch`'s decay and tone conductances.
     #[inline]
     fn pots(&self, ch: usize) -> (f32, [f32; 2]) {
-        let decay = self.decay.at(ch).clamp(0.0, 5.0) / 5.0;
-        let tone = self.tone.at(ch).clamp(0.0, 5.0) / 5.0;
+        let decay = knob(self.decay.at(ch));
+        let tone = knob(self.tone.at(ch));
         (
             1.0 / (R93 + VR2 * decay),
             [pot(VR4, tone), pot(VR4, 1.0 - tone)],
@@ -194,7 +195,7 @@ impl<I: Input> CyInputs<'_, I> {
     }
 }
 
-impl<I: Input> Channels<CymbalDrum> for CyInputs<'_, I> {
+impl<I: Input> ChannelInputs<CymbalDrum> for CyInputs<'_, I> {
     type Channel = Channel;
 
     fn voices(channel: &mut Channel) -> &mut Voices<Cymbal> {

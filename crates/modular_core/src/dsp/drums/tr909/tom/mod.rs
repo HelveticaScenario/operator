@@ -18,15 +18,15 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    COLLECTOR, DIODE, DIODE_DROP, RAIL, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts,
-    diode_pair, vca_port,
+    COLLECTOR, DIODE, DIODE_DROP, RAIL, Shaper, TRIG_V, VCA, VSAT, accent_volts, diode_pair,
+    vca_port,
 };
 use super::noise::Noise;
 use crate::dsp::drums::analog::{Exp, Junction, VT, converged};
-use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -247,7 +247,7 @@ impl Fire for Tom {
             self.primed = true;
         }
         self.accent = ACCENT_GAIN * accent_volts(ACCENT_LOW, accent);
-        self.trigger.fire(TRIG_V, shared.timing.trig_samples);
+        self.trigger.fire(TRIG_V, shared.timing.trigger_samples);
     }
 }
 

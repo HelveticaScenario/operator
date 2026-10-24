@@ -15,15 +15,13 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{
-    DIODE_DROP, RAIL, Shaper, TRIG_V, TaperedPot, Timing, VCA, VSAT, accent_volts, vca_port,
-};
+use super::circuit::{DIODE_DROP, RAIL, Shaper, TRIG_V, VCA, VSAT, accent_volts, vca_port};
 use super::noise::Noise;
 use crate::dsp::drums::analog::Junction;
-use crate::dsp::drums::group::{self, Channels, Groups, Run};
+use crate::dsp::drums::group::{self, ChannelInputs, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -250,8 +248,8 @@ impl group::Drum for BassDrumFamily {
     type Circuit<L: Lanes> = BassDrum<L>;
     type Controls<L: Lanes> = DrumControls<L>;
     type Sources<L: Lanes> = ();
-    const QUAD: bool = false;
-    const PAIR: bool = false;
+    const RUNS_IN_QUADS: bool = false;
+    const RUNS_IN_PAIRS: bool = false;
 }
 
 impl<L: Lanes> BassDrum<L> {
@@ -293,7 +291,7 @@ impl Fire for BassDrum {
             self.primed = true;
         }
         self.accent = (ACCENT_GAIN * accent_volts(ACCENT_LOW, accent)).min(VSAT);
-        self.trigger.fire(TRIG_V, shared.timing.trig_samples);
+        self.trigger.fire(TRIG_V, shared.timing.trigger_samples);
     }
 }
 

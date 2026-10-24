@@ -10,34 +10,18 @@ use serde_json::json;
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-const VOICES: [&str; 22] = [
-    "$tr808.kick",
-    "$tr808.snare",
-    "$tr808.lowTom",
-    "$tr808.midTom",
-    "$tr808.highTom",
-    "$tr808.lowConga",
-    "$tr808.midConga",
-    "$tr808.highConga",
-    "$tr808.rimShot",
-    "$tr808.claves",
-    "$tr808.cowbell",
-    "$tr808.clap",
-    "$tr808.maracas",
-    "$tr808.cymbal",
-    "$tr808.hiHat",
-    "$tr909.kick",
-    "$tr909.snare",
-    "$tr909.lowTom",
-    "$tr909.midTom",
-    "$tr909.highTom",
-    "$tr909.rimShot",
-    "$tr909.clap",
-];
+/// Every `$tr808.*` and `$tr909.*` voice.
+fn voices() -> Vec<String> {
+    modular_core::dsp::drums::schemas()
+        .into_iter()
+        .map(|s| s.name)
+        .collect()
+}
 
 #[test]
 fn allocation_free() {
-    for voice in VOICES {
+    let voices = voices();
+    for voice in voices.iter().map(String::as_str) {
         let trigger = if voice == "$tr808.hiHat" {
             "closed"
         } else {

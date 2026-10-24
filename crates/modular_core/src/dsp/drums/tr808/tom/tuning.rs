@@ -2,29 +2,10 @@ use super::*;
 
 /// The bridged-T tuned for one `freq` and `decay`, and the output gain
 /// levelling `freq`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct Network {
-    pub(super) freq: f32,
-    pub(super) decay: f32,
     pub(super) t: BridgedT,
     pub(super) level: f32,
-}
-
-impl Default for Network {
-    fn default() -> Self {
-        // NaN never compares equal, so the first sample always computes.
-        Self {
-            freq: f32::NAN,
-            decay: f32::NAN,
-            t: BridgedT {
-                c_a: 1.0,
-                c_b: 1.0,
-                r_bridge: R228,
-                g_fb: 0.0,
-            },
-            level: 1.0,
-        }
-    }
 }
 
 impl Network {
@@ -33,8 +14,6 @@ impl Network {
         let stock = stock_t(parts);
         let secs = decay_around(decay, T60_TO_RATE / stock.decay_rate());
         Self {
-            freq,
-            decay,
             t: stock.tuned(r, secs),
             level: parts.level.gain(freq),
         }

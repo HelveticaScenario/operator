@@ -68,10 +68,6 @@ const R_Q73_COLLECTOR: f32 = 10.0;
 const R366: f32 = 15.0e3;
 const PAIR_VBE: f32 = 0.62;
 
-/// The 808's BA662 load, R383, and the swing its output reaches.
-const R383: f32 = 82.0e3;
-const OTA_SWING: f32 = 13.5;
-
 /// The envelope generator's network, discretised for one time step.
 #[derive(Default)]
 pub struct EnvelopeNetwork {
@@ -205,11 +201,4 @@ impl<L: Lanes> Envelope<L> {
 #[inline]
 pub fn ota_current<L: Lanes>(iabc: L::S, input: L::S) -> L::S {
     iabc * (-input / (2.0 * VT)).map(f32::tanh)
-}
-
-/// The BA662's output across the 808's load, R383, for control current
-/// `iabc` and voltage `input` at its inverting input.
-#[inline]
-pub fn ota<L: Lanes>(iabc: L::S, input: L::S) -> L::S {
-    (ota_current::<L>(iabc, input) * R383).clamp(c(-OTA_SWING), c(OTA_SWING))
 }

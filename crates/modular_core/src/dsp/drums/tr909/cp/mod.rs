@@ -11,14 +11,14 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{DIODE_DROP, RAIL, TRIG_V, Timing, VCA, VSAT, accent_volts, vca_port};
+use super::circuit::{DIODE_DROP, RAIL, TRIG_V, VCA, VSAT, accent_volts, vca_port};
 use super::noise::Noise;
 use crate::dsp::drums::analog::Junction;
 use crate::dsp::drums::clap::{Envelope, EnvelopeNetwork, ota_current};
-use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
-use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -174,8 +174,8 @@ impl Drum for ClapDrum {
     /// The noise generator's voltage.
     type Controls<L: Lanes> = L::S;
     type Sources<L: Lanes> = ();
-    const QUAD: bool = true;
-    const PAIR: bool = true;
+    const RUNS_IN_QUADS: bool = true;
+    const RUNS_IN_PAIRS: bool = true;
 }
 
 impl<L: Lanes> Clap<L> {
@@ -250,7 +250,7 @@ impl Fire for Clap {
         self.accent = (ACCENT_GAIN * accent_volts(ACCENT_LOW, accent)).min(VSAT);
         self.level
             .set(1.0 + accent, sounding, shared.timing.fade_samples);
-        self.trigger.fire(TRIG_V, shared.timing.trig_samples);
+        self.trigger.fire(TRIG_V, shared.timing.trigger_samples);
     }
 }
 

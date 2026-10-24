@@ -14,30 +14,10 @@ use crate::types::ProcessingMode;
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 64;
 
-const VOICES: [&str; 22] = [
-    "$tr808.kick",
-    "$tr808.snare",
-    "$tr808.lowTom",
-    "$tr808.midTom",
-    "$tr808.highTom",
-    "$tr808.lowConga",
-    "$tr808.midConga",
-    "$tr808.highConga",
-    "$tr808.rimShot",
-    "$tr808.claves",
-    "$tr808.cowbell",
-    "$tr808.clap",
-    "$tr808.maracas",
-    "$tr808.cymbal",
-    "$tr808.hiHat",
-    "$tr909.kick",
-    "$tr909.snare",
-    "$tr909.lowTom",
-    "$tr909.midTom",
-    "$tr909.highTom",
-    "$tr909.rimShot",
-    "$tr909.clap",
-];
+/// Every drum voice.
+fn voices() -> Vec<String> {
+    super::schemas().into_iter().map(|s| s.name).collect()
+}
 
 /// How a drum's trigger and accent are patched, reaching each way a block
 /// input resolves.
@@ -188,8 +168,9 @@ fn same_bits(a: &[f32], b: &[f32]) -> bool {
 
 #[test]
 fn channels_sound_the_same_alone_and_in_groups() {
+    let voices = voices();
     TEST_SEED_BASE.set(Some(0x5eed));
-    for voice in VOICES {
+    for voice in voices.iter().map(String::as_str) {
         for channels in [2, 3, 6] {
             for restart in [false, true] {
                 let grouped = fresh(voice, channels, restart, 20);
@@ -210,6 +191,7 @@ fn channels_sound_the_same_alone_and_in_groups() {
 
 #[test]
 fn block_and_sample_paths_agree() {
+    let voices = voices();
     TEST_SEED_BASE.set(Some(0x5eed));
     let run = |voice, channels, wiring, mode, steps: &[usize]| {
         let patch = wired(voice, channels, true, wiring, mode);
@@ -218,7 +200,7 @@ fn block_and_sample_paths_agree() {
         render_by(&patch, 8, steps, &mut out);
         out
     };
-    for voice in VOICES {
+    for voice in voices.iter().map(String::as_str) {
         for channels in [1, 3, 6] {
             for wiring in [Wiring::Poly, Wiring::Broadcast, Wiring::Mixed] {
                 let by_sample = run(voice, channels, wiring, ProcessingMode::Sample, &[BLOCK]);
@@ -239,10 +221,11 @@ fn block_and_sample_paths_agree() {
 
 #[test]
 fn channels_keep_sounding_as_updates_regroup_them() {
+    let voices = voices();
     TEST_SEED_BASE.set(Some(0x5eed));
     const COUNTS: [usize; 5] = [6, 4, 1, 2, 6];
     const BLOCKS: usize = 8;
-    for voice in VOICES {
+    for voice in voices.iter().map(String::as_str) {
         let whole = fresh(voice, 6, false, BLOCKS * COUNTS.len());
         let mut old = patch(voice, COUNTS[0], false);
         start(&old);
@@ -276,7 +259,7 @@ mod parking {
     //! A circuit that settles within a few samples, struck on a schedule,
     //! so its lanes settle, park and strike again while others ring.
 
-    use super::super::group::{ALONE, Channels, Drum, Groups, Run};
+    use super::super::group::{ALONE, ChannelInputs, Drum, Groups, Run};
     use super::super::lanes::{Lanes, Mono, Real, c, lanewise};
     use super::super::voice::{Circuit, Fire, Voices};
 
@@ -309,15 +292,15 @@ mod parking {
         }
     }
 
-    struct RingDrum<const QUAD: bool, const PAIR: bool>;
+    struct RingDrum<const RUNS_IN_QUADS: bool, const RUNS_IN_PAIRS: bool>;
 
     impl<const Q: bool, const P: bool> Drum for RingDrum<Q, P> {
         type Shared = ();
         type Circuit<L: Lanes> = Ring<L>;
         type Controls<L: Lanes> = L::S;
         type Sources<L: Lanes> = ();
-        const QUAD: bool = Q;
-        const PAIR: bool = P;
+        const RUNS_IN_QUADS: bool = Q;
+        const RUNS_IN_PAIRS: bool = P;
     }
 
     /// Strikes channel `ch` on samples where `strikes(sample, ch)`.
@@ -329,7 +312,7 @@ mod parking {
         (sample + 3 * ch) % (7 + 5 * ch) < 2
     }
 
-    impl<const Q: bool, const P: bool> Channels<RingDrum<Q, P>> for Script {
+    impl<const Q: bool, const P: bool> ChannelInputs<RingDrum<Q, P>> for Script {
         type Channel = Voices<Ring>;
 
         fn voices(channel: &mut Voices<Ring>) -> &mut Voices<Ring> {

@@ -36,9 +36,9 @@ fn groups<D: Drum>(channels: usize, mut each: impl FnMut(usize, usize, Width)) {
     }
     for first in (0..channels).step_by(QUAD) {
         let lanes = (channels - first).min(QUAD);
-        if lanes > 2 && D::QUAD {
+        if lanes > 2 && D::RUNS_IN_QUADS {
             each(first, lanes, Width::Quad);
-        } else if lanes > 1 && D::PAIR {
+        } else if lanes > 1 && D::RUNS_IN_PAIRS {
             each(first, 2, Width::Pair);
             match lanes {
                 4 => each(first + 2, 2, Width::Pair),
@@ -72,14 +72,15 @@ pub trait Drum: 'static {
     /// circuits, such as the sources the settings come from. Each channel
     /// holds its own, in the [`Mono`] form, while it runs alone.
     type Sources<L: Lanes>: Default;
-    /// Whether three or four channels run faster as one [`X4`] group, and
-    /// two as one [`X2`] pair, than one at a time.
-    const QUAD: bool;
-    const PAIR: bool;
+    /// Whether three or four channels run faster as one [`X4`] group than
+    /// one at a time.
+    const RUNS_IN_QUADS: bool;
+    /// Whether two channels run faster as one [`X2`] pair than one at a time.
+    const RUNS_IN_PAIRS: bool;
 }
 
 /// A drum module's channels, as the module reads them each sample.
-pub trait Channels<D: Drum> {
+pub trait ChannelInputs<D: Drum> {
     /// One channel's state.
     type Channel;
 
@@ -175,8 +176,16 @@ where
     /// Groups for every channel count a module can have. Allocates, so it
     /// belongs in `init`.
     pub fn new() -> Self {
-        let quads = if D::QUAD { PORT_MAX_CHANNELS / QUAD } else { 0 };
-        let pairs = if D::PAIR { PORT_MAX_CHANNELS / 2 } else { 0 };
+        let quads = if D::RUNS_IN_QUADS {
+            PORT_MAX_CHANNELS / QUAD
+        } else {
+            0
+        };
+        let pairs = if D::RUNS_IN_PAIRS {
+            PORT_MAX_CHANNELS / 2
+        } else {
+            0
+        };
         Self {
             channels: 0,
             quads: (0..quads).map(|_| VoiceGroup::default()).collect(),
@@ -186,7 +195,7 @@ where
 
     /// Lays out `count` channels, gathering each channel's state from where
     /// the last layout left it.
-    pub fn layout<A: Channels<D>>(&mut self, channels: &mut [A::Channel], count: usize) {
+    pub fn layout<A: ChannelInputs<D>>(&mut self, channels: &mut [A::Channel], count: usize) {
         groups::<D>(self.channels, |first, lanes, width| {
             let kept = &mut channels[first.min(count)..(first + lanes).min(count)];
             match width {
@@ -209,7 +218,7 @@ where
     /// Runs one sample of every channel, handing `out` each channel's
     /// output.
     #[inline]
-    pub fn run<A: Channels<D>, I: Input>(
+    pub fn run<A: ChannelInputs<D>, I: Input>(
         &mut self,
         adapter: &A,
         channels: &mut [A::Channel],
@@ -274,7 +283,7 @@ where
 {
     /// Takes up the circuits of `members`, one channel per lane. Lanes past
     /// them rest.
-    fn load<A: Channels<D>>(&mut self, members: &mut [A::Channel]) {
+    fn load<A: ChannelInputs<D>>(&mut self, members: &mut [A::Channel]) {
         *self = Self::default();
         for (lane, channel) in members.iter_mut().enumerate() {
             A::load_sources(channel, lane, &mut self.sources);
@@ -290,7 +299,7 @@ where
     }
 
     /// Hands each lane's circuits back to its channel in `members`.
-    fn unload<A: Channels<D>>(&self, members: &mut [A::Channel]) {
+    fn unload<A: ChannelInputs<D>>(&self, members: &mut [A::Channel]) {
         for (lane, channel) in members.iter_mut().enumerate() {
             A::unload_sources(channel, lane, &self.sources);
             let v = A::voices(channel);
@@ -307,7 +316,7 @@ where
     /// [`Voices::process`] does for one channel, handing `out` each
     /// channel's output.
     #[inline(never)]
-    fn run<A: Channels<D>, I: Input>(
+    fn run<A: ChannelInputs<D>, I: Input>(
         &mut self,
         adapter: &A,
         members: &mut [A::Channel],

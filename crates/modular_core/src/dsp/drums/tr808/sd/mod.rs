@@ -13,13 +13,13 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    Arms, Biquad, BiquadState, BridgedT, SILENCE, T60_TO_RATE, Timing, WhiteNoise, pulse_volts,
+    Arms, Biquad, BiquadState, BridgedT, SILENCE, T60_TO_RATE, WhiteNoise, pulse_volts,
 };
 use super::levels;
 use crate::dsp::drums::analog::{high_pass, low_pass, one_pole_coeff, rc_hz};
-use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal};
@@ -147,7 +147,7 @@ impl Fire for Voice {
 
     fn fire(&mut self, accent: f32, st: &Sd808State) {
         self.pulse
-            .fire(pulse_volts(accent), st.timing.pulse_samples);
+            .fire(pulse_volts(accent), st.timing.trigger_samples);
     }
 }
 
@@ -179,8 +179,8 @@ impl Drum for Snare {
     type Circuit<L: Lanes> = Voice<L>;
     type Controls<L: Lanes> = Controls<L>;
     type Sources<L: Lanes> = ();
-    const QUAD: bool = true;
-    const PAIR: bool = false;
+    const RUNS_IN_QUADS: bool = true;
+    const RUNS_IN_PAIRS: bool = false;
 }
 
 #[derive(Default)]
@@ -207,9 +207,8 @@ struct Sd808State {
 
 /// Both resonators tuned for one `freq`, and the output gain levelling it.
 /// `freq` scales both Ts and keeps their stock ring times.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Tuning {
-    freq: f32,
     low: BridgedT,
     high: BridgedT,
     level: f32,
@@ -219,7 +218,6 @@ impl Tuning {
     fn new(st: &Sd808State, freq: f32) -> Self {
         let r = voct_to_hz(freq) / st.rest_hz;
         Self {
-            freq,
             low: LOW.tuned(r, st.low_decay),
             high: HIGH.tuned(r, st.high_decay),
             level: levels::SNARE.gain(freq),

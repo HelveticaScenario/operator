@@ -3,11 +3,11 @@
 //! them through its channel after the closed hat steps.
 
 use super::*;
-use crate::dsp::drums::group::{Channels, Drum, QUAD};
+use crate::dsp::drums::group::{ChannelInputs, Drum, QUAD};
 use crate::dsp::drums::input::{Cached, Input};
 use crate::dsp::drums::lanes::Lanewise;
 use crate::dsp::drums::tr808::metal::{MetalBank, MetalFilters};
-use crate::dsp::drums::voice::Voices;
+use crate::dsp::drums::voice::{Voices, knob};
 
 /// The decay pot, VR3: 2 MΩ linear, after R132.
 const R132: f32 = 100.0e3;
@@ -41,8 +41,8 @@ impl Drum for ClosedHat {
     type Circuit<L: Lanes> = Closed<L>;
     type Controls<L: Lanes> = ClosedControls<L>;
     type Sources<L: Lanes> = MetalBank<L>;
-    const QUAD: bool = true;
-    const PAIR: bool = false;
+    const RUNS_IN_QUADS: bool = true;
+    const RUNS_IN_PAIRS: bool = false;
 }
 
 /// The open hat at every width.
@@ -53,8 +53,8 @@ impl Drum for OpenHat {
     type Circuit<L: Lanes> = Open<L>;
     type Controls<L: Lanes> = OpenControls<L>;
     type Sources<L: Lanes> = ();
-    const QUAD: bool = true;
-    const PAIR: bool = true;
+    const RUNS_IN_QUADS: bool = true;
+    const RUNS_IN_PAIRS: bool = true;
 }
 
 /// The inputs every channel of the closed hat reads.
@@ -75,7 +75,7 @@ impl<I: Input> ClosedSide<'_, I> {
     }
 }
 
-impl<I: Input> Channels<ClosedHat> for ClosedSide<'_, I> {
+impl<I: Input> ChannelInputs<ClosedHat> for ClosedSide<'_, I> {
     type Channel = Channel;
 
     fn voices(channel: &mut Channel) -> &mut Voices<Closed> {
@@ -141,7 +141,7 @@ pub(super) struct OpenSide<I> {
     pub decay: I,
 }
 
-impl<I: Input> Channels<OpenHat> for OpenSide<I> {
+impl<I: Input> ChannelInputs<OpenHat> for OpenSide<I> {
     type Channel = Channel;
 
     fn voices(channel: &mut Channel) -> &mut Voices<Open> {
@@ -150,7 +150,7 @@ impl<I: Input> Channels<OpenHat> for OpenSide<I> {
 
     #[inline(always)]
     fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, OpenControls) {
-        let decay = self.decay.at(ch).clamp(0.0, 5.0) / 5.0;
+        let decay = knob(self.decay.at(ch));
         let controls = OpenControls {
             band: cs.band,
             decay: 1.0 / (R132 + VR3 * decay),

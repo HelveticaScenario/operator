@@ -13,13 +13,13 @@ use std::ops::Range;
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{DIODE_DROP, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts};
+use super::circuit::{DIODE_DROP, Shaper, TRIG_SECS, TRIG_V, VCA, VSAT, accent_volts};
 use crate::dsp::drums::analog::Junction;
-use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::input::{Input, Live, each_slot};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Voices, rails};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Timing, Voices, rails};
 use crate::poly::{PolyOutput, PolySignal};
 
 // IC48b scales the accent voltage by 1 + R406/R397.
@@ -179,14 +179,14 @@ impl Drum for RimDrum {
     type Circuit<L: Lanes> = Rim<L>;
     type Controls<L: Lanes> = ();
     type Sources<L: Lanes> = ();
-    const QUAD: bool = false;
-    const PAIR: bool = false;
+    const RUNS_IN_QUADS: bool = false;
+    const RUNS_IN_PAIRS: bool = false;
 }
 
 impl Fire for Rim {
     fn fire(&mut self, accent: f32, shared: &RimShared) {
         self.accent = (ACCENT_GAIN * accent_volts(ACCENT_LOW, accent)).min(VSAT);
-        self.trigger.fire(TRIG_V, shared.timing.trig_samples);
+        self.trigger.fire(TRIG_V, shared.timing.trigger_samples);
     }
 }
 
@@ -245,7 +245,7 @@ struct RsInputs<I> {
     trigger: I,
 }
 
-impl<I: Input> Channels<RimDrum> for RsInputs<I> {
+impl<I: Input> ChannelInputs<RimDrum> for RsInputs<I> {
     type Channel = Voices<Rim>;
 
     fn voices(channel: &mut Voices<Rim>) -> &mut Voices<Rim> {
@@ -315,7 +315,7 @@ impl Rs909 {
         let dt = 1.0 / sample_rate;
         self.state.groups = Groups::new();
         let sh = &mut self.state.shared;
-        sh.timing = Timing::new(sample_rate);
+        sh.timing = Timing::new(TRIG_SECS, sample_rate);
         sh.dt = dt;
         sh.res = resonator_network(dt);
         sh.out = output_network(dt);

@@ -2,8 +2,9 @@ use std::ops::Range;
 
 use super::*;
 use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
+use crate::dsp::drums::tr808::circuit::PULSE_SECS;
 use crate::dsp::drums::tr808::levels;
-use crate::dsp::drums::voice::rails;
+use crate::dsp::drums::voice::{Timing, rails};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
@@ -80,7 +81,7 @@ fn rim_rest_hz() -> f32 {
 impl Rs808 {
     fn init(&mut self, sample_rate: f32) {
         let st = &mut self.state;
-        st.timing = Timing::new(sample_rate);
+        st.timing = Timing::new(PULSE_SECS, sample_rate);
         st.substeps = (RIM_RATE / sample_rate).round().max(1.0) as u32;
         let rate = sample_rate * st.substeps as f32;
         st.dt = 1.0 / rate;
@@ -244,7 +245,7 @@ pub struct Cl808 {
 impl Cl808 {
     fn init(&mut self, sample_rate: f32) {
         let st = &mut self.state;
-        st.timing = Timing::new(sample_rate);
+        st.timing = Timing::new(PULSE_SECS, sample_rate);
         st.dt = 1.0 / sample_rate;
         st.couple_coeff = one_pole_coeff(rc_hz(R319 + R326, C125), sample_rate);
     }

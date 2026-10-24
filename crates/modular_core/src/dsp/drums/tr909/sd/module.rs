@@ -2,7 +2,8 @@ use std::ops::Range;
 
 use super::*;
 use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
-use crate::dsp::drums::voice::rails;
+use crate::dsp::drums::tr909::circuit::TRIG_SECS;
+use crate::dsp::drums::voice::{Timing, knob, rails};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
@@ -82,7 +83,7 @@ impl Sd909 {
         let dt = 1.0 / sample_rate;
         self.state.groups = Groups::new();
         let sh = &mut self.state.shared;
-        sh.timing = Timing::new(sample_rate);
+        sh.timing = Timing::new(TRIG_SECS, sample_rate);
         sh.dt = dt;
         sh.noise_rate = Noise::rate(sample_rate);
         // The noise network at DC: discretised at a step long enough that
@@ -193,7 +194,7 @@ struct SdInputs<I> {
     dt: f32,
 }
 
-impl<I: Input> Channels<SnareDrum> for SdInputs<I> {
+impl<I: Input> ChannelInputs<SnareDrum> for SdInputs<I> {
     type Channel = Channel;
 
     fn voices(channel: &mut Channel) -> &mut Voices<Snare> {
@@ -202,14 +203,13 @@ impl<I: Input> Channels<SnareDrum> for SdInputs<I> {
 
     #[inline(always)]
     fn inputs(&self, ch: usize, channel: &mut Channel) -> (f32, SnareControls) {
-        let knob = |s: I| s.at(ch).clamp(0.0, 5.0) / 5.0;
-        let tone = 1.0 / (R254 + VR7 * knob(self.tone));
+        let tone = 1.0 / (R254 + VR7 * knob(self.tone.at(ch)));
         let controls = SnareControls {
             rate: channel
                 .rate
                 .get(self.freq.at(ch), |f| (f - Sd909Params::FREQ_DEFAULT).exp2()),
             tone_fall: (-tone * self.dt / C67).exp(),
-            snappy: VR9 * knob(self.snappy) as f64,
+            snappy: VR9 * knob(self.snappy.at(ch)) as f64,
             noise: channel.noise.next(self.noise_rate),
         };
         (self.trigger.at(ch), controls)

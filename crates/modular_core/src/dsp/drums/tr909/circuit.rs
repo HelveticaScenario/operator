@@ -4,7 +4,6 @@
 
 use crate::dsp::drums::analog::{Exp, Junction, VT, converged};
 use crate::dsp::drums::lanes::{Lanes, Mask, Real, c};
-use crate::dsp::drums::voice::{FADE_SECS, quiet_fall, samples};
 
 /// The 909's trigger: a 5 V pulse 2 ms long, which each voice turns into a
 /// 15 V pulse on its own trigger transistors.
@@ -26,25 +25,6 @@ pub const ACCENT_HIGH: f32 = 4.0;
 /// The accent voltage for a hit with `accent`, 0–1, rising from `low`.
 pub fn accent_volts(low: f32, accent: f32) -> f32 {
     low + (ACCENT_HIGH - low) * accent
-}
-
-/// Per-sample-rate timing shared by every voice's channels.
-#[derive(Clone, Copy, Default)]
-pub struct Timing {
-    pub trig_samples: u32,
-    pub fade_samples: u32,
-    /// [`quiet_fall`] at the sample rate.
-    pub quiet_fall: f32,
-}
-
-impl Timing {
-    pub fn new(sample_rate: f32) -> Self {
-        Self {
-            trig_samples: samples(TRIG_SECS, sample_rate),
-            fade_samples: samples(FADE_SECS, sample_rate),
-            quiet_fall: quiet_fall(sample_rate),
-        }
-    }
 }
 
 /// A transistor used as the 909's VCA: its emitter at an op-amp's virtual
@@ -177,33 +157,10 @@ fn log_taper(position: f32) -> f32 {
     ((K * position.clamp(0.0, 1.0)).exp() - 1.0) / (K.exp() - 1.0)
 }
 
-/// A log-taper pot of `pot` ohms in series with `fixed` ohms, as a
-/// conductance, computed only when its position moves.
-#[derive(Clone, Copy)]
-pub struct TaperedPot {
-    position: f32,
-    conductance: f32,
-}
-
-impl Default for TaperedPot {
-    fn default() -> Self {
-        // NaN never compares equal, so the first read always computes.
-        Self {
-            position: f32::NAN,
-            conductance: 0.0,
-        }
-    }
-}
-
-impl TaperedPot {
-    #[inline]
-    pub fn conductance(&mut self, position: f32, fixed: f32, pot: f32) -> f32 {
-        if position != self.position {
-            self.position = position;
-            self.conductance = 1.0 / (fixed + pot * log_taper(position));
-        }
-        self.conductance
-    }
+/// A log-taper pot of `pot` ohms at `position`, 0–1, in series with `fixed`
+/// ohms, as a conductance.
+pub fn tapered_pot(position: f32, fixed: f32, pot: f32) -> f32 {
+    1.0 / (fixed + pot * log_taper(position))
 }
 
 /// Two diodes back to back to ground, rounding a triangle toward a sine:

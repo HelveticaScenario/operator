@@ -21,9 +21,7 @@ impl Strike {
     /// `ch` of `accent` (0–5 V).
     #[inline]
     pub fn process(&mut self, trigger: f32, accent: impl Input, ch: usize) -> Option<f32> {
-        self.trigger
-            .process(trigger)
-            .then(|| accent.at(ch).clamp(0.0, 5.0) / 5.0)
+        self.trigger.process(trigger).then(|| knob(accent.at(ch)))
     }
 }
 
@@ -56,9 +54,36 @@ impl<L: Lanes> Pulse<L> {
     }
 }
 
+/// How far a 0–5 V control input turns its knob, 0–1.
+#[inline]
+pub fn knob(volts: f32) -> f32 {
+    volts.clamp(0.0, 5.0) / 5.0
+}
+
 /// Samples in `secs` at `sample_rate`, at least one.
 pub fn samples(secs: f32, sample_rate: f32) -> u32 {
     (secs * sample_rate).round().max(1.0) as u32
+}
+
+/// Per-sample-rate timing shared by every channel of a voice.
+#[derive(Clone, Copy, Default)]
+pub struct Timing {
+    /// The machine's trigger pulse.
+    pub trigger_samples: u32,
+    pub fade_samples: u32,
+    /// [`quiet_fall`] at the sample rate.
+    pub quiet_fall: f32,
+}
+
+impl Timing {
+    /// The timing for a machine whose trigger pulse lasts `trigger_secs`.
+    pub fn new(trigger_secs: f32, sample_rate: f32) -> Self {
+        Self {
+            trigger_samples: samples(trigger_secs, sample_rate),
+            fade_samples: samples(FADE_SECS, sample_rate),
+            quiet_fall: quiet_fall(sample_rate),
+        }
+    }
 }
 
 /// A voice circuit's state through a sequence of hits, at width `L`. The

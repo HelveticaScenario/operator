@@ -12,13 +12,13 @@
 //! resistor, R173, until Q23 never turns on; above stock it gives Q23 a
 //! drain path of its own across R134, down to a twentieth of R134.
 
-use super::circuit::{Timing, pulse_volts};
+use super::circuit::{PULSE_SECS, pulse_volts};
 use super::metal::metal_pulse;
 use super::swing::{SwingState, vca};
 use crate::dsp::drums::analog::{Exp, Junction, VT, converged};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Quiet, Timing};
 
 mod module;
 mod open;
@@ -231,7 +231,7 @@ impl HatShared {
         b.resistor(OH_NODE, GROUND, R144);
         OH_STAGE.build(&mut b, OH_NODE, 1);
         Self {
-            timing: Timing::new(sample_rate),
+            timing: Timing::new(PULSE_SECS, sample_rate),
             dt,
             closed,
             envelope,
@@ -322,7 +322,7 @@ impl Fire for Closed {
             self.base = shared.rest;
             self.primed = true;
         }
-        self.pulse.fire(volts, shared.timing.pulse_samples);
+        self.pulse.fire(volts, shared.timing.trigger_samples);
     }
 }
 

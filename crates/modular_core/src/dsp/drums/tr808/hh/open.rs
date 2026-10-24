@@ -111,7 +111,7 @@ impl Fire for Open {
             self.base = shared.rest;
             self.primed = true;
         }
-        self.pulse.fire(volts, shared.timing.pulse_samples);
+        self.pulse.fire(volts, shared.timing.trigger_samples);
     }
 }
 

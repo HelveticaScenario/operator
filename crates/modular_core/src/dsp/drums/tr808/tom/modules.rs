@@ -20,7 +20,7 @@ struct TomInputs<'a, I> {
     decay: I,
 }
 
-impl<I: Input> Channels<TomDrum> for TomInputs<'_, I> {
+impl<I: Input> ChannelInputs<TomDrum> for TomInputs<'_, I> {
     type Channel = Channel;
 
     fn voices(channel: &mut Channel) -> &mut Voices<Voice> {
@@ -29,15 +29,15 @@ impl<I: Input> Channels<TomDrum> for TomInputs<'_, I> {
 
     #[inline(always)]
     fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, Controls) {
-        let freq = self.freq.at(ch);
-        let decay = self.decay.at(ch);
-        if freq != cs.network.freq || decay != cs.network.decay {
-            cs.network = Network::new(self.parts, freq, decay, self.st.rest_hz);
-        }
+        let network = cs
+            .network
+            .get((self.freq.at(ch), self.decay.at(ch)), |(freq, decay)| {
+                Network::new(self.parts, freq, decay, self.st.rest_hz)
+            });
         let controls = Controls {
-            t: cs.network.t,
+            t: network.t,
             white: cs.noise.next(self.st.noise_scale),
-            level: cs.network.level,
+            level: network.level,
         };
         (self.trigger.at(ch), controls)
     }

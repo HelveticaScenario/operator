@@ -19,30 +19,13 @@ const BLOCK: usize = 64;
 const SECS: f32 = 4.0;
 const RUNS: usize = 7;
 
-const VOICES: [&str; 22] = [
-    "$tr808.kick",
-    "$tr808.snare",
-    "$tr808.lowTom",
-    "$tr808.midTom",
-    "$tr808.highTom",
-    "$tr808.lowConga",
-    "$tr808.midConga",
-    "$tr808.highConga",
-    "$tr808.rimShot",
-    "$tr808.claves",
-    "$tr808.cowbell",
-    "$tr808.clap",
-    "$tr808.maracas",
-    "$tr808.cymbal",
-    "$tr808.hiHat",
-    "$tr909.kick",
-    "$tr909.snare",
-    "$tr909.lowTom",
-    "$tr909.midTom",
-    "$tr909.highTom",
-    "$tr909.rimShot",
-    "$tr909.clap",
-];
+/// Every `$tr808.*` and `$tr909.*` voice.
+fn voices() -> Vec<String> {
+    modular_core::dsp::drums::schemas()
+        .into_iter()
+        .map(|s| s.name)
+        .collect()
+}
 
 /// A clock per channel at about 2 Hz, detuned so channels strike apart, with
 /// the accent swept across channels.
@@ -136,7 +119,7 @@ fn main() {
     }
     println!();
     let mut totals = vec![0.0; channels.len()];
-    for voice in VOICES.iter().filter(|v| v.contains(filter.as_str())) {
+    for voice in voices().iter().filter(|v| v.contains(filter.as_str())) {
         print!("{voice:<20}");
         for (i, &ch) in channels.iter().enumerate() {
             let p = patch(voice, ch);

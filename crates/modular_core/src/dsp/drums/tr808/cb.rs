@@ -14,13 +14,13 @@ use std::ops::Range;
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{Timing, pulse_volts};
+use super::circuit::{PULSE_SECS, pulse_volts};
 use super::levels;
 use super::metal::{COWBELL_HZ, DUTY, metal_pulse};
 use crate::dsp::drums::analog::{high_pass, one_pole_coeff, rc_hz};
 use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices, rails};
+use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Timing, Voices, rails};
 use crate::dsp::utils::rng::{LcgRng, seed_base};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal};
@@ -138,7 +138,7 @@ impl Fire for Bell {
 
     fn fire(&mut self, accent: f32, shared: &BellShared) {
         let volts = metal_pulse(pulse_volts(accent));
-        self.pulse.fire(volts, shared.timing.pulse_samples);
+        self.pulse.fire(volts, shared.timing.trigger_samples);
     }
 }
 
@@ -254,7 +254,7 @@ struct Channel {
 impl Cb808 {
     fn init(&mut self, sample_rate: f32) {
         let sh = &mut self.state;
-        sh.timing = Timing::new(sample_rate);
+        sh.timing = Timing::new(PULSE_SECS, sample_rate);
         sh.substeps = (CB_RATE / sample_rate).round().max(1.0) as u32;
         let rate = sample_rate * sh.substeps as f32;
         sh.dt = 1.0 / rate;

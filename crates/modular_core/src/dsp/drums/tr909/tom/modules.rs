@@ -2,7 +2,8 @@ use std::ops::Range;
 
 use super::*;
 use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
-use crate::dsp::drums::voice::rails;
+use crate::dsp::drums::tr909::circuit::TRIG_SECS;
+use crate::dsp::drums::voice::{Timing, knob, rails};
 
 fn noise_network(dt: f32) -> Mna<NOISE_UNKNOWNS, NOISE_CAPS, 0, 1> {
     let mut b = MnaBuilder::<NOISE_UNKNOWNS>::default();
@@ -26,8 +27,8 @@ impl Drum for TomDrum {
     type Circuit<L: Lanes> = Tom<L>;
     type Controls<L: Lanes> = TomControls<L>;
     type Sources<L: Lanes> = ();
-    const QUAD: bool = true;
-    const PAIR: bool = true;
+    const RUNS_IN_QUADS: bool = true;
+    const RUNS_IN_PAIRS: bool = true;
 }
 
 #[derive(Default)]
@@ -49,7 +50,7 @@ fn init(state: &mut TomState, parts: TomParts, sample_rate: f32) {
     state.groups = Groups::new();
     let sh = &mut state.shared;
     sh.parts = Some(parts);
-    sh.timing = Timing::new(sample_rate);
+    sh.timing = Timing::new(TRIG_SECS, sample_rate);
     sh.dt = dt;
     sh.noise_rate = Noise::rate(sample_rate);
     // The noise network at DC: discretised at a step long enough that its
@@ -78,7 +79,7 @@ struct TomInputs<I> {
     noise_rate: f32,
 }
 
-impl<I: Input> Channels<TomDrum> for TomInputs<I> {
+impl<I: Input> ChannelInputs<TomDrum> for TomInputs<I> {
     type Channel = Channel;
 
     fn voices(channel: &mut Channel) -> &mut Voices<Tom> {
@@ -87,12 +88,11 @@ impl<I: Input> Channels<TomDrum> for TomInputs<I> {
 
     #[inline(always)]
     fn inputs(&self, ch: usize, channel: &mut Channel) -> (f32, TomControls) {
-        let knob = |s: I| s.at(ch).clamp(0.0, 5.0) / 5.0;
         let controls = TomControls {
             rate: channel
                 .rate
                 .get(self.freq.at(ch), |f| (f - self.stock).exp2()),
-            decay: 1.0 / (R111 + VR11 * knob(self.decay)),
+            decay: 1.0 / (R111 + VR11 * knob(self.decay.at(ch))),
             noise: channel.noise.next(self.noise_rate),
         };
         (self.trigger.at(ch), controls)

@@ -2,7 +2,8 @@ use std::ops::Range;
 
 use super::*;
 use crate::dsp::drums::input::{Input, Live, each_slot};
-use crate::dsp::drums::voice::rails;
+use crate::dsp::drums::tr808::circuit::PULSE_SECS;
+use crate::dsp::drums::voice::{Timing, rails};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
@@ -86,7 +87,7 @@ impl Cp808 {
         rest.quiet = Quiet::default();
         sh.rest = rest;
         let dt = 1.0 / sample_rate;
-        sh.timing = Timing::new(sample_rate);
+        sh.timing = Timing::new(PULSE_SECS, sample_rate);
         sh.noise_scale = WhiteNoise::scale(sample_rate);
         sh.noise = noise_network(dt);
         sh.envelope = EnvelopeNetwork::new(dt);
@@ -182,7 +183,7 @@ struct CpInputs<I> {
     noise_scale: f32,
 }
 
-impl<I: Input> Channels<ClapDrum> for CpInputs<I> {
+impl<I: Input> ChannelInputs<ClapDrum> for CpInputs<I> {
     type Channel = Channel;
 
     fn voices(channel: &mut Channel) -> &mut Voices<Clap> {

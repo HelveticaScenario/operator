@@ -10,19 +10,30 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{PULSE_V, Timing, WhiteNoise, pulse_volts};
+use super::circuit::{PULSE_V, WhiteNoise, pulse_volts};
 use crate::dsp::drums::analog::VT;
-use crate::dsp::drums::clap::{Envelope, EnvelopeNetwork, ota};
-use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
+use crate::dsp::drums::clap::{Envelope, EnvelopeNetwork, ota_current};
+use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
 const RAIL: f32 = 15.0;
 const BETA: f32 = 300.0;
 const IS: f64 = 10.0e-15;
+
+/// The BA662's load, R383, and the swing its output reaches.
+const R383: f32 = 82.0e3;
+const OTA_SWING: f32 = 13.5;
+
+/// The BA662's output across R383, for control current `iabc` and voltage
+/// `input` at its inverting input.
+#[inline]
+fn ota<L: Lanes>(iabc: L::S, input: L::S) -> L::S {
+    (ota_current::<L>(iabc, input) * R383).clamp(c(-OTA_SWING), c(OTA_SWING))
+}
 
 // The noise network: the white noise driven in stiffly at `WN`, IC21's
 // multiple-feedback band-pass, the OTA's input divider, the divider into
@@ -237,8 +248,8 @@ impl Drum for ClapDrum {
     /// The white noise generator's voltage.
     type Controls<L: Lanes> = L::S;
     type Sources<L: Lanes> = ();
-    const QUAD: bool = true;
-    const PAIR: bool = true;
+    const RUNS_IN_QUADS: bool = true;
+    const RUNS_IN_PAIRS: bool = true;
 }
 
 impl<L: Lanes> Clap<L> {
@@ -302,7 +313,7 @@ impl Fire for Clap {
         }
         self.level
             .set(volts / PULSE_V, sounding, shared.timing.fade_samples);
-        self.pulse.fire(volts, shared.timing.pulse_samples);
+        self.pulse.fire(volts, shared.timing.trigger_samples);
     }
 }
 

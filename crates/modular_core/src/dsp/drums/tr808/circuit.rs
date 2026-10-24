@@ -2,7 +2,7 @@
 //! pulse, the noise generator, and discretised analog filters.
 
 use crate::dsp::drums::lanes::{Lanes, Mask, Mono, Real, c, lanewise};
-use crate::dsp::drums::voice::{FADE_SECS, quiet_fall, samples};
+use crate::dsp::drums::voice::knob;
 use crate::dsp::utils::rng::LcgRng;
 
 /// Length of the 808's common trigger pulse, seconds.
@@ -28,7 +28,7 @@ pub const T60_TO_RATE: f32 = 6.907_755;
 /// A ring's time to fall 60 dB, seconds, for a decay control at `volts`,
 /// 0–5 V: from `shortest` to `longest`, the same ratio for every volt.
 pub fn decay_secs(volts: f32, shortest: f32, longest: f32) -> f32 {
-    shortest * (longest / shortest).powf(volts.clamp(0.0, 5.0) / 5.0)
+    shortest * (longest / shortest).powf(knob(volts))
 }
 
 /// A decay control for a drum the 808 gives no decay knob: 2.5 V rings for
@@ -347,24 +347,5 @@ impl DiodeCoupler {
             sum += 0.5 * (self.output(n) + self.output(vtrig - *v));
         }
         sum / COUPLER_SUBSTEPS as f32
-    }
-}
-
-/// Per-sample-rate timing shared by every voice's channels.
-#[derive(Clone, Copy, Default)]
-pub struct Timing {
-    pub pulse_samples: u32,
-    pub fade_samples: u32,
-    /// [`quiet_fall`] at the sample rate.
-    pub quiet_fall: f32,
-}
-
-impl Timing {
-    pub fn new(sample_rate: f32) -> Self {
-        Self {
-            pulse_samples: samples(PULSE_SECS, sample_rate),
-            fade_samples: samples(FADE_SECS, sample_rate),
-            quiet_fall: quiet_fall(sample_rate),
-        }
     }
 }
