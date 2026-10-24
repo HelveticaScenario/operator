@@ -259,6 +259,15 @@ pub trait Sampleable: MessageHandler + Send {
     /// across audio callbacks; only `start_block()` resets it.
     fn ensure_processed_to(&self, target: usize);
 
+    /// Number of slots of the current internal block whose `update` has
+    /// finished. A module mid-update on slot `i` reports `i`, so a reader
+    /// reached re-entrantly through a feedback cycle can tell its source has
+    /// not yet produced that slot. Implementors without a per-block cursor
+    /// report `usize::MAX` (always complete).
+    fn processed_to(&self) -> usize {
+        usize::MAX
+    }
+
     /// Complete any remaining block computation. Equivalent to
     /// `ensure_processed_to(block_size)`. Used by composite modules to fully
     /// drive a nested sub-module. (The audio thread force-advances every
@@ -965,34 +974,36 @@ impl SampleBuffer {
         self.samples.get(channel).map_or(&[], Vec::as_slice)
     }
 
-    /// Hermite (4-point cubic) interpolation at a fractional frame position
-    /// with wrapping — suitable for circular buffers and looped playback.
-    /// Allocation-free; safe for the audio thread.
+    /// Hermite (4-point cubic) read of a circular buffer `back` frames before
+    /// frame `newest`, treating the buffer as a history running from `newest`
+    /// back to the frame after it. `back` clamps to `[0, frame_count - 1]` and
+    /// neighbours clamp at both ends, so a read never touches the frame after
+    /// `newest`, which holds the oldest audio. Allocation-free; safe for the
+    /// audio thread.
     #[inline]
-    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
-        if !frame.is_finite() || self.frame_count == 0 {
+    pub fn read_hermite_behind(&self, channel: usize, newest: usize, back: f32) -> f32 {
+        let n = self.frame_count;
+        if !back.is_finite() || n == 0 {
             return 0.0;
         }
 
-        let wrapped = frame.rem_euclid(self.frame_count as f32);
-        let left = wrapped.floor() as usize;
-        let frac = wrapped - left as f32;
+        let back = back.clamp(0.0, (n - 1) as f32);
+        let whole = back.floor() as usize;
+        let frac = back - whole as f32;
+        let at = |k: usize| self.read(channel, (newest % n + n - k.min(n - 1)) % n);
         if frac <= f32::EPSILON {
-            return self.read(channel, left);
+            return at(whole);
         }
 
-        let n = self.frame_count;
-        let i0 = (left + n - 1) % n;
-        let i1 = left;
-        let i2 = (left + 1) % n;
-        let i3 = (left + 2) % n;
-
-        let y0 = self.read(channel, i0);
-        let y1 = self.read(channel, i1);
-        let y2 = self.read(channel, i2);
-        let y3 = self.read(channel, i3);
-
-        hermite4(y0, y1, y2, y3, frac)
+        // Catmull-Rom is symmetric, so interpolating from newer toward older
+        // matches the forward read of the same frames.
+        hermite4(
+            at(whole.saturating_sub(1)),
+            at(whole),
+            at(whole + 1),
+            at(whole + 2),
+            frac,
+        )
     }
 }
 
@@ -1388,11 +1399,11 @@ impl BufferData {
         self.with_buffer_mut(|b| b.write(channel, frame, value));
     }
 
-    /// Hermite interpolation with wrapping, delegated to the inner `SampleBuffer`.
+    /// [`SampleBuffer::read_hermite_behind`] on the inner buffer.
     /// Audio-thread safe.
     #[inline]
-    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
-        self.with_buffer(|b| b.read_hermite_wrapped(channel, frame))
+    pub fn read_hermite_behind(&self, channel: usize, newest: usize, back: f32) -> f32 {
+        self.with_buffer(|b| b.read_hermite_behind(channel, newest, back))
     }
 
     /// Copy the most recent `min(old_size, new_size)` frames from `other` into `self`,
@@ -1487,7 +1498,7 @@ impl BufferData {
     }
 
     /// Access the raw `Vec<Vec<f32>>` for reading. Prefer `read()` or
-    /// `read_hermite_wrapped()` for normal use; this is for bulk operations
+    /// `read_hermite_behind()` for normal use; this is for bulk operations
     /// like `copy_overlap_from`.
     pub fn with_data<R>(&self, f: impl FnOnce(&Vec<Vec<f32>>) -> R) -> R {
         self.with_buffer(|b| b.with_data(f))
@@ -1605,6 +1616,14 @@ impl Buffer {
         }
     }
 
+    /// Whether the source has written slot `slot` of the current block. False
+    /// only inside a feedback cycle, when this read happens re-entrantly
+    /// during the source's own update of that slot.
+    pub fn source_wrote_slot(&self, slot: usize) -> bool {
+        self.cached_source_ptr
+            .is_none_or(|module_ptr| unsafe { module_ptr.as_ref().processed_to() } > slot)
+    }
+
     pub fn read_write_index(&self) -> usize {
         self.buffer_ref().map(|b| b.read_write_index()).unwrap_or(0)
     }
@@ -1639,9 +1658,9 @@ impl Buffer {
         self.buffer_ref().map(|buffer| buffer.with_data_mut(f))
     }
 
-    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
+    pub fn read_hermite_behind(&self, channel: usize, newest: usize, back: f32) -> f32 {
         self.buffer_ref()
-            .map(|buffer| buffer.read_hermite_wrapped(channel, frame))
+            .map(|buffer| buffer.read_hermite_behind(channel, newest, back))
             .unwrap_or(0.0)
     }
 }

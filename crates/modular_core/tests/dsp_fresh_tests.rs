@@ -3211,3 +3211,165 @@ fn late_first_step_waits_after_transport_start() {
         "$drumMap first hit at {drums_first}"
     );
 }
+
+/// Drive a zero-time `$delayRead` inside a `$buffer` feedback loop (feedback
+/// gain 0), entering the cycle at `entry` each frame. Returns the largest
+/// difference between the reader's output and the input `lag` frames earlier.
+fn zero_delay_cycle_error(entry: &str, lag: usize) -> f32 {
+    let graph = make_graph(vec![
+        ("src", "$saw", json!({ "freq": 0.0 })),
+        (
+            "feedback",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "reader", "port": "output", "channel": 0 },
+                "scale": 0.0,
+                "shift": 0.0,
+            }),
+        ),
+        (
+            "mix",
+            "$mix",
+            json!({
+                "inputs": [
+                    { "type": "cable", "module": "src", "port": "output", "channel": 0 },
+                    { "type": "cable", "module": "feedback", "port": "output", "channel": 0 },
+                ],
+            }),
+        ),
+        (
+            "buf",
+            "$buffer",
+            json!({
+                "input": { "type": "cable", "module": "mix", "port": "output", "channel": 0 },
+                "length": 0.01,
+            }),
+        ),
+        (
+            "reader",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": 0.0,
+            }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let src = patch.sampleables.get("src").unwrap();
+    let reader = patch.sampleables.get("reader").unwrap();
+
+    // Run past one full buffer (480 frames) so a stale read would show.
+    let mut history = Vec::new();
+    let mut max_err = 0.0f32;
+    for _ in 0..2_000 {
+        for module in patch.sampleables.values() {
+            module.start_block();
+        }
+        patch.sampleables.get(entry).unwrap().ensure_processed();
+        for module in patch.sampleables.values() {
+            module.ensure_processed();
+        }
+        history.push(src.get_value_at(DEFAULT_PORT, 0, 0));
+        if history.len() > lag {
+            let expected = history[history.len() - 1 - lag];
+            max_err = max_err.max((reader.get_value_at(DEFAULT_PORT, 0, 0) - expected).abs());
+        }
+    }
+    max_err
+}
+
+#[test]
+fn zero_delay_in_feedback_cycle_passes_input_through_when_reader_enters() {
+    let err = zero_delay_cycle_error("reader", 0);
+    assert!(
+        err < 1e-6,
+        "reader should pass the input through, max error {err}"
+    );
+}
+
+#[test]
+fn zero_delay_in_feedback_cycle_lags_one_sample_when_buffer_enters() {
+    // The buffer is mid-update on the current slot when the reader runs, so
+    // the newest frame it can read is the previous one.
+    let err = zero_delay_cycle_error("buf", 1);
+    assert!(
+        err < 1e-6,
+        "reader should lag the input by one sample, max error {err}"
+    );
+}
+
+/// Run a slow `$ramp` through a `$buffer` of `length` seconds into a
+/// `$delayRead` of `time` seconds. Returns each frame's (input, delayed) pair.
+fn ramp_delay_frames(length: f64, time: f64, frames: usize) -> Vec<(f32, f32)> {
+    let graph = make_graph(vec![
+        ("src", "$ramp", json!({ "freq": -5.0 })),
+        (
+            "buf",
+            "$buffer",
+            json!({
+                "input": { "type": "cable", "module": "src", "port": "output", "channel": 0 },
+                "length": length,
+            }),
+        ),
+        (
+            "reader",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": time,
+            }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let src = patch.sampleables.get("src").unwrap();
+    let reader = patch.sampleables.get("reader").unwrap();
+    (0..frames)
+        .map(|_| {
+            process_frame(&patch);
+            (
+                src.get_value_at(DEFAULT_PORT, 0, 0),
+                reader.get_value_at(DEFAULT_PORT, 0, 0),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn sub_sample_delay_interpolates_only_written_frames() {
+    // Half a sample back lies between the two newest frames; the frame after
+    // the newest still holds data from a full buffer ago and must not leak in.
+    let frames = ramp_delay_frames(1.0 / 64.0, 0.5 / SAMPLE_RATE as f64, 4_000);
+    let mut checked = 0;
+    for t in 3..frames.len() {
+        let [a, b, c] = [frames[t - 2].0, frames[t - 1].0, frames[t].0];
+        // Skip the ramp's wrap, where the input is not locally linear.
+        if b < a || c < b {
+            continue;
+        }
+        let expected = (b + c) / 2.0;
+        let got = frames[t].1;
+        assert!(
+            (got - expected).abs() < 1e-4,
+            "frame {t}: expected ~{expected}, got {got}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 3_000);
+}
+
+#[test]
+fn delay_time_at_buffer_length_reads_the_oldest_frame() {
+    // A 1/64 s buffer holds 750 frames, so the longest delay it can serve is
+    // 749 frames; a longer `time` must not wrap around onto newer audio.
+    let frames = ramp_delay_frames(1.0 / 64.0, 1.0 / 64.0, 4_000);
+    for t in 1_000..frames.len() {
+        let expected = frames[t - 749].0;
+        let got = frames[t].1;
+        assert!(
+            (got - expected).abs() < 1e-6,
+            "frame {t}: expected {expected}, got {got}"
+        );
+    }
+}

@@ -1486,7 +1486,12 @@ impl AudioState {
         // participants get `Sample` mode so the wrapper computes one sample at a
         // time and the 1-sample feedback delay invariant holds; everyone else
         // gets `Block`. The order lists producers before consumers.
-        let analysis = crate::graph_analysis::analyze(&adjacency);
+        let delay_readers: HashSet<&str> = deserialized_modules
+            .iter()
+            .filter(|(_, module_type, _)| module_type == "$delayRead")
+            .map(|(id, _, _)| id.as_str())
+            .collect();
+        let analysis = crate::graph_analysis::analyze(&adjacency, |id| delay_readers.contains(id));
         let mode_map = analysis.modes;
         update.process_order_ids = analysis.order;
         // Empty storage, allocated here, that the audio thread swaps in for its

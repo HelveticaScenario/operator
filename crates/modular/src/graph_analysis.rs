@@ -27,9 +27,10 @@ pub struct GraphAnalysis {
     /// `Block` or `Sample` mode per module ID (cycle participants get `Sample`).
     pub modes: HashMap<String, ProcessingMode>,
     /// Module IDs in producer-before-consumer order. Cycle members are grouped
-    /// contiguously; their relative order is arbitrary for correctness (the
-    /// wrapper's reentrancy guard makes any order within a cycle valid). Within
-    /// each component IDs are sorted for deterministic output. Dangling
+    /// contiguously. Any order within a cycle is valid (the wrapper's
+    /// reentrancy guard breaks it), but the member processed first is the one
+    /// whose output the rest of the cycle reads a sample late, so cycle entries
+    /// lead their component, then IDs sort for deterministic output. Dangling
     /// producer IDs (referenced by a cable but not themselves modules) appear
     /// here too; callers skip any ID absent from their module map.
     pub order: Vec<String>,
@@ -41,7 +42,14 @@ pub struct GraphAnalysis {
 /// from (one entry per cable; duplicates are tolerated). Producer IDs that
 /// are not also keys in `adjacency` are inserted as orphan `Block` nodes and
 /// still appear in `order`.
-pub fn analyze(adjacency: &HashMap<String, Vec<String>>) -> GraphAnalysis {
+///
+/// `is_cycle_entry` marks modules that should be processed first within their
+/// cycle: delay readers, so the cycle's 1-sample break falls on the feedback
+/// path rather than on the delayed signal itself.
+pub fn analyze(
+    adjacency: &HashMap<String, Vec<String>>,
+    is_cycle_entry: impl Fn(&str) -> bool,
+) -> GraphAnalysis {
     let mut g: DiGraphMap<&str, ()> = DiGraphMap::new();
 
     for (consumer, producers) in adjacency {
@@ -69,7 +77,7 @@ pub fn analyze(adjacency: &HashMap<String, Vec<String>>) -> GraphAnalysis {
             ProcessingMode::Block
         };
         // Deterministic order within a component (membership is arbitrary).
-        scc.sort_unstable();
+        scc.sort_unstable_by_key(|id| (!is_cycle_entry(id), *id));
         for id in scc {
             modes.insert(id.to_string(), mode);
             order.push(id.to_string());
@@ -97,7 +105,7 @@ mod tests {
     }
 
     fn modes(edges: &[(&str, &[&str])]) -> HashMap<String, ProcessingMode> {
-        analyze(&adj(edges)).modes
+        analyze(&adj(edges), |_| false).modes
     }
 
     /// Index of `id` within a processing order, for before/after assertions.
@@ -170,7 +178,7 @@ mod tests {
     fn order_lists_producers_before_consumers() {
         // Chain A → B → C (B reads A, C reads B). Processing order must run
         // the producer before each consumer: A, then B, then C.
-        let order = analyze(&adj(&[("A", &[]), ("B", &["A"]), ("C", &["B"])])).order;
+        let order = analyze(&adj(&[("A", &[]), ("B", &["A"]), ("C", &["B"])]), |_| false).order;
         assert!(pos(&order, "A") < pos(&order, "B"));
         assert!(pos(&order, "B") < pos(&order, "C"));
     }
@@ -178,12 +186,10 @@ mod tests {
     #[test]
     fn order_diamond_producer_first() {
         // D reads B and C; B and C both read A. A must come first, D last.
-        let order = analyze(&adj(&[
-            ("A", &[]),
-            ("B", &["A"]),
-            ("C", &["A"]),
-            ("D", &["B", "C"]),
-        ]))
+        let order = analyze(
+            &adj(&[("A", &[]), ("B", &["A"]), ("C", &["A"]), ("D", &["B", "C"])]),
+            |_| false,
+        )
         .order;
         assert!(pos(&order, "A") < pos(&order, "B"));
         assert!(pos(&order, "A") < pos(&order, "C"));
@@ -195,7 +201,7 @@ mod tests {
     fn order_includes_every_module() {
         // Fully disconnected modules (no cables at all) still appear, so they
         // get force-processed by the audio thread.
-        let order = analyze(&adj(&[("A", &[]), ("B", &[]), ("C", &[])])).order;
+        let order = analyze(&adj(&[("A", &[]), ("B", &[]), ("C", &[])]), |_| false).order;
         assert_eq!(order.len(), 3);
         for id in ["A", "B", "C"] {
             assert!(order.contains(&id.to_string()), "{id} missing");
@@ -206,10 +212,28 @@ mod tests {
     fn order_groups_cycle_before_downstream_consumer() {
         // Cycle A <-> B feeds C. The two cycle members come before C and are
         // adjacent to each other.
-        let order = analyze(&adj(&[("A", &["B"]), ("B", &["A"]), ("C", &["A"])])).order;
+        let order = analyze(&adj(&[("A", &["B"]), ("B", &["A"]), ("C", &["A"])]), |_| {
+            false
+        })
+        .order;
         assert!(pos(&order, "A") < pos(&order, "C"));
         assert!(pos(&order, "B") < pos(&order, "C"));
         let span = pos(&order, "A").abs_diff(pos(&order, "B"));
         assert_eq!(span, 1, "cycle members should be contiguous: {order:?}");
+    }
+
+    #[test]
+    fn order_puts_cycle_entries_first_within_component() {
+        // `buf` sorts before `reader`, but the entry flag wins.
+        let order = analyze(
+            &adj(&[
+                ("buf", &["mix"]),
+                ("mix", &["reader"]),
+                ("reader", &["buf"]),
+            ]),
+            |id| id == "reader",
+        )
+        .order;
+        assert_eq!(order, ["reader", "buf", "mix"]);
     }
 }
