@@ -156,10 +156,18 @@ const DIODE_DONE: f64 = converged(1.0e-7, DIODE_NVT);
 /// [`TransistorVca::currents`] takes.
 pub const COLLECTOR: f64 = -INV_VT;
 
-/// The 909 voices' transistors.
+/// The 909 voices' general-purpose transistors.
 pub const VCA: TransistorVca = TransistorVca {
     beta_f: 300.0,
     beta_r: 6.0,
+};
+
+/// The 2SD1469 muting transistor, whose high reverse gain keeps its
+/// on-resistance low down to a few microamps of base current: about 15 Ω at
+/// 34 µA, from Fig. 9 of the datasheet of its successor, the 2SD1468S.
+pub const MUTING: TransistorVca = TransistorVca {
+    beta_f: 280.0,
+    beta_r: 60.0,
 };
 
 /// Fraction of a log-taper ("A") pot's resistance at `position`, 0–1: a
@@ -295,12 +303,13 @@ impl Shaper {
     }
 }
 
-/// Solves a VCA's collector node `vc`, fed from the open-circuit voltage
+/// Solves `vca`'s collector node `vc`, fed from the open-circuit voltage
 /// `open` through `ohms`, with `r_load` to ground and base current `ib`, in
 /// the lanes of `on`; the others keep their node. Returns the emitter
 /// current and the current drawn from the source.
 #[inline(always)]
 pub fn vca_port<L: Lanes>(
+    vca: &TransistorVca,
     on: L::DM,
     vc: &mut Junction<L>,
     open: L::D,
@@ -314,7 +323,7 @@ pub fn vca_port<L: Lanes>(
     let mut k = vc.e.at(v, COLLECTOR);
     let mut done = !on;
     for _ in 0..20 {
-        let q = VCA.currents(ib, k);
+        let q = vca.currents(ib, k);
         let f = open * g_source - v * g - q.collector;
         let step = (f / (-g - q.slope)).clamp(c(-0.01), c(0.01));
         v = L::D::select(done, v, v - step);
@@ -328,5 +337,5 @@ pub fn vca_port<L: Lanes>(
         v,
         e: Exp::select(on, k, vc.e),
     };
-    (VCA.currents(ib, k).emitter, (open - v) * g_source)
+    (vca.currents(ib, k).emitter, (open - v) * g_source)
 }

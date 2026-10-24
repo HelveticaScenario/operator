@@ -331,11 +331,12 @@ impl<L: Lanes> Circuit<L> for Tom<L> {
         let open53 = L::wide(x[N53]);
         let on33 = ib33.gt(c(OFF));
         let (ie33, drawn) = if on33.all() {
-            vca_port(on33, &mut self.vc[3], open53, z + R195, R199, ib33)
+            vca_port(&VCA, on33, &mut self.vc[3], open53, z + R195, R199, ib33)
         } else {
             let idle = open53 / (z + R195 + R199);
             if on33.any() {
-                let (ie, drawn) = vca_port(on33, &mut self.vc[3], open53, z + R195, R199, ib33);
+                let (ie, drawn) =
+                    vca_port(&VCA, on33, &mut self.vc[3], open53, z + R195, R199, ib33);
                 (
                     L::D::select(on33, ie, c(0.0)),
                     L::D::select(on33, drawn, idle),
@@ -355,6 +356,7 @@ impl<L: Lanes> Circuit<L> for Tom<L> {
         let ie19 = if on19.any() {
             let into19 = self.clip.solve(on19, L::wide(self.vcos[0].tri), ib18);
             let port = vca_port(
+                &VCA,
                 on19,
                 &mut self.vc[0],
                 into19 * R104,

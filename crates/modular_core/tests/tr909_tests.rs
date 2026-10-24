@@ -265,6 +265,19 @@ fn sd_snappy_adds_noise() {
 }
 
 #[test]
+fn sd_tone_lengthens_the_noise() {
+    // On the hardware, the noise 100–250 ms after the strike is some 20 dB
+    // louder with the tone knob all the way up than all the way down.
+    let tail = |tone: f32| {
+        let x = render(SD, json!({ "tone": tone, "snappy": 5.0 }), 0.25);
+        let w = window(&x, 0.1, 0.15);
+        rms(w) * energy_above(w, 3000.0).sqrt()
+    };
+    let (short, long) = (tail(0.0), tail(5.0));
+    assert!(long > 10.0 * short, "{short} {long}");
+}
+
+#[test]
 fn freq_tracks_volts_per_octave() {
     // Each voice with its noise turned down, its stock freq, and a window
     // of its ring clear of the strike.

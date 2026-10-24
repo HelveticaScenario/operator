@@ -202,6 +202,7 @@ impl<L: Lanes> Clap<L> {
         // Q37's collector against the network's Thevenin equivalent: the
         // network already holds R203, so the port loads nothing more.
         let (ie37, drawn) = vca_port(
+            &VCA,
             !L::DM::default(),
             &mut self.vc37,
             L::wide(x[Q37C]),

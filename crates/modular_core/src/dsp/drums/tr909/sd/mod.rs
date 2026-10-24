@@ -16,7 +16,9 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{DIODE_DROP, RAIL, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts, vca_port};
+use super::circuit::{
+    DIODE_DROP, MUTING, RAIL, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts, vca_port,
+};
 use super::noise::Noise;
 use crate::dsp::drums::analog::Junction;
 use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
@@ -89,7 +91,8 @@ const R293: f32 = 220.0e3;
 
 // The noise envelopes. ENV4: C67 through D60, drained by the tone pot VR7
 // and R254, and by R297 into Q48's base. ENV5: C73 through D64, drained by
-// R280 into Q47's base, which Q43 holds off while the trigger lasts.
+// R280 into Q47's base, which Q43 holds off while the trigger lasts. Q47
+// and Q48 are 2SD1469 muting transistors.
 const C67: f32 = 0.47e-6;
 const VR7: f32 = 500.0e3;
 const R254: f32 = 100.0e3;
@@ -135,7 +138,7 @@ const C78: f32 = 0.47e-6;
 const R_LEVEL: f64 = 50.0e3;
 
 /// Scales the output so an unaccented hit peaks near 5 V.
-const OUTPUT_GAIN: f32 = 1.287;
+const OUTPUT_GAIN: f32 = 1.067;
 /// Below this running peak, some 64 dB under an unaccented hit, the drum
 /// has faded out: its envelopes drain only through the VCAs' bases, ever
 /// more slowly, and pass a faint leak for seconds more.
@@ -335,11 +338,11 @@ impl<L: Lanes> Circuit<L> for Snare<L> {
         self.c82 -= i295 * dt / C82;
         self.c79 += (i295 - L::narrow(ib[1])) * dt / C79;
         // ENV4: the tone pot drains C67; R297 feeds Q48's base.
-        ib[2] = VCA.base_current(self.c67, R297, &mut self.vbe[2]);
+        ib[2] = MUTING.base_current(self.c67, R297, &mut self.vbe[2]);
         self.c67 *= ctl.tone_fall;
         self.c67 -= L::narrow(ib[2]) * dt / C67;
         // ENV5: R280 feeds Q47's base, which Q43 holds off meanwhile.
-        ib[3] = VCA.base_current_where(idle, self.c73, R280, &mut self.vbe[3]);
+        ib[3] = MUTING.base_current_where(idle, self.c73, R280, &mut self.vbe[3]);
         self.c73 -= L::narrow(ib[3]) * dt / C73;
 
         // The noise network and its two VCAs.
@@ -351,11 +354,27 @@ impl<L: Lanes> Circuit<L> for Snare<L> {
         let open80 = L::wide(x[T80]);
         let on48 = ib[2].gt(c(OFF));
         let (ie48, i48) = if on48.all() {
-            vca_port(on48, &mut self.vc48, open80, z + R299, R_COLLECTOR, ib[2])
+            vca_port(
+                &MUTING,
+                on48,
+                &mut self.vc48,
+                open80,
+                z + R299,
+                R_COLLECTOR,
+                ib[2],
+            )
         } else {
             let idle = open80 / (z + R299 + R_COLLECTOR);
             if on48.any() {
-                let (ie, i) = vca_port(on48, &mut self.vc48, open80, z + R299, R_COLLECTOR, ib[2]);
+                let (ie, i) = vca_port(
+                    &MUTING,
+                    on48,
+                    &mut self.vc48,
+                    open80,
+                    z + R299,
+                    R_COLLECTOR,
+                    ib[2],
+                );
                 (L::D::select(on48, ie, c(0.0)), L::D::select(on48, i, idle))
             } else {
                 (c(0.0), idle)
@@ -365,7 +384,16 @@ impl<L: Lanes> Circuit<L> for Snare<L> {
         let on47 = ib[3].gt(c(OFF));
         let ie47 = if on47.any() {
             let high = L::wide(x[HIGH]);
-            let ie = vca_port(on47, &mut self.vc47, high, c(R278), R_COLLECTOR, ib[3]).0;
+            let ie = vca_port(
+                &MUTING,
+                on47,
+                &mut self.vc47,
+                high,
+                c(R278),
+                R_COLLECTOR,
+                ib[3],
+            )
+            .0;
             L::D::select(on47, ie, c(0.0))
         } else {
             c(0.0)

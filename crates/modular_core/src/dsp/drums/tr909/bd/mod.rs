@@ -384,6 +384,7 @@ impl<L: Lanes> Circuit<L> for BassDrum<L> {
         let z = L::wide(sh.attack.impedance::<L>(closed, NB, NB));
         let all = !L::DM::default();
         let (ie6, drawn) = vca_port(
+            &VCA,
             all,
             &mut self.c6_node,
             L::wide(x[NB]),
