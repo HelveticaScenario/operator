@@ -14,7 +14,9 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{DIODE_DROP, SILENCE, T60_TO_RATE, Timing, VSAT, pulse_volts, trapezoid};
+use super::circuit::{
+    DIODE_DROP, SILENCE, T60_TO_RATE, Timing, VSAT, decay_secs, pulse_volts, trapezoid,
+};
 use super::levels;
 use crate::dsp::drums::analog::{high_pass, low_pass, one_pole_coeff};
 use crate::dsp::drums::group::{Channels, Drum, Groups, Run};
@@ -76,8 +78,10 @@ const C45: f32 = 0.1e-6;
 const LEVEL_HP_HZ: f32 = 1.0 / (std::f32::consts::TAU * 10.0e3 * 0.47e-6);
 const OUTPUT_HP_HZ: f32 = 1.0 / (std::f32::consts::TAU * 100.0e3 * 0.47e-6);
 
-const MIN_DECAY: f32 = 0.01;
-const MAX_DECAY: f32 = 10.0;
+/// The stock decay knob's span of ring times, seconds; the circuit can ring
+/// no shorter than the low end at stock pitch.
+const DECAY_SHORTEST: f32 = 0.09;
+const DECAY_LONGEST: f32 = 3.8;
 
 /// Scales the circuit's output voltage so an unaccented hit at stock pitch
 /// peaks near 5 V.
@@ -227,7 +231,7 @@ impl Network {
         let x = 1.0 / (w * C39);
         let b = x / (R161 * R161 + x * x);
         let branch_rate = a * b / (2.0 * w * c);
-        let rate = T60_TO_RATE / decay.clamp(MIN_DECAY, MAX_DECAY) - branch_rate;
+        let rate = T60_TO_RATE / decay_secs(decay, DECAY_SHORTEST, DECAY_LONGEST) - branch_rate;
         let g_crit = R170 * (1.0 / R167 + c * a);
         let g = (R170 * (1.0 / R167 + c * (a - 2.0 * rate))).clamp(0.0, g_crit * 0.999);
         Self {

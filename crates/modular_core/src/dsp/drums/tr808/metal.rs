@@ -25,11 +25,13 @@ pub fn metal_pulse<S: Real<Elem = f32>>(volts: S) -> S {
     accent * (METAL_ACCENT - METAL_REST) + METAL_REST
 }
 
+/// The two oscillators the cowbell takes, low then high, Hz.
+pub const COWBELL_HZ: [f32; 2] = [540.0, 800.0];
 /// The oscillators' frequencies, Hz.
-const OSC_HZ: [f32; 6] = [205.3, 369.6, 304.4, 522.7, 800.0, 540.0];
+const OSC_HZ: [f32; 6] = [205.3, 369.6, 304.4, 522.7, COWBELL_HZ[1], COWBELL_HZ[0]];
 /// Share of each period an oscillator spends high: the HD14584's thresholds
 /// at 5 V give 47.98%.
-const DUTY: f32 = 0.4798;
+pub const DUTY: f32 = 0.4798;
 const OSC_VOLTS: f32 = 5.0;
 /// Each oscillator's mixing resistor, and R53 to ground.
 const R_MIX: f32 = 120.0e3;

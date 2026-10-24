@@ -5,12 +5,16 @@
 //! A constant 5 V trigger strikes each drum on its first sample.
 
 use modular_core::Patch;
+use modular_core::dsp::utils::rng::TEST_SEED_BASE;
 use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
 use modular_core::types::{ProcessingMode, Sampleable};
 use serde_json::{Value, json};
 
 const SR: f32 = 48_000.0;
+
+/// Every module seeds its noise from this, so each run draws the same noise.
+const SEED: u64 = 0x5eed;
 
 const BD: &str = "$tr909.kick";
 const SD: &str = "$tr909.snare";
@@ -22,6 +26,7 @@ const CP: &str = "$tr909.clap";
 const ALL: [&str; 7] = [BD, SD, LT, MT, HT, RS, CP];
 
 fn make(module_type: &str, params: Value, sample_rate: f32) -> Box<dyn Sampleable> {
+    TEST_SEED_BASE.set(Some(SEED));
     let cached = get_params_deserializers()[module_type](params)
         .unwrap_or_else(|e| panic!("params for {module_type}: {e}"));
     get_constructors()[module_type](
@@ -70,6 +75,7 @@ fn median_hit_peak(module_type: &str, mut params: Value, channels: usize) -> f32
         ("drum", module_type, params),
     ];
     let deserializers = get_params_deserializers();
+    TEST_SEED_BASE.set(Some(SEED));
     let mut patch = Patch::new();
     patch
         .insert_modules(
@@ -90,9 +96,6 @@ fn median_hit_peak(module_type: &str, mut params: Value, channels: usize) -> f32
         )
         .unwrap();
     patch.connect_all();
-    for m in patch.sampleables.values() {
-        m.on_patch_update();
-    }
     let (clock, drum) = (&patch.sampleables["clock"], &patch.sampleables["drum"]);
     let mut peaks = vec![0.0f32; channels];
     let (mut edges, mut prev) = (0, 0.0);

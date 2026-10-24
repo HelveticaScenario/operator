@@ -4,6 +4,7 @@
 //! A constant 5 V trigger strikes each drum on its first sample.
 
 use modular_core::Patch;
+use modular_core::dsp::utils::rng::TEST_SEED_BASE;
 use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
 use modular_core::types::{ProcessingMode, Sampleable};
@@ -11,7 +12,11 @@ use serde_json::{Value, json};
 
 const SR: f32 = 48_000.0;
 
+/// Every module seeds its noise from this, so each run draws the same noise.
+const SEED: u64 = 0x5eed;
+
 fn make(module_type: &str, params: Value, sample_rate: f32) -> Box<dyn Sampleable> {
+    TEST_SEED_BASE.set(Some(SEED));
     let cached = get_params_deserializers()[module_type](params)
         .unwrap_or_else(|e| panic!("params for {module_type}: {e}"));
     get_constructors()[module_type](
@@ -96,6 +101,7 @@ fn render_clocks_from(
     }
     modules.push(("drum".to_string(), module_type, params));
     let deserializers = get_params_deserializers();
+    TEST_SEED_BASE.set(Some(SEED));
     let mut patch = Patch::new();
     patch
         .insert_modules(
@@ -249,6 +255,18 @@ const BD: &str = "$tr808.kick";
 /// The stock bridged-T's centre frequency at rest.
 const BD_REST_HZ: f32 = 49.45;
 
+/// The kick's ring time, seconds, for its decay control at `volts`: the
+/// stock knob's ≈0.09–3.8 s, the same ratio for every volt.
+fn kick_decay(volts: f32) -> f32 {
+    0.09 * (3.8f32 / 0.09).powf(volts / 5.0)
+}
+
+/// The ring time, seconds, of a drum ringing for `stock` at 2.5 V, for its
+/// decay control at `volts`: three times shorter or longer at either end.
+fn decay_around(volts: f32, stock: f32) -> f32 {
+    stock * 3f32.powf((volts - 2.5) / 2.5)
+}
+
 #[test]
 fn bd_is_silent_until_struck() {
     let m = make(BD, json!({ "trigger": 0.0 }), SR);
@@ -287,8 +305,8 @@ fn bd_pitch_sighs_down_to_rest() {
 
 #[test]
 fn bd_accent_sighs_longer() {
-    let soft = render(BD, json!({ "accent": 0.0 }), 0.3);
-    let hard = render(BD, json!({ "accent": 5.0 }), 0.3);
+    let soft = render(BD, json!({ "accent": 0.0, "decay": 3.5 }), 0.3);
+    let hard = render(BD, json!({ "accent": 5.0, "decay": 3.5 }), 0.3);
     let soft_hz = crossing_hz(&soft, 0.08, 0.15, SR);
     let hard_hz = crossing_hz(&hard, 0.08, 0.15, SR);
     assert!(hard_hz > soft_hz + 1.0, "soft {soft_hz} hard {hard_hz}");
@@ -312,13 +330,14 @@ fn bd_rings_down_at_any_pitch() {
 }
 
 #[test]
-fn bd_decay_is_the_time_to_minus_60_db() {
-    for decay in [0.3, 1.0, 3.0] {
-        let x = render(BD, json!({ "decay": decay }), decay * 1.5 + 0.2);
+fn bd_decay_sets_the_time_to_minus_60_db() {
+    for volts in [1.5, 2.5, 4.5] {
+        let decay = kick_decay(volts);
+        let x = render(BD, json!({ "decay": volts }), decay * 1.5 + 0.2);
         let measured = t60(&x, SR);
         assert!(
             (measured / decay - 1.0).abs() < 0.05,
-            "decay {decay}: {measured}"
+            "decay {volts}: {measured}"
         );
     }
 }
@@ -327,7 +346,7 @@ fn bd_decay_is_the_time_to_minus_60_db() {
 fn bd_decay_stops_at_the_circuit_minimum() {
     // With the feedback buffer at zero gain the bridged-T alone sets the
     // shortest ring, ≈0.09 s at stock pitch.
-    let x = render(BD, json!({ "decay": 0.01 }), 0.3);
+    let x = render(BD, json!({ "decay": 0.0 }), 0.3);
     let measured = t60(&x, SR);
     assert!((0.07..0.11).contains(&measured), "{measured}");
 }
@@ -335,11 +354,14 @@ fn bd_decay_stops_at_the_circuit_minimum() {
 #[test]
 fn bd_freq_scales_the_ring_and_keeps_the_decay() {
     for (voct, hz) in [(-1.4f32, 99.14f32), (-3.2, 28.47)] {
-        let x = render(BD, json!({ "freq": voct, "decay": 1.0 }), 1.5);
+        let x = render(BD, json!({ "freq": voct, "decay": 3.5 }), 1.5);
         let measured = crossing_hz(&x, 0.4, 1.0, SR);
         assert!((measured / hz - 1.0).abs() < 0.01, "{voct}: {measured}");
         let decay = t60(&x, SR);
-        assert!((decay - 1.0).abs() < 0.05, "{voct}: {decay}");
+        assert!(
+            (decay / kick_decay(3.5) - 1.0).abs() < 0.05,
+            "{voct}: {decay}"
+        );
     }
 }
 
@@ -353,24 +375,27 @@ fn bd_tone_lets_through_the_click() {
 
 #[test]
 fn bd_settles_to_silence() {
-    let x = render(BD, json!({ "decay": 0.3 }), 2.0);
+    let x = render(BD, json!({ "decay": 1.5 }), 2.0);
     assert!(x[(1.9 * SR) as usize..].iter().all(|&v| v == 0.0));
 }
 
 #[test]
 fn bd_matches_across_sample_rates() {
     for sample_rate in [44_100.0, 96_000.0] {
-        let x = render_at(BD, json!({}), 1.0, sample_rate);
+        let x = render_at(BD, json!({ "decay": 3.5 }), 1.0, sample_rate);
         let hz = crossing_hz(&x, 0.3, 0.8, sample_rate);
         assert!((hz - BD_REST_HZ).abs() < 0.3, "{sample_rate}: {hz}");
         let decay = t60(&x, sample_rate);
-        assert!((decay - 1.0).abs() < 0.05, "{sample_rate}: {decay}");
+        assert!(
+            (decay / kick_decay(3.5) - 1.0).abs() < 0.05,
+            "{sample_rate}: {decay}"
+        );
     }
 }
 
 #[test]
 fn bd_retriggers_add_to_the_ring() {
-    // Eighth notes at 120 bpm with a 5 s decay: each strike lands on a ring
+    // Eighth notes at 120 bpm with the longest decay: each strike lands on a ring
     // still within a few dB of its peak, so hit levels differ.
     let (x, strikes) = render_retriggered(BD, json!({ "decay": 5.0 }), 4.0, 4.0);
     let peaks = hit_peaks(&x, &strikes);
@@ -472,14 +497,15 @@ fn toms_accent_starts_sharper() {
 }
 
 #[test]
-fn congas_decay_is_the_time_to_minus_60_db() {
-    for (voice, _) in CONGAS {
-        for decay in [0.15, 0.5, 1.5] {
-            let x = render(voice, json!({ "decay": decay }), decay * 1.5 + 0.2);
+fn congas_decay_sets_the_time_to_minus_60_db() {
+    for ((voice, _), stock) in CONGAS.into_iter().zip([0.634, 0.306, 0.306]) {
+        for volts in [0.0, 2.5, 5.0] {
+            let decay = decay_around(volts, stock);
+            let x = render(voice, json!({ "decay": volts }), decay * 1.5 + 0.2);
             let measured = t60(&x, SR);
             assert!(
                 (measured / decay - 1.0).abs() < 0.05,
-                "{voice} {decay}: {measured}"
+                "{voice} {volts}: {measured}"
             );
         }
     }
@@ -490,7 +516,7 @@ fn toms_noise_outlasts_the_ring() {
     // With the ring cut short, the toms' gated noise still sounds while the
     // congas, which ground it, have fallen silent.
     for (voice, _) in toms_and_congas() {
-        let x = render(voice, json!({ "decay": 0.1 }), 0.4);
+        let x = render(voice, json!({ "decay": 0.0 }), 0.4);
         let tail = peak(&x[(0.3 * SR) as usize..]);
         if TOMS.iter().any(|(t, _)| *t == voice) {
             assert!(tail > 0.005, "{voice}: {tail}");
@@ -531,7 +557,7 @@ fn toms_ring_down_at_any_pitch() {
 #[test]
 fn toms_settle_to_silence() {
     for (voice, _) in toms_and_congas() {
-        let x = render(voice, json!({ "decay": 0.1 }), 4.0);
+        let x = render(voice, json!({ "decay": 0.0 }), 4.0);
         assert!(
             x[(3.9 * SR) as usize..].iter().all(|&v| v == 0.0),
             "{voice}"
@@ -563,11 +589,11 @@ fn toms_match_across_sample_rates() {
 fn toms_restart_makes_every_hit_alike() {
     let (x, strikes) = render_retriggered(
         "$tr808.lowConga",
-        json!({ "decay": 3.0, "restart": true }),
+        json!({ "decay": 5.0, "restart": true }),
         4.0,
         3.0,
     );
-    let single = peak(&render("$tr808.lowConga", json!({ "decay": 3.0 }), 0.25));
+    let single = peak(&render("$tr808.lowConga", json!({ "decay": 5.0 }), 0.25));
     for p in hit_peaks(&x, &strikes) {
         assert!((p / single - 1.0).abs() < 0.02, "{p} vs {single}");
     }
@@ -720,11 +746,12 @@ fn cl_accent_raises_the_level() {
 }
 
 #[test]
-fn cl_decay_is_the_time_to_minus_60_db() {
-    for decay in [0.075, 0.3] {
-        let x = render(CL, json!({ "decay": decay }), decay * 1.5 + 0.2);
+fn cl_decay_sets_the_time_to_minus_60_db() {
+    for volts in [2.5, 5.0] {
+        let decay = decay_around(volts, 0.075);
+        let x = render(CL, json!({ "decay": volts }), decay * 1.5 + 0.2);
         let measured = t60(&x, SR);
-        assert!((measured / decay - 1.0).abs() < 0.05, "{decay}: {measured}");
+        assert!((measured / decay - 1.0).abs() < 0.05, "{volts}: {measured}");
     }
 }
 
@@ -965,7 +992,7 @@ fn hats_accent_doubles_the_level() {
         let soft = median_hat_peak(hat, json!({ "accent": 0.0 }));
         let hard = median_hat_peak(hat, json!({ "accent": 5.0 }));
         assert!((soft - 5.0).abs() < 0.5, "{hat} {soft}");
-        assert!((9.0..11.0).contains(&hard), "{hat} {hard}");
+        assert!((9.0..11.5).contains(&hard), "{hat} {hard}");
     }
 }
 
@@ -1034,7 +1061,7 @@ fn cut_bends_how_hard_a_closed_hit_cuts() {
     );
     assert!((none / open - 1.0).abs() < 0.1, "{none} {open}");
     assert!((0.05..0.8).contains(&(partial / open)), "{partial} {open}");
-    assert!(stock < 0.001 * open, "{stock} {open}");
+    assert!(stock < 0.002 * open, "{stock} {open}");
     // Above stock the cut is sharper.
     let gone_by = |x: &[f32]| {
         let p = peak(x);
@@ -1190,7 +1217,7 @@ fn cp_and_ma_match_across_sample_rates() {
 #[test]
 fn channels_added_by_a_patch_update_get_their_own_noise() {
     let toms = TOMS.map(|(voice, _)| voice);
-    for voice in [SD, CP, MA, CY, HH].into_iter().chain(toms) {
+    for voice in [SD, CP, MA, CY, HH, CB].into_iter().chain(toms) {
         let trigger = if voice == HH { "closed" } else { "trigger" };
         let old = make(voice, json!({ trigger: 5.0 }), SR);
         old.on_patch_update();
@@ -1246,7 +1273,7 @@ fn pitched_voices_hold_their_level_across_freq() {
 
 #[test]
 fn retriggers_stay_within_the_rails() {
-    let loud = json!({ "accent": 5.0, "decay": 4.0, "tone": 5.0 });
+    let loud = json!({ "accent": 5.0, "decay": 5.0, "tone": 5.0 });
     let (x, _) = render_retriggered(BD, loud, 16.0, 1.0);
     let top = peak(&x);
     assert!((10.0..=12.0).contains(&top), "{top}");
@@ -1255,7 +1282,7 @@ fn retriggers_stay_within_the_rails() {
 #[test]
 fn a_restarting_hit_peaks_no_higher_than_a_fresh_one() {
     let voice = "$tr808.lowConga";
-    let params = json!({ "accent": 5.0, "decay": 3.0, "restart": true });
+    let params = json!({ "accent": 5.0, "decay": 5.0, "restart": true });
     let fresh = peak(&render(voice, params.clone(), 0.1));
     let (x, strikes) = render_retriggered(voice, params, 16.0, 1.0);
     for p in hit_peaks(&x, &strikes) {

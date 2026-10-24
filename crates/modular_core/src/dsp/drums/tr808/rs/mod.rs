@@ -15,7 +15,9 @@ use std::sync::OnceLock;
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{Arms, BridgedT, DiodeCoupler, SILENCE, T60_TO_RATE, Timing, pulse_volts};
+use super::circuit::{
+    Arms, BridgedT, DiodeCoupler, SILENCE, T60_TO_RATE, Timing, decay_around, pulse_volts,
+};
 use crate::dsp::drums::analog::{VT, high_pass, one_pole_coeff, rc_hz};
 use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices};
 use crate::dsp::utils::{sanitize, voct_to_hz};
@@ -116,11 +118,14 @@ const R_LEVEL: f32 = 470.0e3 * 100.0e3 / (470.0e3 + 100.0e3);
 const RIM_GAIN: f32 = 0.522;
 const CLAVES_GAIN: f32 = 3.62;
 
-/// Conductance of Q62's base mix, and each resonator's share of it.
+/// Conductance of Q62's base mix.
 const MIX_G: f32 = 1.0 / R317 + 1.0 / R318 + 1.0 / R320;
 
-const MIN_DECAY: f32 = 0.005;
-const MAX_DECAY: f32 = 10.0;
+/// The claves' ring time, seconds: three times the service notes' 25 ms
+/// decay to −20 dB. R313 sits so close to the T's damping that a stock 808
+/// rings for as long as its tolerances allow; Q74 mutes IC19 after ≈110 ms
+/// to hide the leak.
+const CLAVES_DECAY: f32 = 0.075;
 
 /// Largest voltage across D63 and R108 the table covers, and its steps.
 const D63_MAX: f32 = 16.0;

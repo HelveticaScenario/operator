@@ -11,31 +11,28 @@ struct Bd808Params {
     /// rising edges strike the drum
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the trigger pulse from 4 V to 8 V, for a hit up to twice as loud with
-    /// more pitch sigh (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the hit: up to twice
+    /// as loud, with more pitch sigh (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// tone control, 0–5 V: opens the output low-pass from ≈300 Hz to ≈7 kHz,
-    /// letting through more of the attack click (default 2.5)
+    /// tone control, 0–5 V: from a dull thud to a bright click at the attack
+    /// (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     tone: Option<PolySignal>,
-    /// seconds for the ring to fall 60 dB; the stock decay knob spans
-    /// ≈0.09–3.8 s, and the circuit can ring no shorter than ≈0.09 s at stock
-    /// pitch (default 1)
-    #[signal(default = 1.0, range = (0.1, 4.0))]
+    /// decay control, 0–5 V: how long the drum rings, from ≈0.09 s to
+    /// ≈3.8 s (default 2.5, ≈0.6 s)
+    #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     decay: Option<PolySignal>,
-    /// resting pitch of the bridged-T in V/Oct, scaling the whole circuit;
-    /// stock is ≈49.5 Hz (default -2.4035)
+    /// pitch in V/Oct; stock is ≈49.5 Hz (default -2.4035)
     #[signal(type = pitch, default = -2.4035, range = (-3.5, -1.0))]
     #[deserr(default)]
     freq: Option<PolySignal>,
-    /// fade out a still-ringing hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the ring, as on the
-    /// hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise each hit builds on the last, as on
+    /// the 808 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -50,22 +47,21 @@ struct Bd808Outputs {
 
 /// TR-808 bass drum.
 ///
-/// Each rising edge on **trigger** fires the 808's 1 ms trigger pulse into a
-/// circuit model of its bass drum: a resonant bridged-T filter rings at
-/// ≈49.5 Hz with a short frequency jump on the attack and a falling pitch
-/// "sigh". **decay** sets how long the ring lasts, **tone** how much of the
-/// attack click comes through, and **accent**, sampled at each strike, drives
-/// the circuit harder. Retriggering a ringing drum adds to its current state
-/// rather than restarting it, as on the hardware, so long decays at fast
-/// tempos swing in level from hit to hit; **restart** starts every hit from
-/// rest instead.
+/// A circuit model of the 808's deep, booming kick: a low, round ring at ≈49.5
+/// Hz with a click at the attack and a pitch that sighs down as it rings.
+/// **decay** sets how long it booms, **tone** how much click comes through,
+/// **freq** its pitch, and **accent** how hard it hits.
 ///
-/// An unaccented hit peaks near **±5 V** at any **freq**, and a fully
-/// accented one near **±10 V**; toward the top of the **freq** range the
-/// circuit's op-amp clips, so accent adds less there.
+/// As on the 808, a hit that lands on a still-ringing one builds on it, so long
+/// decays at fast tempos swing in level from hit to hit; **restart** starts
+/// every hit from rest instead.
+///
+/// An unaccented hit peaks near **±5 V** and a fully accented one near **±10
+/// V**. Near the top of the **freq** range the drum overdrives, so accent adds
+/// less there.
 ///
 /// ```js
-/// $tr808.kick($clock.beatTrigger, { decay: 2 }).out()
+/// $tr808.kick($clock.beatTrigger, { decay: 4 }).out()
 /// ```
 #[module(name = "$tr808.kick", has_init, patch_update, args(trigger), block)]
 pub struct Bd808 {

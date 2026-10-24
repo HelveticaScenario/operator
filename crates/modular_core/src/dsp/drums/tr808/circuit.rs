@@ -25,6 +25,19 @@ pub const DIODE_DROP: f32 = 0.71;
 /// ln(1000): converts a time to −60 dB into a decay rate.
 pub const T60_TO_RATE: f32 = 6.907_755;
 
+/// A ring's time to fall 60 dB, seconds, for a decay control at `volts`,
+/// 0–5 V: from `shortest` to `longest`, the same ratio for every volt.
+pub fn decay_secs(volts: f32, shortest: f32, longest: f32) -> f32 {
+    shortest * (longest / shortest).powf(volts.clamp(0.0, 5.0) / 5.0)
+}
+
+/// A decay control for a drum the 808 gives no decay knob: 2.5 V rings for
+/// the drum's `stock` time, and each end reaches three times shorter or
+/// longer.
+pub fn decay_around(volts: f32, stock: f32) -> f32 {
+    decay_secs(volts, stock / 3.0, stock * 3.0)
+}
+
 /// Below this every state of a voice counts as settled.
 pub const SILENCE: f32 = 1.0e-6;
 

@@ -11,14 +11,14 @@ struct Ma808Params {
     /// rising edges shake the maracas
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; doubles
-    /// the level at full accent and draws the shake out (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the shake: up to
+    /// twice as loud, and drawn out (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// fade out a still-sounding shake over 2 ms as the next one strikes,
-    /// so every shake starts from rest; otherwise shakes run into each
-    /// other, as on the hardware (default false)
+    /// fade out a shake still sounding over 2 ms as the next one strikes, so
+    /// every shake starts from rest; otherwise each shake runs into the last,
+    /// as on the 808 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -33,12 +33,11 @@ struct Ma808Outputs {
 
 /// TR-808 maracas.
 ///
-/// Each rising edge on **trigger** fires the 808's trigger pulse into a
-/// circuit model of its maracas: clipped white noise let through a short
-/// envelope and high-passed to a hiss. **accent**, sampled at each strike,
-/// doubles the level and draws the shake out.
+/// A circuit model of the 808's maracas: a short shake of high, hissing noise.
+/// **accent** makes it louder and draws it out.
 ///
-/// An unaccented shake peaks near **±5 V**.
+/// An unaccented shake peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr808.maracas($clock.beatTrigger).out()

@@ -69,11 +69,13 @@ const SHAPER1: Shaper = Shaper {
     r_in: 10.0e3,
     r_out: 1.5e3,
     r_load: 47.0,
+    vca: VCA,
 };
 const SHAPER2: Shaper = Shaper {
     r_in: 10.0e3,
     r_out: 2.2e3,
     r_load: 47.0,
+    vca: VCA,
 };
 
 // The drum envelopes, each charged through a diode from the gated accent

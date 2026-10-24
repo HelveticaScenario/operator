@@ -1,5 +1,5 @@
 //! A linear network solved by modified nodal analysis, for the parts of the
-//! 808's voices that are resistors, capacitors and ideal op-amps.
+//! drum voices that are resistors, capacitors and ideal op-amps.
 //!
 //! Each capacitor is replaced by its trapezoidal companion: a conductance
 //! 2C/dt in parallel with a current source carrying its history, which

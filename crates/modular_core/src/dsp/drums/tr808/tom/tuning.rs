@@ -1,9 +1,5 @@
 use super::*;
 
-/// Shortest and longest `decay` the feedback can reach, seconds.
-const MIN_DECAY: f32 = 0.01;
-const MAX_DECAY: f32 = 10.0;
-
 /// The bridged-T tuned for one `freq` and `decay`, and the output gain
 /// levelling `freq`.
 #[derive(Clone, Copy)]
@@ -34,10 +30,12 @@ impl Default for Network {
 impl Network {
     pub(super) fn new(parts: &Parts, freq: f32, decay: f32, rest_hz: f32) -> Self {
         let r = voct_to_hz(freq) / rest_hz;
+        let stock = stock_t(parts);
+        let secs = decay_around(decay, T60_TO_RATE / stock.decay_rate());
         Self {
             freq,
             decay,
-            t: stock_t(parts).tuned(r, decay.clamp(MIN_DECAY, MAX_DECAY)),
+            t: stock.tuned(r, secs),
             level: parts.level.gain(freq),
         }
     }
@@ -75,8 +73,8 @@ pub(super) fn tuning_table() -> &'static [f32] {
 }
 
 /// Current through R231, the pot and D80/D81 from a junction voltage `x`.
-/// Newton in the diode current rather than its voltage converges from any
-/// start, since the voltage is only logarithmic in the current.
+/// Newton in the diode current converges from any start, since the voltage
+/// is only logarithmic in the current.
 fn tuning_current_exact(x: f32) -> f32 {
     let (x, k) = (x as f64, 1.0 + (POT_B / R231) as f64);
     let (is, nvt, pa, pb) = (GE_IS as f64, GE_NVT as f64, POT_A as f64, POT_B as f64);

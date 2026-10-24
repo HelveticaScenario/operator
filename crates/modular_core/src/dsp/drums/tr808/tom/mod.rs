@@ -17,7 +17,8 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    Arms, Biquad, BiquadState, BridgedT, SILENCE, Timing, WhiteNoise, pulse_volts,
+    Arms, Biquad, BiquadState, BridgedT, SILENCE, T60_TO_RATE, Timing, WhiteNoise, decay_around,
+    pulse_volts,
 };
 use crate::dsp::drums::analog::{Exp, VT, converged, high_pass, low_pass, one_pole_coeff, rc_hz};
 use crate::dsp::drums::group::{Channels, Drum, Groups, Run};

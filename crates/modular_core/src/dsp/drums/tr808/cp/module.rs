@@ -11,14 +11,14 @@ struct Cp808Params {
     /// rising edges clap
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; doubles
-    /// the level at full accent and lets the tail ring longer (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the clap: up to twice
+    /// as loud, with a longer tail (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// fade out a still-sounding clap over 2 ms as the next one strikes, so
-    /// every clap starts from rest; otherwise claps run into each other, as
-    /// on the hardware (default false)
+    /// fade out a clap still sounding over 2 ms as the next one strikes, so
+    /// every clap starts from rest; otherwise each clap runs into the last, as
+    /// on the 808 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -33,13 +33,12 @@ struct Cp808Outputs {
 
 /// TR-808 hand clap.
 ///
-/// Each rising edge on **trigger** fires the 808's trigger pulse into a
-/// circuit model of its hand clap: band-passed noise through a VCA that a
-/// sawtooth envelope opens several times in quick succession, over a slower
-/// "reverb" of the same noise. **accent**, sampled at each strike, doubles
-/// the level and lets the tail ring longer.
+/// A circuit model of the 808's hand clap: bursts of filtered noise in quick
+/// succession, like several hands clapping at once, over a softer noise tail.
+/// **accent** makes it louder and its tail longer.
 ///
-/// An unaccented clap peaks near **±5 V**.
+/// An unaccented clap peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr808.clap($clock.beatTrigger).out()

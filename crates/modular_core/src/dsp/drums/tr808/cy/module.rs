@@ -11,23 +11,24 @@ struct Cy808Params {
     /// rising edges strike the cymbal
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the trigger pulse, for a louder hit (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the hit: up to twice
+    /// as loud (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// decay control, 0–5 V: how long the low band rings (default 2.5)
+    /// decay control, 0–5 V: how long the cymbal's lower band rings on (default
+    /// 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     decay: Option<PolySignal>,
-    /// tone control, 0–5 V: from dark, the high band cut, to bright
+    /// tone control, 0–5 V: from dark, with the high band cut, to bright
     /// (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     tone: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the envelopes, as
-    /// on the hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise each hit builds on the last, as on
+    /// the 808 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -42,13 +43,13 @@ struct Cy808Outputs {
 
 /// TR-808 cymbal.
 ///
-/// Each rising edge on **trigger** fires the 808's trigger pulse into a
-/// circuit model of its cymbal: six square-wave oscillators, filtered into
-/// two bands and gated by three envelopes of different lengths. **decay**
-/// sets how long the low band rings, **tone** the balance of the bands, and
-/// **accent**, sampled at each strike, drives it harder.
+/// A circuit model of the 808's cymbal: six detuned square waves filtered into
+/// a shimmering high band and a ringing lower one. **decay** sets how long the
+/// lower band rings, **tone** the balance from dark to bright, and **accent**
+/// how hard it hits.
 ///
-/// An unaccented hit peaks near **±5 V**.
+/// An unaccented hit peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr808.cymbal($clock.barTrigger).out()

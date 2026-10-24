@@ -11,13 +11,13 @@ struct Bd909Params {
     /// rising edges strike the drum
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the accent voltage, for a hit up to twice as loud (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the hit: up to twice
+    /// as loud (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// resting pitch in V/Oct, scaling the VCO and the whole sweep with it;
-    /// stock is ≈56 Hz (default -2.2235)
+    /// resting pitch in V/Oct, the sweep following; stock is ≈56 Hz (default
+    /// -2.2235)
     #[signal(type = pitch, default = -2.2235, range = (-3.7, -0.7))]
     #[deserr(default)]
     freq: Option<PolySignal>,
@@ -26,17 +26,17 @@ struct Bd909Params {
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     sweep: Option<PolySignal>,
-    /// attack control, 0–5 V: the level of the click (default 2.5)
+    /// attack control, 0–5 V: how loud the click is (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     attack: Option<PolySignal>,
-    /// decay control, 0–5 V: how long the drum rings (default 2.5)
+    /// decay control, 0–5 V: how long the drum booms (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     decay: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the envelopes, as
-    /// on the hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise each hit builds on the last, as on
+    /// the 909 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -51,14 +51,14 @@ struct Bd909Outputs {
 
 /// TR-909 bass drum.
 ///
-/// Each rising edge on **trigger** fires the 909's trigger into a circuit
-/// model of its bass drum: a triangle VCO rounded toward a sine, its pitch
-/// swept down from about 300 Hz to rest near 56 Hz, with a click and a
-/// burst of noise at the attack. **freq** sets the resting pitch, **sweep**
-/// how long the fall to it takes, **attack** the click's level, **decay** how long the drum rings, and
-/// **accent**, sampled at each strike, drives it harder.
+/// A circuit model of the 909's punchy kick: a rounded tone that sweeps down
+/// from about 300 Hz to rest near 56 Hz, with a click and a puff of noise at
+/// the attack. **freq** sets the resting pitch, **sweep** how long the fall
+/// takes, **attack** how loud the click is, **decay** how long it booms, and
+/// **accent** how hard it hits.
 ///
-/// An unaccented hit peaks near **±5 V**.
+/// An unaccented hit peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr909.kick($clock.beatTrigger).out()

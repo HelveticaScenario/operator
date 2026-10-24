@@ -28,25 +28,24 @@ struct Hh808Params {
     #[signal(type = trig, range = (0.0, 5.0))]
     #[deserr(default)]
     open: Option<PolySignal>,
-    /// accent, 0–5 V, sampled on each strike of either hat and held for the
-    /// hit; raises the trigger pulse, for a louder hit (default 0)
+    /// accent, 0–5 V, sampled at each strike of either hat and held for the
+    /// hit: up to twice as loud (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// decay control, 0–5 V: how long the open hat rings before it falls
-    /// away (default 2.5)
+    /// decay control, 0–5 V: how long the open hat rings (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     decay: Option<PolySignal>,
-    /// how hard a closed hit cuts off the open hat, -5–5 V: 0 is the 808's
-    /// own cut, falling silent in about 100 ms; -5 leaves the open hat
-    /// ringing, and 5 silences it in a few milliseconds (default 0)
+    /// how hard a closed hit cuts off the open hat, −5 to 5 V: 0 is the 808's
+    /// own cut, silencing it in about 100 ms; −5 lets it ring on, and 5
+    /// silences it in a few milliseconds (default 0)
     #[signal(default = 0.0, range = (-5.0, 5.0))]
     #[deserr(default)]
     cut: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one on the same
-    /// hat strikes, so every hit starts from rest; otherwise hits add to the
-    /// envelope, as on the hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one on the same hat
+    /// strikes, so every hit starts from rest; otherwise each hit builds on the
+    /// last, as on the 808 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -65,18 +64,16 @@ struct Hh808Outputs {
 
 /// TR-808 hi-hats, closed and open.
 ///
-/// Each rising edge on **closed** or **open** fires the 808's trigger pulse
-/// into a circuit model of that hat: six square-wave oscillators, shared by
-/// both, filtered to a bright band, gated by the hat's envelope and
-/// high-passed. The closed hat's envelope is short; the open hat's holds
-/// and then falls away, for as long as **decay** sets. **accent**, sampled
-/// at each strike, drives either hat harder.
+/// A circuit model of the 808's hi-hats: the cymbal's six square waves filtered
+/// to a thin, bright band. **closed** strikes a short, tight hat and **open** a
+/// longer one that rings for as long as **decay** sets; **accent** makes either
+/// hit harder.
 ///
-/// As on the 808, a closed hit also cuts off a ringing open one. **cut**
-/// bends how hard: below 0 the open hat only ducks, and above 0 it stops
-/// sharply.
+/// As on the 808, a closed hit cuts off a ringing open hat. **cut** sets how
+/// hard: below 0 the open hat only ducks, and above 0 it stops dead.
 ///
-/// An unaccented hit of either hat peaks near **±5 V**.
+/// An unaccented hit of either hat peaks near **±5 V** and a fully accented one
+/// near **±10 V**.
 ///
 /// ```js
 /// $tr808.hiHat($clock.beatTrigger, { open: $clock.barTrigger, cut: -2 }).out()

@@ -108,7 +108,7 @@ pub trait Channels<D: Drum> {
         controls
     }
 
-    /// Reads a channel running alone after its circuit steps.
+    /// Reads a channel running alone after each of its samples.
     #[inline]
     fn stepped(_channel: &mut Self::Channel) {}
 

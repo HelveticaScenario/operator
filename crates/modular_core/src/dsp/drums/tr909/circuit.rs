@@ -1,6 +1,6 @@
 //! Building blocks shared by the TR-909 analog voice models: the trigger
-//! and accent the CPU sends each voice, the shared noise generator, and the
-//! transistor VCAs the voices are built around.
+//! and accent the CPU sends each voice, the transistor VCAs the voices are
+//! built around, and the pots and diode shapers in front of them.
 
 use crate::dsp::drums::analog::{Exp, Junction, VT, converged};
 use crate::dsp::drums::lanes::{Lanes, Mask, Real, c};
@@ -59,7 +59,7 @@ pub struct TransistorVca {
     pub beta_r: f64,
 }
 
-/// The 2SC945's saturation current.
+/// The 2SC945's saturation current, which [`MUTING`] shares.
 const IS: f64 = 10.0e-15;
 
 /// A [`TransistorVca`]'s currents at one operating point.
@@ -207,13 +207,14 @@ impl TaperedPot {
 }
 
 /// Two diodes back to back to ground, rounding a triangle toward a sine:
-/// the triangle through `r_in` onto the diodes, then `r_out` into a VCA's
+/// the triangle through `r_in` onto the diodes, then `r_out` into `vca`'s
 /// collector node with `r_load` to ground.
 #[derive(Clone, Copy)]
 pub struct Shaper {
     pub r_in: f64,
     pub r_out: f64,
     pub r_load: f64,
+    pub vca: TransistorVca,
 }
 
 /// The shaper diodes' saturation current and emission coefficient times
@@ -273,7 +274,7 @@ impl Shaper {
         let mut done = !on;
         for _ in 0..20 {
             let (id, did) = diode_pair(e);
-            let q = VCA.currents(ib, k);
+            let q = self.vca.currents(ib, k);
             let f1 = (vi - dn) * g_in - id - (dn - cn) * g_out;
             let f2 = dn * g_out + volts * g - cn * g_node - q.collector;
             let a11 = c::<L::D>(-g_in) - did - g_out;
@@ -299,7 +300,7 @@ impl Shaper {
             v: cn,
             e: Exp::select(on, k, vc.e),
         };
-        VCA.currents(ib, k).emitter
+        self.vca.currents(ib, k).emitter
     }
 }
 

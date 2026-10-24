@@ -71,7 +71,8 @@ const OUT29: usize = 2;
 const OP29: usize = 3;
 const OUT_UNKNOWNS: usize = 4;
 const OUT_CAPS: usize = 2;
-/// The level pot, VR20 (50 kΩ), set so an unaccented clap peaks near 5 V.
+/// The level pot, VR20 (50 kΩ), turned down to 8.4 kΩ, where even a fully
+/// accented clap stays clear of IC29a's swing.
 const LEVEL: f32 = 8.4e3;
 const R237: f32 = 82.0e3;
 /// The OTA's output stays within this of ground.

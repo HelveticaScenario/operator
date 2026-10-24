@@ -121,9 +121,9 @@ struct Cymbal<L: Lanes = Mono> {
     pulse: Pulse<L>,
     smooth: L::S,
     env: MnaState<ENV_CAPS, L>,
-    /// The envelope nodes, C41, Q20's emitter and Q20's emitter current on
-    /// the last sample.
-    feeds: [L::S; 4],
+    /// The envelope nodes E1 and E2A, C41, Q20's emitter and Q20's emitter
+    /// current on the last sample.
+    feeds: [L::S; 2],
     b41: L::S,
     e20: L::S,
     q20: L::S,
@@ -232,7 +232,7 @@ impl<L: Lanes> Circuit<L> for Cymbal<L> {
         let smoothed = self.smooth + (vtrig - SMOOTH_VBE - self.smooth) * sh.smooth_coeff;
         self.smooth = L::S::select(vtrig.gt(c(0.0)), smoothed, c(0.0));
         let charge = self.smooth - CHARGE_DROP;
-        let [e1, e2a, _, _] = self.feeds;
+        let [e1, e2a] = self.feeds;
         let [n47, n50, n48] = self.nodes;
         let mut switches = [L::SM::default(); ENV_SWITCHES];
         let mut injected = [c(0.0); ENV_UNKNOWNS];
@@ -267,7 +267,7 @@ impl<L: Lanes> Circuit<L> for Cymbal<L> {
         self.q20 = L::S::select(q20_on, (follow - x[E20]) / R_Q20, c(0.0));
         self.b41 = x[B41];
         self.e20 = x[E20];
-        self.feeds = [x[E1], x[E2A], x[E2], x[E3]];
+        self.feeds = [x[E1], x[E2A]];
         let (e1, e2, e3, j) = (x[E1], x[E2], x[E3], x[J]);
 
         let dt = sh.dt;

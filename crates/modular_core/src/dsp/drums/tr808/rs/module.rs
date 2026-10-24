@@ -12,20 +12,19 @@ struct Rs808Params {
     /// rising edges strike the drum
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the trigger pulse from 4 V to 8 V, for a hit up to twice as loud
-    /// (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the hit: up to twice
+    /// as loud (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// pitch of the upper resonator in V/Oct, scaling both; stock is
+    /// pitch of the upper tone in V/Oct, the lower one following; stock is
     /// ≈1.79 kHz (default 2.771)
     #[signal(type = pitch, default = 2.771, range = (1.5, 4.0))]
     #[deserr(default)]
     freq: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the ring, as on the
-    /// hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise each hit builds on the last, as on
+    /// the 808 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -40,14 +39,12 @@ struct Rs808Outputs {
 
 /// TR-808 rim shot.
 ///
-/// Each rising edge on **trigger** fires the 808's 1 ms trigger pulse into a
-/// circuit model of its rim shot: two resonators near 1.8 kHz and 450 Hz
-/// switch a transistor that chops a short envelope, and a resonant high-pass
-/// turns the result into a bright, 10 ms crack. **accent**, sampled at each
-/// strike, drives the circuit harder.
+/// A circuit model of the 808's rim shot: a bright, woody crack, over in about
+/// 10 ms, built from two tones near 1.8 kHz and 450 Hz. **freq** sets its pitch
+/// and **accent** how hard it hits.
 ///
-/// An unaccented hit peaks near **±5 V** and a fully accented one near
-/// **±10 V**.
+/// An unaccented hit peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr808.rimShot($clock.beatTrigger).out()
@@ -60,7 +57,6 @@ pub struct Rs808 {
     channel_state: Box<[RimChannel]>,
 }
 
-/// The rim shot's upper resonator as built, Hz.
 /// A rim shot channel: its circuits, and its resonators tuned to its
 /// `freq` with the output gain levelling it.
 #[derive(Clone, Copy, Default)]
@@ -196,26 +192,23 @@ struct Cl808Params {
     /// rising edges strike the drum
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the trigger pulse from 4 V to 8 V, for a hit up to twice as loud
-    /// (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the hit: up to twice
+    /// as loud (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// pitch of the resonator in V/Oct; stock is ≈2.53 kHz (default 3.273)
+    /// pitch in V/Oct; stock is ≈2.53 kHz (default 3.273)
     #[signal(type = pitch, default = 3.273, range = (1.5, 4.5))]
     #[deserr(default)]
     freq: Option<PolySignal>,
-    /// seconds for the ring to fall 60 dB; stock is 0.075 s (default 0.075)
-    // Three times the service notes' 25 ms decay to −20 dB. R313 sits so
-    // close to the T's damping that a stock 808 rings for as long as its
-    // tolerances allow; Q74 mutes IC19 after ≈110 ms to hide the leak.
-    #[signal(default = 0.075, range = (0.01, 1.0))]
+    /// decay control, 0–5 V: how long the claves ring, from ≈0.025 s to
+    /// ≈0.23 s (default 2.5, ≈0.075 s as on the 808)
+    #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     decay: Option<PolySignal>,
-    /// fade out a still-ringing hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the ring, as on the
-    /// hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise each hit builds on the last, as on
+    /// the 808 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -230,13 +223,12 @@ struct Cl808Outputs {
 
 /// TR-808 claves.
 ///
-/// Each rising edge on **trigger** fires the 808's 1 ms trigger pulse into a
-/// circuit model of its claves: a high-Q bridged-T resonator rings at
-/// ≈2.5 kHz. **decay** sets how long it rings, and **accent**, sampled at
-/// each strike, drives it harder.
+/// A circuit model of the 808's claves: a short, pure wooden click ringing at
+/// ≈2.5 kHz. **decay** sets how long it rings, **freq** its pitch, and
+/// **accent** how hard it hits.
 ///
-/// An unaccented hit peaks near **±5 V** and a fully accented one near
-/// **±10 V**.
+/// An unaccented hit peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr808.claves($clock.beatTrigger).out()
@@ -320,7 +312,7 @@ fn claves_tick<I: Input>(
     for (ch, cs) in channels.iter_mut().enumerate() {
         let (t, level) = cs.t.get((freq.at(ch), decay.at(ch)), |(freq, decay)| {
             let r = voct_to_hz(freq) / rest_hz;
-            let t = CLAVES_T.tuned(r, decay.clamp(MIN_DECAY, MAX_DECAY));
+            let t = CLAVES_T.tuned(r, decay_around(decay, CLAVES_DECAY));
             (t, levels::CLAVES.gain(freq))
         });
         let v = cs.voices.process(

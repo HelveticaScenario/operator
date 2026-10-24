@@ -16,10 +16,12 @@ use schemars::JsonSchema;
 
 use super::circuit::{Timing, pulse_volts};
 use super::levels;
+use super::metal::{COWBELL_HZ, DUTY, metal_pulse};
 use crate::dsp::drums::analog::{high_pass, one_pole_coeff, rc_hz};
 use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
 use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Voices, rails};
+use crate::dsp::utils::rng::{LcgRng, seed_base};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -55,22 +57,10 @@ const VCA_LOW: f32 = 0.45;
 /// R31 (100 Ω) and the diode's resistance at those currents.
 const R_ON: f32 = 1.0e3;
 
-// The metal voices' trigger buffer, IC2a, maps the common trigger pulse
-// V to 0.824·V + 3.29, which the 808's service notes and Werner, Abel and
-// Smith's cymbal analysis put at 7–14 V over the accent range.
-const METAL_GAIN: f32 = 0.824;
-const METAL_OFFSET: f32 = 3.29;
-
 // The output: C75 and R116 into the level pot, then C76 into R117 at IC6's
 // input. Only C76's high-pass falls in the audio band.
 const C76: f32 = 0.022e-6;
 const R117: f32 = 22.0e3;
-
-/// The two oscillators' stock frequencies, Hz, and their duty cycle: the
-/// HD14584's thresholds at 5 V hold each one high for 47.98% of its period.
-const OSC_LOW_HZ: f32 = 540.0;
-const OSC_HIGH_HZ: f32 = 800.0;
-const DUTY: f32 = 0.4798;
 
 /// Rate the cowbell circuit is simulated at, Hz: fine enough that the
 /// oscillators' switching edges land close to their true times.
@@ -139,7 +129,7 @@ fn osc_high((phase, inc): (f32, f32), frac: f32) -> bool {
 }
 
 /// Brings a fully accented hit to twice the level of an unaccented one.
-const ACCENT_TRIM: f32 = 1.253;
+const ACCENT_TRIM: f32 = 0.875;
 
 impl Fire for Bell {
     fn accent_trim(_: &BellShared) -> f32 {
@@ -147,7 +137,7 @@ impl Fire for Bell {
     }
 
     fn fire(&mut self, accent: f32, shared: &BellShared) {
-        let volts = pulse_volts(accent);
+        let volts = metal_pulse(pulse_volts(accent));
         self.pulse.fire(volts, shared.timing.pulse_samples);
     }
 }
@@ -167,11 +157,7 @@ impl Circuit for Bell {
 
     fn step(&mut self, sh: &BellShared, osc: &BellControls) -> f32 {
         let vtrig = self.pulse.next();
-        let charge_to = if vtrig > 0.0 {
-            METAL_GAIN * vtrig + METAL_OFFSET - D2_DROP
-        } else {
-            0.0
-        };
+        let charge_to = if vtrig > 0.0 { vtrig - D2_DROP } else { 0.0 };
         let mut sum = 0.0;
         for k in 0..sh.substeps {
             let phase = (k as f32 + 0.5) / sh.substeps as f32;
@@ -209,19 +195,19 @@ struct Cb808Params {
     /// rising edges strike the bell
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the trigger pulse, for a hit up to twice as loud (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the hit: up to twice
+    /// as loud (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// pitch of the lower oscillator in V/Oct, scaling both; stock is
-    /// 540 Hz against 800 Hz (default 1.0454)
+    /// pitch of the lower tone in V/Oct, the higher one following; stock is 540
+    /// Hz against 800 Hz (default 1.0454)
     #[signal(type = pitch, default = 1.0454, range = (-0.5, 2.5))]
     #[deserr(default)]
     freq: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the envelope, as on
-    /// the hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise each hit builds on the last, as on
+    /// the 808 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -236,18 +222,17 @@ struct Cb808Outputs {
 
 /// TR-808 cowbell.
 ///
-/// Each rising edge on **trigger** fires the 808's trigger pulse into a
-/// circuit model of its cowbell: two square-wave oscillators near 540 and
-/// 800 Hz, gated by a sharp-attacked envelope and shaped by a band-pass
-/// filter. **accent**, sampled at each strike, drives it harder.
+/// A circuit model of the 808's cowbell: two square waves near 540 and 800 Hz
+/// through a band-pass filter, for its clanking, slightly sour clang. **freq**
+/// sets the pitch and **accent** how hard it hits.
 ///
-/// An unaccented hit peaks near **±5 V** and a fully accented one near
-/// **±10 V**.
+/// An unaccented hit peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr808.cowbell($clock.beatTrigger).out()
 /// ```
-#[module(name = "$tr808.cowbell", has_init, args(trigger), block)]
+#[module(name = "$tr808.cowbell", has_init, patch_update, args(trigger), block)]
 pub struct Cb808 {
     outputs: Cb808Outputs,
     params: Cb808Params,
@@ -260,6 +245,7 @@ struct Channel {
     voices: Voices<Bell>,
     /// The oscillators' phases, in cycles.
     phases: [f32; 2],
+    seeded: bool,
     /// Their steps per sample at the channel's `freq`, and the output gain
     /// levelling it.
     tuning: Cached<f32, ([f32; 2], f32)>,
@@ -365,8 +351,8 @@ fn tick<I: Input>(
 ) {
     for (ch, cs) in channels.iter_mut().enumerate() {
         let (inc, level) = cs.tuning.get(freq.at(ch), |freq| {
-            let r = voct_to_hz(freq) / OSC_LOW_HZ;
-            let inc = [OSC_LOW_HZ * r / sample_rate, OSC_HIGH_HZ * r / sample_rate];
+            let r = voct_to_hz(freq) / COWBELL_HZ[0];
+            let inc = COWBELL_HZ.map(|hz| hz * r / sample_rate);
             (inc, levels::COWBELL.gain(freq))
         });
         let phases = &mut cs.phases;
@@ -386,6 +372,29 @@ fn tick<I: Input>(
         phases[0] = (phases[0] + inc[0]).fract();
         phases[1] = (phases[1] + inc[1]).fract();
         out(ch, rails(v * OUTPUT_GAIN * level));
+    }
+}
+
+impl Channel {
+    /// Starts the oscillators at random phases, as the 808's run freely from
+    /// power-on, unless they already are.
+    fn seed(&mut self, base: u64, stream: usize) {
+        if self.seeded {
+            return;
+        }
+        self.seeded = true;
+        let mut rng = LcgRng::default();
+        rng.seed(base, stream);
+        self.phases = [rng.next_unit(), rng.next_unit()];
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Cb808 {
+    fn on_patch_update(&mut self) {
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            cs.seed(base, ch);
+        }
     }
 }
 

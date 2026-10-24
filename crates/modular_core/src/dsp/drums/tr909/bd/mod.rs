@@ -59,6 +59,7 @@ const SHAPER: Shaper = Shaper {
     r_in: 10.0e3,
     r_out: 2.2e3,
     r_load: 47.0,
+    vca: VCA,
 };
 /// R34, from the decay envelope to Q12's base.
 const R34: f32 = 470.0e3;

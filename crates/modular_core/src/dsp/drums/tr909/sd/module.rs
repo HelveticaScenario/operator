@@ -11,27 +11,27 @@ struct Sd909Params {
     /// rising edges strike the drum
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the accent voltage, for a hit up to twice as loud (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the hit: up to twice
+    /// as loud (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// resting pitch of the lower VCO in V/Oct, scaling both VCOs and
-    /// their bend; stock is ≈148 Hz (default -0.8243)
+    /// pitch in V/Oct; stock is ≈148 Hz (default -0.8243)
     #[signal(type = pitch, default = -0.8243, range = (-2.3, 0.7))]
     #[deserr(default)]
     freq: Option<PolySignal>,
-    /// tone control, 0–5 V: how long the low noise lasts (default 2.5)
+    /// tone control, 0–5 V: how long the noise rings on, from a short snap to a
+    /// long hiss (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     tone: Option<PolySignal>,
-    /// snappy control, 0–5 V: the level of the noise (default 2.5)
+    /// snappy control, 0–5 V: how loud the noise is (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     snappy: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the envelopes, as
-    /// on the hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise each hit builds on the last, as on
+    /// the 909 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -46,13 +46,12 @@ struct Sd909Outputs {
 
 /// TR-909 snare drum.
 ///
-/// Each rising edge on **trigger** fires the 909's trigger into a circuit
-/// model of its snare: two triangle VCOs rounded toward sines, their pitch
-/// bent up at the strike, over filtered noise. **freq** sets the pitch,
-/// **tone** how long the low noise lasts, **snappy** the noise's level, and
-/// **accent**, sampled at each strike, drives it harder.
+/// A circuit model of the 909's snare: a drum tone that bends up at the strike,
+/// under a burst of noise. **freq** sets the pitch, **snappy** how loud the
+/// noise is, **tone** how long it rings on, and **accent** how hard it hits.
 ///
-/// An unaccented hit peaks near **±5 V**.
+/// An unaccented hit peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr909.snare($clock.beatTrigger).out()

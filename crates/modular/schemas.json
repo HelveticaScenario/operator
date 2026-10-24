@@ -900,14 +900,14 @@
   },
   {
     "name": "$tr808.kick",
-    "documentation": "TR-808 bass drum.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its bass drum: a resonant bridged-T filter rings at\n≈49.5 Hz with a short frequency jump on the attack and a falling pitch\n\"sigh\". **decay** sets how long the ring lasts, **tone** how much of the\nattack click comes through, and **accent**, sampled at each strike, drives\nthe circuit harder. Retriggering a ringing drum adds to its current state\nrather than restarting it, as on the hardware, so long decays at fast\ntempos swing in level from hit to hit; **restart** starts every hit from\nrest instead.\n\nAn unaccented hit peaks near **±5 V** at any **freq**, and a fully\naccented one near **±10 V**; toward the top of the **freq** range the\ncircuit's op-amp clips, so accent adds less there.\n\n```js\n$tr808.kick($clock.beatTrigger, { decay: 2 }).out()\n```",
+    "documentation": "TR-808 bass drum.\n\nA circuit model of the 808's deep, booming kick: a low, round ring at ≈49.5\nHz with a click at the attack and a pitch that sighs down as it rings.\n**decay** sets how long it booms, **tone** how much click comes through,\n**freq** its pitch, and **accent** how hard it hits.\n\nAs on the 808, a hit that lands on a still-ringing one builds on it, so long\ndecays at fast tempos swing in level from hit to hit; **restart** starts\nevery hit from rest instead.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**. Near the top of the **freq** range the drum overdrives, so accent adds\nless there.\n\n```js\n$tr808.kick($clock.beatTrigger, { decay: 4 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Bd808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse from 4 V to 8 V, for a hit up to twice as loud with\nmore pitch sigh (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud, with more pitch sigh (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -918,7 +918,7 @@
           ]
         },
         "decay": {
-          "description": "seconds for the ring to fall 60 dB; the stock decay knob spans\n≈0.09–3.8 s, and the circuit can ring no shorter than ≈0.09 s at stock\npitch (default 1)",
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.09 s to\n≈3.8 s (default 2.5, ≈0.6 s)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -929,7 +929,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch of the bridged-T in V/Oct, scaling the whole circuit;\nstock is ≈49.5 Hz (default -2.4035)",
+          "description": "pitch in V/Oct; stock is ≈49.5 Hz (default -2.4035)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -940,12 +940,12 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
           "default": false
         },
         "tone": {
-          "description": "tone control, 0–5 V: opens the output low-pass from ≈300 Hz to ≈7 kHz,\nletting through more of the attack click (default 2.5)",
+          "description": "tone control, 0–5 V: from a dull thud to a bright click at the attack\n(default 2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1045,7 +1045,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse from 4 V to 8 V, for a hit up to twice as loud with\nmore pitch sigh (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud, with more pitch sigh (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -1053,7 +1053,7 @@
       },
       {
         "name": "tone",
-        "description": "tone control, 0–5 V: opens the output low-pass from ≈300 Hz to ≈7 kHz,\nletting through more of the attack click (default 2.5)",
+        "description": "tone control, 0–5 V: from a dull thud to a bright click at the attack\n(default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -1061,15 +1061,15 @@
       },
       {
         "name": "decay",
-        "description": "seconds for the ring to fall 60 dB; the stock decay knob spans\n≈0.09–3.8 s, and the circuit can ring no shorter than ≈0.09 s at stock\npitch (default 1)",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.09 s to\n≈3.8 s (default 2.5, ≈0.6 s)",
         "signalType": "control",
-        "defaultValue": 1.0,
-        "minValue": 0.1,
-        "maxValue": 4.0
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
       },
       {
         "name": "freq",
-        "description": "resting pitch of the bridged-T in V/Oct, scaling the whole circuit;\nstock is ≈49.5 Hz (default -2.4035)",
+        "description": "pitch in V/Oct; stock is ≈49.5 Hz (default -2.4035)",
         "signalType": "pitch",
         "defaultValue": -2.4035,
         "minValue": -3.5,
@@ -1084,14 +1084,14 @@
   },
   {
     "name": "$tr808.snare",
-    "documentation": "TR-808 snare drum.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its snare: two bridged-T resonators near 250 and 500 Hz,\nblended by **tone**, over a burst of chopped white noise whose strength\n**snappy** sets. **accent**, sampled at each strike, drives the circuit\nharder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.snare($clock.beatTrigger, { snappy: 4 }).out()\n```",
+    "documentation": "TR-808 snare drum.\n\nA circuit model of the 808's snare: two drum tones near 250 and 500 Hz under\na burst of bright noise. **tone** blends from the low tone to the high one,\n**snappy** sets how much noise, **freq** the pitch, and **accent** how hard\nit hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.snare($clock.beatTrigger, { snappy: 4 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Sd808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse from 4 V to 8 V, for a hit up to twice as loud\n(default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1102,7 +1102,7 @@
           ]
         },
         "freq": {
-          "description": "pitch of the low resonator in V/Oct, scaling both; stock is ≈250 Hz\n(default -0.0678)",
+          "description": "pitch of the low tone in V/Oct, the high one following; stock is ≈250 Hz\n(default -0.0678)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1113,12 +1113,12 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
           "default": false
         },
         "snappy": {
-          "description": "snappy control, 0–5 V: how hard each hit charges the noise envelope\n(default 2.5)",
+          "description": "snappy control, 0–5 V: how loud and long the noise rattles over the\ntones (default 2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1129,7 +1129,7 @@
           ]
         },
         "tone": {
-          "description": "tone control, 0–5 V: crossfades from the low resonator to the high\none (default 2.5)",
+          "description": "tone control, 0–5 V: blends from the low tone to the high one (default\n2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1229,7 +1229,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse from 4 V to 8 V, for a hit up to twice as loud\n(default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -1237,7 +1237,7 @@
       },
       {
         "name": "tone",
-        "description": "tone control, 0–5 V: crossfades from the low resonator to the high\none (default 2.5)",
+        "description": "tone control, 0–5 V: blends from the low tone to the high one (default\n2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -1245,7 +1245,7 @@
       },
       {
         "name": "snappy",
-        "description": "snappy control, 0–5 V: how hard each hit charges the noise envelope\n(default 2.5)",
+        "description": "snappy control, 0–5 V: how loud and long the noise rattles over the\ntones (default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -1253,7 +1253,7 @@
       },
       {
         "name": "freq",
-        "description": "pitch of the low resonator in V/Oct, scaling both; stock is ≈250 Hz\n(default -0.0678)",
+        "description": "pitch of the low tone in V/Oct, the high one following; stock is ≈250 Hz\n(default -0.0678)",
         "signalType": "pitch",
         "defaultValue": -0.0678,
         "minValue": -1.5,
@@ -1268,14 +1268,14 @@
   },
   {
     "name": "$tr808.rimShot",
-    "documentation": "TR-808 rim shot.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its rim shot: two resonators near 1.8 kHz and 450 Hz\nswitch a transistor that chops a short envelope, and a resonant high-pass\nturns the result into a bright, 10 ms crack. **accent**, sampled at each\nstrike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.rimShot($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 rim shot.\n\nA circuit model of the 808's rim shot: a bright, woody crack, over in about\n10 ms, built from two tones near 1.8 kHz and 450 Hz. **freq** sets its pitch\nand **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.rimShot($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Rs808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse from 4 V to 8 V, for a hit up to twice as loud\n(default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1286,7 +1286,7 @@
           ]
         },
         "freq": {
-          "description": "pitch of the upper resonator in V/Oct, scaling both; stock is\n≈1.79 kHz (default 2.771)",
+          "description": "pitch of the upper tone in V/Oct, the lower one following; stock is\n≈1.79 kHz (default 2.771)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1297,7 +1297,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -1391,7 +1391,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse from 4 V to 8 V, for a hit up to twice as loud\n(default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -1399,7 +1399,7 @@
       },
       {
         "name": "freq",
-        "description": "pitch of the upper resonator in V/Oct, scaling both; stock is\n≈1.79 kHz (default 2.771)",
+        "description": "pitch of the upper tone in V/Oct, the lower one following; stock is\n≈1.79 kHz (default 2.771)",
         "signalType": "pitch",
         "defaultValue": 2.771,
         "minValue": 1.5,
@@ -1414,14 +1414,14 @@
   },
   {
     "name": "$tr808.claves",
-    "documentation": "TR-808 claves.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into a\ncircuit model of its claves: a high-Q bridged-T resonator rings at\n≈2.5 kHz. **decay** sets how long it rings, and **accent**, sampled at\neach strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.claves($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 claves.\n\nA circuit model of the 808's claves: a short, pure wooden click ringing at\n≈2.5 kHz. **decay** sets how long it rings, **freq** its pitch, and\n**accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.claves($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cl808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse from 4 V to 8 V, for a hit up to twice as loud\n(default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1432,7 +1432,7 @@
           ]
         },
         "decay": {
-          "description": "seconds for the ring to fall 60 dB; stock is 0.075 s (default 0.075)",
+          "description": "decay control, 0–5 V: how long the claves ring, from ≈0.025 s to\n≈0.23 s (default 2.5, ≈0.075 s as on the 808)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1443,7 +1443,7 @@
           ]
         },
         "freq": {
-          "description": "pitch of the resonator in V/Oct; stock is ≈2.53 kHz (default 3.273)",
+          "description": "pitch in V/Oct; stock is ≈2.53 kHz (default 3.273)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1454,7 +1454,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on the\nhardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -1548,7 +1548,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse from 4 V to 8 V, for a hit up to twice as loud\n(default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -1556,7 +1556,7 @@
       },
       {
         "name": "freq",
-        "description": "pitch of the resonator in V/Oct; stock is ≈2.53 kHz (default 3.273)",
+        "description": "pitch in V/Oct; stock is ≈2.53 kHz (default 3.273)",
         "signalType": "pitch",
         "defaultValue": 3.273,
         "minValue": 1.5,
@@ -1564,11 +1564,11 @@
       },
       {
         "name": "decay",
-        "description": "seconds for the ring to fall 60 dB; stock is 0.075 s (default 0.075)",
+        "description": "decay control, 0–5 V: how long the claves ring, from ≈0.025 s to\n≈0.23 s (default 2.5, ≈0.075 s as on the 808)",
         "signalType": "control",
-        "defaultValue": 0.075,
-        "minValue": 0.01,
-        "maxValue": 1.0
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -1579,14 +1579,14 @@
   },
   {
     "name": "$tr808.cowbell",
-    "documentation": "TR-808 cowbell.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its cowbell: two square-wave oscillators near 540 and\n800 Hz, gated by a sharp-attacked envelope and shaped by a band-pass\nfilter. **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.cowbell($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 cowbell.\n\nA circuit model of the 808's cowbell: two square waves near 540 and 800 Hz\nthrough a band-pass filter, for its clanking, slightly sour clang. **freq**\nsets the pitch and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.cowbell($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cb808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse, for a hit up to twice as loud (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1597,7 +1597,7 @@
           ]
         },
         "freq": {
-          "description": "pitch of the lower oscillator in V/Oct, scaling both; stock is\n540 Hz against 800 Hz (default 1.0454)",
+          "description": "pitch of the lower tone in V/Oct, the higher one following; stock is 540\nHz against 800 Hz (default 1.0454)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1608,7 +1608,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelope, as on\nthe hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -1702,7 +1702,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse, for a hit up to twice as loud (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -1710,7 +1710,7 @@
       },
       {
         "name": "freq",
-        "description": "pitch of the lower oscillator in V/Oct, scaling both; stock is\n540 Hz against 800 Hz (default 1.0454)",
+        "description": "pitch of the lower tone in V/Oct, the higher one following; stock is 540\nHz against 800 Hz (default 1.0454)",
         "signalType": "pitch",
         "defaultValue": 1.0454,
         "minValue": -0.5,
@@ -1725,14 +1725,14 @@
   },
   {
     "name": "$tr808.clap",
-    "documentation": "TR-808 hand clap.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its hand clap: band-passed noise through a VCA that a\nsawtooth envelope opens several times in quick succession, over a slower\n\"reverb\" of the same noise. **accent**, sampled at each strike, doubles\nthe level and lets the tail ring longer.\n\nAn unaccented clap peaks near **±5 V**.\n\n```js\n$tr808.clap($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 hand clap.\n\nA circuit model of the 808's hand clap: bursts of filtered noise in quick\nsuccession, like several hands clapping at once, over a softer noise tail.\n**accent** makes it louder and its tail longer.\n\nAn unaccented clap peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.clap($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cp808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; doubles\nthe level at full accent and lets the tail ring longer (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a longer tail (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1743,7 +1743,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding clap over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise claps run into each other, as\non the hardware (default false)",
+          "description": "fade out a clap still sounding over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise each clap runs into the last, as\non the 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -1837,7 +1837,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; doubles\nthe level at full accent and lets the tail ring longer (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a longer tail (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -1852,14 +1852,14 @@
   },
   {
     "name": "$tr808.maracas",
-    "documentation": "TR-808 maracas.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its maracas: clipped white noise let through a short\nenvelope and high-passed to a hiss. **accent**, sampled at each strike,\ndoubles the level and draws the shake out.\n\nAn unaccented shake peaks near **±5 V**.\n\n```js\n$tr808.maracas($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 maracas.\n\nA circuit model of the 808's maracas: a short shake of high, hissing noise.\n**accent** makes it louder and draws it out.\n\nAn unaccented shake peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.maracas($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Ma808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; doubles\nthe level at full accent and draws the shake out (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the shake: up to\ntwice as loud, and drawn out (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1870,7 +1870,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding shake over 2 ms as the next one strikes,\nso every shake starts from rest; otherwise shakes run into each\nother, as on the hardware (default false)",
+          "description": "fade out a shake still sounding over 2 ms as the next one strikes, so\nevery shake starts from rest; otherwise each shake runs into the last,\nas on the 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -1964,7 +1964,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; doubles\nthe level at full accent and draws the shake out (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the shake: up to\ntwice as loud, and drawn out (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -1979,14 +1979,14 @@
   },
   {
     "name": "$tr808.cymbal",
-    "documentation": "TR-808 cymbal.\n\nEach rising edge on **trigger** fires the 808's trigger pulse into a\ncircuit model of its cymbal: six square-wave oscillators, filtered into\ntwo bands and gated by three envelopes of different lengths. **decay**\nsets how long the low band rings, **tone** the balance of the bands, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr808.cymbal($clock.barTrigger).out()\n```",
+    "documentation": "TR-808 cymbal.\n\nA circuit model of the 808's cymbal: six detuned square waves filtered into\na shimmering high band and a ringing lower one. **decay** sets how long the\nlower band rings, **tone** the balance from dark to bright, and **accent**\nhow hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.cymbal($clock.barTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cy808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse, for a louder hit (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -1997,7 +1997,7 @@
           ]
         },
         "decay": {
-          "description": "decay control, 0–5 V: how long the low band rings (default 2.5)",
+          "description": "decay control, 0–5 V: how long the cymbal's lower band rings on (default\n2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2008,12 +2008,12 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
           "default": false
         },
         "tone": {
-          "description": "tone control, 0–5 V: from dark, the high band cut, to bright\n(default 2.5)",
+          "description": "tone control, 0–5 V: from dark, with the high band cut, to bright\n(default 2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2113,7 +2113,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe trigger pulse, for a louder hit (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -2121,7 +2121,7 @@
       },
       {
         "name": "decay",
-        "description": "decay control, 0–5 V: how long the low band rings (default 2.5)",
+        "description": "decay control, 0–5 V: how long the cymbal's lower band rings on (default\n2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -2129,7 +2129,7 @@
       },
       {
         "name": "tone",
-        "description": "tone control, 0–5 V: from dark, the high band cut, to bright\n(default 2.5)",
+        "description": "tone control, 0–5 V: from dark, with the high band cut, to bright\n(default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -2144,14 +2144,14 @@
   },
   {
     "name": "$tr808.hiHat",
-    "documentation": "TR-808 hi-hats, closed and open.\n\nEach rising edge on **closed** or **open** fires the 808's trigger pulse\ninto a circuit model of that hat: six square-wave oscillators, shared by\nboth, filtered to a bright band, gated by the hat's envelope and\nhigh-passed. The closed hat's envelope is short; the open hat's holds\nand then falls away, for as long as **decay** sets. **accent**, sampled\nat each strike, drives either hat harder.\n\nAs on the 808, a closed hit also cuts off a ringing open one. **cut**\nbends how hard: below 0 the open hat only ducks, and above 0 it stops\nsharply.\n\nAn unaccented hit of either hat peaks near **±5 V**.\n\n```js\n$tr808.hiHat($clock.beatTrigger, { open: $clock.barTrigger, cut: -2 }).out()\n```",
+    "documentation": "TR-808 hi-hats, closed and open.\n\nA circuit model of the 808's hi-hats: the cymbal's six square waves filtered\nto a thin, bright band. **closed** strikes a short, tight hat and **open** a\nlonger one that rings for as long as **decay** sets; **accent** makes either\nhit harder.\n\nAs on the 808, a closed hit cuts off a ringing open hat. **cut** sets how\nhard: below 0 the open hat only ducks, and above 0 it stops dead.\n\nAn unaccented hit of either hat peaks near **±5 V** and a fully accented one\nnear **±10 V**.\n\n```js\n$tr808.hiHat($clock.beatTrigger, { open: $clock.barTrigger, cut: -2 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Hh808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each strike of either hat and held for the\nhit; raises the trigger pulse, for a louder hit (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike of either hat and held for the\nhit: up to twice as loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2166,7 +2166,7 @@
           "$ref": "#/$defs/PolySignal"
         },
         "cut": {
-          "description": "how hard a closed hit cuts off the open hat, -5–5 V: 0 is the 808's\nown cut, falling silent in about 100 ms; -5 leaves the open hat\nringing, and 5 silences it in a few milliseconds (default 0)",
+          "description": "how hard a closed hit cuts off the open hat, −5 to 5 V: 0 is the 808's\nown cut, silencing it in about 100 ms; −5 lets it ring on, and 5\nsilences it in a few milliseconds (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2177,7 +2177,7 @@
           ]
         },
         "decay": {
-          "description": "decay control, 0–5 V: how long the open hat rings before it falls\naway (default 2.5)",
+          "description": "decay control, 0–5 V: how long the open hat rings (default 2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2199,7 +2199,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one on the same\nhat strikes, so every hit starts from rest; otherwise hits add to the\nenvelope, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one on the same hat\nstrikes, so every hit starts from rest; otherwise each hit builds on the\nlast, as on the 808 (default false)",
           "type": "boolean",
           "default": false
         }
@@ -2313,7 +2313,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each strike of either hat and held for the\nhit; raises the trigger pulse, for a louder hit (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike of either hat and held for the\nhit: up to twice as loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -2321,7 +2321,7 @@
       },
       {
         "name": "decay",
-        "description": "decay control, 0–5 V: how long the open hat rings before it falls\naway (default 2.5)",
+        "description": "decay control, 0–5 V: how long the open hat rings (default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -2329,7 +2329,7 @@
       },
       {
         "name": "cut",
-        "description": "how hard a closed hit cuts off the open hat, -5–5 V: 0 is the 808's\nown cut, falling silent in about 100 ms; -5 leaves the open hat\nringing, and 5 silences it in a few milliseconds (default 0)",
+        "description": "how hard a closed hit cuts off the open hat, −5 to 5 V: 0 is the 808's\nown cut, silencing it in about 100 ms; −5 lets it ring on, and 5\nsilences it in a few milliseconds (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,
@@ -2344,14 +2344,14 @@
   },
   {
     "name": "$tr808.lowTom",
-    "documentation": "TR-808 low tom.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its low tom: a bridged-T filter rings at ≈87 Hz,\nstarting sharp and settling as its diodes stop conducting, over a burst\nof low pink noise that swells in a few milliseconds after the hit.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowTom($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 low tom.\n\nA circuit model of the 808's low tom: a round, low ring at ≈87 Hz that\nstarts sharp and settles in pitch, over a soft puff of noise. **decay**\nsets how long it rings, **freq** its pitch, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Lt808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2362,7 +2362,7 @@
           ]
         },
         "decay": {
-          "description": "seconds for the ring to fall 60 dB; stock is 0.63 s (default 0.634)",
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2373,7 +2373,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈87 Hz (default -1.5959)",
+          "description": "pitch in V/Oct; stock is ≈87 Hz (default -1.5959)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2384,7 +2384,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -2478,7 +2478,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -2486,7 +2486,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈87 Hz (default -1.5959)",
+        "description": "pitch in V/Oct; stock is ≈87 Hz (default -1.5959)",
         "signalType": "pitch",
         "defaultValue": -1.5959,
         "minValue": -3.1,
@@ -2494,11 +2494,11 @@
       },
       {
         "name": "decay",
-        "description": "seconds for the ring to fall 60 dB; stock is 0.63 s (default 0.634)",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
         "signalType": "control",
-        "defaultValue": 0.634,
-        "minValue": 0.05,
-        "maxValue": 3.0
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -2509,14 +2509,14 @@
   },
   {
     "name": "$tr808.midTom",
-    "documentation": "TR-808 mid tom.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its mid tom: a bridged-T filter rings at ≈134 Hz,\nstarting sharp and settling as its diodes stop conducting, over a burst\nof low pink noise that swells in a few milliseconds after the hit.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midTom($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 mid tom.\n\nA circuit model of the 808's mid tom: a round ring at ≈134 Hz that\nstarts sharp and settles in pitch, over a soft puff of noise. **decay**\nsets how long it rings, **freq** its pitch, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Mt808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2527,7 +2527,7 @@
           ]
         },
         "decay": {
-          "description": "seconds for the ring to fall 60 dB; stock is 0.40 s (default 0.399)",
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.13 s to ≈1.2 s (default 2.5, ≈0.4 s as on the 808)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2538,7 +2538,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈134 Hz (default -0.9623)",
+          "description": "pitch in V/Oct; stock is ≈134 Hz (default -0.9623)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2549,7 +2549,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -2643,7 +2643,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -2651,7 +2651,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈134 Hz (default -0.9623)",
+        "description": "pitch in V/Oct; stock is ≈134 Hz (default -0.9623)",
         "signalType": "pitch",
         "defaultValue": -0.9623,
         "minValue": -2.46,
@@ -2659,11 +2659,11 @@
       },
       {
         "name": "decay",
-        "description": "seconds for the ring to fall 60 dB; stock is 0.40 s (default 0.399)",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.13 s to ≈1.2 s (default 2.5, ≈0.4 s as on the 808)",
         "signalType": "control",
-        "defaultValue": 0.399,
-        "minValue": 0.05,
-        "maxValue": 3.0
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -2674,14 +2674,14 @@
   },
   {
     "name": "$tr808.highTom",
-    "documentation": "TR-808 high tom.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its high tom: a bridged-T filter rings at ≈182 Hz,\nstarting sharp and settling as its diodes stop conducting, over a burst\nof low pink noise that swells in a few milliseconds after the hit.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highTom($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 high tom.\n\nA circuit model of the 808's high tom: a round ring at ≈182 Hz that\nstarts sharp and settles in pitch, over a soft puff of noise. **decay**\nsets how long it rings, **freq** its pitch, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Ht808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2692,7 +2692,7 @@
           ]
         },
         "decay": {
-          "description": "seconds for the ring to fall 60 dB; stock is 0.31 s (default 0.306)",
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2703,7 +2703,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈182 Hz (default -0.5216)",
+          "description": "pitch in V/Oct; stock is ≈182 Hz (default -0.5216)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2714,7 +2714,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -2808,7 +2808,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -2816,7 +2816,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈182 Hz (default -0.5216)",
+        "description": "pitch in V/Oct; stock is ≈182 Hz (default -0.5216)",
         "signalType": "pitch",
         "defaultValue": -0.5216,
         "minValue": -2.02,
@@ -2824,11 +2824,11 @@
       },
       {
         "name": "decay",
-        "description": "seconds for the ring to fall 60 dB; stock is 0.31 s (default 0.306)",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
         "signalType": "control",
-        "defaultValue": 0.306,
-        "minValue": 0.05,
-        "maxValue": 3.0
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -2839,14 +2839,14 @@
   },
   {
     "name": "$tr808.lowConga",
-    "documentation": "TR-808 low conga.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its low conga: a bridged-T filter rings at ≈192 Hz,\nstarting sharp and settling as its diodes stop conducting.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowConga($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 low conga.\n\nA circuit model of the 808's low conga: a bright, hollow ring at ≈192 Hz\nthat starts sharp and settles in pitch. **decay** sets how long it\nrings, **freq** its pitch, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowConga($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Lc808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2857,7 +2857,7 @@
           ]
         },
         "decay": {
-          "description": "seconds for the ring to fall 60 dB; stock is 0.63 s (default 0.634)",
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2868,7 +2868,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈192 Hz (default -0.4471)",
+          "description": "pitch in V/Oct; stock is ≈192 Hz (default -0.4471)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2879,7 +2879,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -2973,7 +2973,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -2981,7 +2981,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈192 Hz (default -0.4471)",
+        "description": "pitch in V/Oct; stock is ≈192 Hz (default -0.4471)",
         "signalType": "pitch",
         "defaultValue": -0.4471,
         "minValue": -1.95,
@@ -2989,11 +2989,11 @@
       },
       {
         "name": "decay",
-        "description": "seconds for the ring to fall 60 dB; stock is 0.63 s (default 0.634)",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
         "signalType": "control",
-        "defaultValue": 0.634,
-        "minValue": 0.05,
-        "maxValue": 3.0
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3004,14 +3004,14 @@
   },
   {
     "name": "$tr808.midConga",
-    "documentation": "TR-808 mid conga.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its mid conga: a bridged-T filter rings at ≈276 Hz,\nstarting sharp and settling as its diodes stop conducting.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midConga($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 mid conga.\n\nA circuit model of the 808's mid conga: a bright, hollow ring at ≈276 Hz\nthat starts sharp and settles in pitch. **decay** sets how long it\nrings, **freq** its pitch, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midConga($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Mc808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3022,7 +3022,7 @@
           ]
         },
         "decay": {
-          "description": "seconds for the ring to fall 60 dB; stock is 0.31 s (default 0.306)",
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3033,7 +3033,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈276 Hz (default 0.0792)",
+          "description": "pitch in V/Oct; stock is ≈276 Hz (default 0.0792)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3044,7 +3044,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -3138,7 +3138,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -3146,7 +3146,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈276 Hz (default 0.0792)",
+        "description": "pitch in V/Oct; stock is ≈276 Hz (default 0.0792)",
         "signalType": "pitch",
         "defaultValue": 0.0792,
         "minValue": -1.42,
@@ -3154,11 +3154,11 @@
       },
       {
         "name": "decay",
-        "description": "seconds for the ring to fall 60 dB; stock is 0.31 s (default 0.306)",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
         "signalType": "control",
-        "defaultValue": 0.306,
-        "minValue": 0.05,
-        "maxValue": 3.0
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3169,14 +3169,14 @@
   },
   {
     "name": "$tr808.highConga",
-    "documentation": "TR-808 high conga.\n\nEach rising edge on **trigger** fires the 808's 1 ms trigger pulse into\na circuit model of its high conga: a bridged-T filter rings at ≈405 Hz,\nstarting sharp and settling as its diodes stop conducting.\n**accent**, sampled at each strike, drives the circuit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highConga($clock.beatTrigger).out()\n```",
+    "documentation": "TR-808 high conga.\n\nA circuit model of the 808's high conga: a bright, hollow ring at ≈405\nHz that starts sharp and settles in pitch. **decay** sets how long it\nrings, **freq** its pitch, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highConga($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Hc808Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3187,7 +3187,7 @@
           ]
         },
         "decay": {
-          "description": "seconds for the ring to fall 60 dB; stock is 0.31 s (default 0.306)",
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3198,7 +3198,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈405 Hz (default 0.629)",
+          "description": "pitch in V/Oct; stock is ≈405 Hz (default 0.629)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3209,7 +3209,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-ringing hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the ring, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -3303,7 +3303,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the trigger pulse from 4 V to 8 V, for a hit up to\ntwice as loud with a sharper pitch drop (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -3311,7 +3311,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch in V/Oct, scaling the bridged-T; stock is ≈405 Hz (default 0.629)",
+        "description": "pitch in V/Oct; stock is ≈405 Hz (default 0.629)",
         "signalType": "pitch",
         "defaultValue": 0.629,
         "minValue": -0.87,
@@ -3319,11 +3319,11 @@
       },
       {
         "name": "decay",
-        "description": "seconds for the ring to fall 60 dB; stock is 0.31 s (default 0.306)",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
         "signalType": "control",
-        "defaultValue": 0.306,
-        "minValue": 0.05,
-        "maxValue": 3.0
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3334,14 +3334,14 @@
   },
   {
     "name": "$tr909.kick",
-    "documentation": "TR-909 bass drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its bass drum: a triangle VCO rounded toward a sine, its pitch\nswept down from about 300 Hz to rest near 56 Hz, with a click and a\nburst of noise at the attack. **freq** sets the resting pitch, **sweep**\nhow long the fall to it takes, **attack** the click's level, **decay** how long the drum rings, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.kick($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 bass drum.\n\nA circuit model of the 909's punchy kick: a rounded tone that sweeps down\nfrom about 300 Hz to rest near 56 Hz, with a click and a puff of noise at\nthe attack. **freq** sets the resting pitch, **sweep** how long the fall\ntakes, **attack** how loud the click is, **decay** how long it booms, and\n**accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.kick($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Bd909Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe accent voltage, for a hit up to twice as loud (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3352,7 +3352,7 @@
           ]
         },
         "attack": {
-          "description": "attack control, 0–5 V: the level of the click (default 2.5)",
+          "description": "attack control, 0–5 V: how loud the click is (default 2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3363,7 +3363,7 @@
           ]
         },
         "decay": {
-          "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+          "description": "decay control, 0–5 V: how long the drum booms (default 2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3374,7 +3374,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch in V/Oct, scaling the VCO and the whole sweep with it;\nstock is ≈56 Hz (default -2.2235)",
+          "description": "resting pitch in V/Oct, the sweep following; stock is ≈56 Hz (default\n-2.2235)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3385,7 +3385,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -3490,7 +3490,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe accent voltage, for a hit up to twice as loud (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -3498,7 +3498,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch in V/Oct, scaling the VCO and the whole sweep with it;\nstock is ≈56 Hz (default -2.2235)",
+        "description": "resting pitch in V/Oct, the sweep following; stock is ≈56 Hz (default\n-2.2235)",
         "signalType": "pitch",
         "defaultValue": -2.2235,
         "minValue": -3.7,
@@ -3514,7 +3514,7 @@
       },
       {
         "name": "attack",
-        "description": "attack control, 0–5 V: the level of the click (default 2.5)",
+        "description": "attack control, 0–5 V: how loud the click is (default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -3522,7 +3522,7 @@
       },
       {
         "name": "decay",
-        "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+        "description": "decay control, 0–5 V: how long the drum booms (default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -3537,14 +3537,14 @@
   },
   {
     "name": "$tr909.snare",
-    "documentation": "TR-909 snare drum.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its snare: two triangle VCOs rounded toward sines, their pitch\nbent up at the strike, over filtered noise. **freq** sets the pitch,\n**tone** how long the low noise lasts, **snappy** the noise's level, and\n**accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.snare($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 snare drum.\n\nA circuit model of the 909's snare: a drum tone that bends up at the strike,\nunder a burst of noise. **freq** sets the pitch, **snappy** how loud the\nnoise is, **tone** how long it rings on, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.snare($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Sd909Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe accent voltage, for a hit up to twice as loud (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3555,7 +3555,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch of the lower VCO in V/Oct, scaling both VCOs and\ntheir bend; stock is ≈148 Hz (default -0.8243)",
+          "description": "pitch in V/Oct; stock is ≈148 Hz (default -0.8243)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3566,12 +3566,12 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the envelopes, as\non the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
           "type": "boolean",
           "default": false
         },
         "snappy": {
-          "description": "snappy control, 0–5 V: the level of the noise (default 2.5)",
+          "description": "snappy control, 0–5 V: how loud the noise is (default 2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3582,7 +3582,7 @@
           ]
         },
         "tone": {
-          "description": "tone control, 0–5 V: how long the low noise lasts (default 2.5)",
+          "description": "tone control, 0–5 V: how long the noise rings on, from a short snap to a\nlong hiss (default 2.5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3682,7 +3682,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe accent voltage, for a hit up to twice as loud (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -3690,7 +3690,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch of the lower VCO in V/Oct, scaling both VCOs and\ntheir bend; stock is ≈148 Hz (default -0.8243)",
+        "description": "pitch in V/Oct; stock is ≈148 Hz (default -0.8243)",
         "signalType": "pitch",
         "defaultValue": -0.8243,
         "minValue": -2.3,
@@ -3698,7 +3698,7 @@
       },
       {
         "name": "tone",
-        "description": "tone control, 0–5 V: how long the low noise lasts (default 2.5)",
+        "description": "tone control, 0–5 V: how long the noise rings on, from a short snap to a\nlong hiss (default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -3706,7 +3706,7 @@
       },
       {
         "name": "snappy",
-        "description": "snappy control, 0–5 V: the level of the noise (default 2.5)",
+        "description": "snappy control, 0–5 V: how loud the noise is (default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -3721,14 +3721,14 @@
   },
   {
     "name": "$tr909.rimShot",
-    "documentation": "TR-909 rim shot.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its rim shot: three resonators rung by the trigger pulse,\nclipped by diodes, passed by an accent-driven VCA and high-passed to a\nclick. **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.rimShot($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 rim shot.\n\nA circuit model of the 909's rim shot: a short, sharp, metallic click from\nthree tones rung together and clipped. **accent** makes it hit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.rimShot($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Rs909Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe accent voltage, for a hit up to twice as loud (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3739,7 +3739,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise hits add to the ring, as on\nthe hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -3833,7 +3833,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; raises\nthe accent voltage, for a hit up to twice as loud (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -3848,14 +3848,14 @@
   },
   {
     "name": "$tr909.clap",
-    "documentation": "TR-909 hand clap.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its hand clap: band-passed noise through a VCA that a sawtooth\nenvelope opens several times in quick succession, over a swelling\n\"reverb\" of darker noise. **accent**, sampled at each strike, doubles\nthe level and swells the reverb.\n\nAn unaccented clap peaks near **±5 V**.\n\n```js\n$tr909.clap($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 hand clap.\n\nA circuit model of the 909's hand clap: bursts of filtered noise in quick\nsuccession, like several hands clapping at once, over a swelling noise tail.\n**accent** makes it louder and swells the tail.\n\nAn unaccented clap peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.clap($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Cp909Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit; doubles\nthe level at full accent and swells the reverb (default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a fuller tail (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3866,7 +3866,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding clap over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise claps run into each other, as\non the hardware (default false)",
+          "description": "fade out a clap still sounding over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise each clap runs into the last, as\non the 909 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -3960,7 +3960,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit; doubles\nthe level at full accent and swells the reverb (default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a fuller tail (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -3975,14 +3975,14 @@
   },
   {
     "name": "$tr909.lowTom",
-    "documentation": "TR-909 low tom.\n\nEach rising edge on **trigger** fires the 909's trigger into a circuit\nmodel of its low tom: three triangle VCOs, their pitch bent down from\nthe strike, one clipped ever harder as it fades, the others rounded\ntoward sines, over a burst of noise. **freq** sets the pitch, **decay**\nhow long the drum rings, and **accent**, sampled at each strike,\ndrives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.lowTom($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 low tom.\n\nA circuit model of the 909's low tom: a deep tone that bends down from\nthe strike and grows gritty as it fades, over a puff of noise. **freq**\nsets the pitch, **decay** how long it rings, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr909.lowTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Lt909Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the accent voltage, for a hit up to twice as loud\n(default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -4004,7 +4004,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈61 Hz (default -2.0993)",
+          "description": "pitch in V/Oct; stock is ≈61 Hz (default -2.0993)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -4015,7 +4015,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -4109,7 +4109,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the accent voltage, for a hit up to twice as loud\n(default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -4117,7 +4117,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈61 Hz (default -2.0993)",
+        "description": "pitch in V/Oct; stock is ≈61 Hz (default -2.0993)",
         "signalType": "pitch",
         "defaultValue": -2.0993,
         "minValue": -3.6,
@@ -4140,14 +4140,14 @@
   },
   {
     "name": "$tr909.midTom",
-    "documentation": "TR-909 mid tom.\n\nThe low tom's circuit with smaller capacitors: it rings higher and\nshorter. **freq** sets the pitch, **decay** how long the drum rings,\nand **accent**, sampled at each strike, drives it harder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.midTom($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 mid tom.\n\nThe 909's mid tom: the low tom's sound, pitched higher and shorter.\n**freq** sets the pitch, **decay** how long it rings, and **accent** how\nhard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr909.midTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Mt909Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the accent voltage, for a hit up to twice as loud\n(default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -4169,7 +4169,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈75 Hz (default -1.8098)",
+          "description": "pitch in V/Oct; stock is ≈75 Hz (default -1.8098)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -4180,7 +4180,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -4274,7 +4274,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the accent voltage, for a hit up to twice as loud\n(default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -4282,7 +4282,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈75 Hz (default -1.8098)",
+        "description": "pitch in V/Oct; stock is ≈75 Hz (default -1.8098)",
         "signalType": "pitch",
         "defaultValue": -1.8098,
         "minValue": -3.3,
@@ -4305,14 +4305,14 @@
   },
   {
     "name": "$tr909.highTom",
-    "documentation": "TR-909 high tom.\n\nThe low tom's circuit with smaller capacitors still: the highest and\nshortest of the three. **freq** sets the pitch, **decay** how long\nthe drum rings, and **accent**, sampled at each strike, drives it\nharder.\n\nAn unaccented hit peaks near **±5 V**.\n\n```js\n$tr909.highTom($clock.beatTrigger).out()\n```",
+    "documentation": "TR-909 high tom.\n\nThe 909's high tom: the low tom's sound, the highest and shortest of the\nthree. **freq** sets the pitch, **decay** how long it rings, and\n**accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr909.highTom($clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "Ht909Params",
       "type": "object",
       "properties": {
         "accent": {
-          "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the accent voltage, for a hit up to twice as loud\n(default 0)",
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -4334,7 +4334,7 @@
           ]
         },
         "freq": {
-          "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈92 Hz (default -1.5143)",
+          "description": "pitch in V/Oct; stock is ≈92 Hz (default -1.5143)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -4345,7 +4345,7 @@
           ]
         },
         "restart": {
-          "description": "fade out a still-sounding hit over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise hits add\nto the envelopes, as on the hardware (default false)",
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
           "type": "boolean",
           "default": false
         },
@@ -4439,7 +4439,7 @@
       },
       {
         "name": "accent",
-        "description": "accent, 0–5 V, sampled on each trigger and held for the hit;\nraises the accent voltage, for a hit up to twice as loud\n(default 0)",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -4447,7 +4447,7 @@
       },
       {
         "name": "freq",
-        "description": "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈92 Hz (default -1.5143)",
+        "description": "pitch in V/Oct; stock is ≈92 Hz (default -1.5143)",
         "signalType": "pitch",
         "defaultValue": -1.5143,
         "minValue": -3.0,

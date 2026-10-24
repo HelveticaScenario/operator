@@ -11,30 +11,29 @@ struct Sd808Params {
     /// rising edges strike the drum
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the trigger pulse from 4 V to 8 V, for a hit up to twice as loud
-    /// (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the hit: up to twice
+    /// as loud (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// tone control, 0–5 V: crossfades from the low resonator to the high
-    /// one (default 2.5)
+    /// tone control, 0–5 V: blends from the low tone to the high one (default
+    /// 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     tone: Option<PolySignal>,
-    /// snappy control, 0–5 V: how hard each hit charges the noise envelope
-    /// (default 2.5)
+    /// snappy control, 0–5 V: how loud and long the noise rattles over the
+    /// tones (default 2.5)
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     snappy: Option<PolySignal>,
-    /// pitch of the low resonator in V/Oct, scaling both; stock is ≈250 Hz
+    /// pitch of the low tone in V/Oct, the high one following; stock is ≈250 Hz
     /// (default -0.0678)
     #[signal(type = pitch, default = -0.0678, range = (-1.5, 1.5))]
     #[deserr(default)]
     freq: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the ring, as on the
-    /// hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise each hit builds on the last, as on
+    /// the 808 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -72,14 +71,13 @@ impl Default for ChannelState {
 
 /// TR-808 snare drum.
 ///
-/// Each rising edge on **trigger** fires the 808's 1 ms trigger pulse into a
-/// circuit model of its snare: two bridged-T resonators near 250 and 500 Hz,
-/// blended by **tone**, over a burst of chopped white noise whose strength
-/// **snappy** sets. **accent**, sampled at each strike, drives the circuit
-/// harder.
+/// A circuit model of the 808's snare: two drum tones near 250 and 500 Hz under
+/// a burst of bright noise. **tone** blends from the low tone to the high one,
+/// **snappy** sets how much noise, **freq** the pitch, and **accent** how hard
+/// it hits.
 ///
-/// An unaccented hit peaks near **±5 V** and a fully accented one near
-/// **±10 V**.
+/// An unaccented hit peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr808.snare($clock.beatTrigger, { snappy: 4 }).out()

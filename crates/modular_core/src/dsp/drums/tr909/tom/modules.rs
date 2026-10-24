@@ -156,9 +156,8 @@ macro_rules! tom_module {
                 /// rising edges strike the drum
                 #[signal(type = trig, range = (0.0, 5.0))]
                 trigger: PolySignal,
-                /// accent, 0–5 V, sampled on each trigger and held for the hit;
-                /// raises the accent voltage, for a hit up to twice as loud
-                /// (default 0)
+                /// accent, 0–5 V, sampled at each strike and held for the hit:
+                /// up to twice as loud (default 0)
                 #[signal(default = 0.0, range = (0.0, 5.0))]
                 #[deserr(default)]
                 accent: Option<PolySignal>,
@@ -170,9 +169,9 @@ macro_rules! tom_module {
                 #[signal(default = 2.5, range = (0.0, 5.0))]
                 #[deserr(default)]
                 decay: Option<PolySignal>,
-                /// fade out a still-sounding hit over 2 ms as the next one
-                /// strikes, so every hit starts from rest; otherwise hits add
-                /// to the envelopes, as on the hardware (default false)
+                /// fade out a hit still sounding over 2 ms as the next one
+                /// strikes, so every hit starts from rest; otherwise each hit
+                /// builds on the last, as on the 909 (default false)
                 #[serde(default)]
                 #[deserr(default)]
                 restart: bool,
@@ -273,14 +272,13 @@ macro_rules! tom_module {
 tom_module! {
     /// TR-909 low tom.
     ///
-    /// Each rising edge on **trigger** fires the 909's trigger into a circuit
-    /// model of its low tom: three triangle VCOs, their pitch bent down from
-    /// the strike, one clipped ever harder as it fades, the others rounded
-    /// toward sines, over a burst of noise. **freq** sets the pitch, **decay**
-    /// how long the drum rings, and **accent**, sampled at each strike,
-    /// drives it harder.
+    /// A circuit model of the 909's low tom: a deep tone that bends down from
+    /// the strike and grows gritty as it fades, over a puff of noise. **freq**
+    /// sets the pitch, **decay** how long it rings, and **accent** how hard it
+    /// hits.
     ///
-    /// An unaccented hit peaks near **±5 V**.
+    /// An unaccented hit peaks near **±5 V** and a fully accented one near
+    /// **±10 V**.
     ///
     /// ```js
     /// $tr909.lowTom($clock.beatTrigger).out()
@@ -290,17 +288,18 @@ tom_module! {
     parts = LOW,
     freq = -2.0993,
     freq_range = (-3.6, -0.6),
-    freq_doc = "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈61 Hz (default -2.0993)",
+    freq_doc = "pitch in V/Oct; stock is ≈61 Hz (default -2.0993)",
 }
 
 tom_module! {
     /// TR-909 mid tom.
     ///
-    /// The low tom's circuit with smaller capacitors: it rings higher and
-    /// shorter. **freq** sets the pitch, **decay** how long the drum rings,
-    /// and **accent**, sampled at each strike, drives it harder.
+    /// The 909's mid tom: the low tom's sound, pitched higher and shorter.
+    /// **freq** sets the pitch, **decay** how long it rings, and **accent** how
+    /// hard it hits.
     ///
-    /// An unaccented hit peaks near **±5 V**.
+    /// An unaccented hit peaks near **±5 V** and a fully accented one near
+    /// **±10 V**.
     ///
     /// ```js
     /// $tr909.midTom($clock.beatTrigger).out()
@@ -310,18 +309,18 @@ tom_module! {
     parts = MID,
     freq = -1.8098,
     freq_range = (-3.3, -0.3),
-    freq_doc = "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈75 Hz (default -1.8098)",
+    freq_doc = "pitch in V/Oct; stock is ≈75 Hz (default -1.8098)",
 }
 
 tom_module! {
     /// TR-909 high tom.
     ///
-    /// The low tom's circuit with smaller capacitors still: the highest and
-    /// shortest of the three. **freq** sets the pitch, **decay** how long
-    /// the drum rings, and **accent**, sampled at each strike, drives it
-    /// harder.
+    /// The 909's high tom: the low tom's sound, the highest and shortest of the
+    /// three. **freq** sets the pitch, **decay** how long it rings, and
+    /// **accent** how hard it hits.
     ///
-    /// An unaccented hit peaks near **±5 V**.
+    /// An unaccented hit peaks near **±5 V** and a fully accented one near
+    /// **±10 V**.
     ///
     /// ```js
     /// $tr909.highTom($clock.beatTrigger).out()
@@ -331,5 +330,5 @@ tom_module! {
     parts = HIGH,
     freq = -1.5143,
     freq_range = (-3.0, 0.0),
-    freq_doc = "resting pitch of VCO-2 in V/Oct, scaling all three VCOs and their bend; stock is ≈92 Hz (default -1.5143)",
+    freq_doc = "pitch in V/Oct; stock is ≈92 Hz (default -1.5143)",
 }

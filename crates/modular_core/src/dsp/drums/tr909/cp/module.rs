@@ -11,14 +11,14 @@ struct Cp909Params {
     /// rising edges clap
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; doubles
-    /// the level at full accent and swells the reverb (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the clap: up to twice
+    /// as loud, with a fuller tail (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// fade out a still-sounding clap over 2 ms as the next one strikes, so
-    /// every clap starts from rest; otherwise claps run into each other, as
-    /// on the hardware (default false)
+    /// fade out a clap still sounding over 2 ms as the next one strikes, so
+    /// every clap starts from rest; otherwise each clap runs into the last, as
+    /// on the 909 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -33,13 +33,12 @@ struct Cp909Outputs {
 
 /// TR-909 hand clap.
 ///
-/// Each rising edge on **trigger** fires the 909's trigger into a circuit
-/// model of its hand clap: band-passed noise through a VCA that a sawtooth
-/// envelope opens several times in quick succession, over a swelling
-/// "reverb" of darker noise. **accent**, sampled at each strike, doubles
-/// the level and swells the reverb.
+/// A circuit model of the 909's hand clap: bursts of filtered noise in quick
+/// succession, like several hands clapping at once, over a swelling noise tail.
+/// **accent** makes it louder and swells the tail.
 ///
-/// An unaccented clap peaks near **±5 V**.
+/// An unaccented clap peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr909.clap($clock.beatTrigger).out()

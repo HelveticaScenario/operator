@@ -223,6 +223,7 @@ impl<L: Lanes> Circuit<L> for Rim<L> {
             r_in: z,
             r_out: R423,
             r_load: R418,
+            vca: VCA,
         };
         let ie = shaper.solve(!L::DM::default(), &mut self.mix, &mut self.vc, v, ib);
         let drawn = (v - self.mix.v) / z;
@@ -270,14 +271,14 @@ struct Rs909Params {
     /// rising edges strike the rim
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the accent voltage, for a hit up to twice as loud (default 0)
+    /// accent, 0–5 V, sampled at each strike and held for the hit: up to twice
+    /// as loud (default 0)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     accent: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the ring, as on
-    /// the hardware (default false)
+    /// fade out a hit still sounding over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise each hit builds on the last, as on
+    /// the 909 (default false)
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
@@ -292,12 +293,11 @@ struct Rs909Outputs {
 
 /// TR-909 rim shot.
 ///
-/// Each rising edge on **trigger** fires the 909's trigger into a circuit
-/// model of its rim shot: three resonators rung by the trigger pulse,
-/// clipped by diodes, passed by an accent-driven VCA and high-passed to a
-/// click. **accent**, sampled at each strike, drives it harder.
+/// A circuit model of the 909's rim shot: a short, sharp, metallic click from
+/// three tones rung together and clipped. **accent** makes it hit harder.
 ///
-/// An unaccented hit peaks near **±5 V**.
+/// An unaccented hit peaks near **±5 V** and a fully accented one near **±10
+/// V**.
 ///
 /// ```js
 /// $tr909.rimShot($clock.beatTrigger).out()
