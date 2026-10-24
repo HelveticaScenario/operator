@@ -5456,6 +5456,187 @@
     ]
   },
   {
+    "name": "$apf",
+    "documentation": "Stacked allpass filter: 1 to 50 two-pole stages, with resonance and\nfeedback. Smears transients into chirps around the cutoff; mixed with the\ndry signal, it notches like a phaser.\n\n- **cutoff** — V/Oct, the frequency delayed most.\n- **stages** — 1–50. More stages, longer smear. A fractional count fades\n  the next stage in smoothly.\n- **resonance** — 0–5. Makes the smear ring at the cutoff's pitch.\n- **feedback** — −5 to 5. Repeats the smear; rings get longer toward ±5,\n  where they never fade. Up to ±6 the filter self-oscillates. Negative\n  values flip the sign of every other repeat.\n- **fadeStep** — 0–49. Above 0, `stages` crossfades between chains this\n  many stages apart instead, giving notches.\n\n```js\n// smear a click on every beat into a chirp around C3\n$pPulse($clock[0]).$.apf('c3', { stages: 50 }).out()\n// ringing, pitched smear with repeats\n$pPulse($clock[0]).$.apf('g3', { stages: 32, resonance: 3, feedback: 3 }).out()\n// self-oscillating: no input, just the loop\n$apf(0, 'c3', { stages: 20, resonance: 2, feedback: 5.5 }).out()\n// notches: crossfading between chains 8 stages apart\n$noise('white').$.apf('c4', { stages: $sine('0.05hz').range(9, 25), resonance: 2, fadeStep: 8 }).out()\n// four-stage phaser: swept allpass mixed equally with the dry saw\n$saw('c2').$m.apf(2.5, $sine('0.2hz').range(-1, 3), { stages: 4, resonance: 2, feedback: 3 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AllpassParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "frequency in V/Oct (0V = C4) the stages delay most",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "fadeStep": {
+          "description": "stages between crossfaded chains (0-49); 0 glides instead",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "feedback": {
+          "description": "output fed back into the input (-5 to 5, up to ±6 to self-oscillate)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "signal input",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "how sharply the stages ring at the cutoff (0-5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of two-pole stages (1-50): how much smear",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "phase-shifted signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "frequency in V/Oct (0V = C4) the stages delay most",
+        "signalType": "frequency",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "stages",
+        "description": "number of two-pole stages (1-50): how much smear",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 1.0,
+        "maxValue": 50.0
+      },
+      {
+        "name": "resonance",
+        "description": "how sharply the stages ring at the cutoff (0-5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "feedback",
+        "description": "output fed back into the input (-5 to 5, up to ±6 to self-oscillate)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      }
+    ]
+  },
+  {
     "name": "$hpf",
     "documentation": "Highpass filter that attenuates frequencies below the cutoff point.\n\nUse it to remove low-end rumble, thin out a sound, or create rising\nfilter effects. Pairs well with lowpass filters for isolating a\nfrequency band.\n\n- **cutoff** — set in V/Oct (0 V = C4). Accepts modulation for filter sweeps.\n- **resonance** — boosts frequencies near the cutoff (0–5). High values\n  produce a ringing peak.\n\n```js\n// remove low end from a noise source\n$hpf($noise(\"white\"), 'a3', 1)\n```",
     "paramsSchema": {
