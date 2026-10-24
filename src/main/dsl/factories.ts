@@ -1,6 +1,6 @@
 import type { ModuleSchema } from '@modular/core';
 import { deriveChannelCount, getReservedOutputNames } from '@modular/core';
-import type { ModuleOutput } from './GraphBuilder';
+import type { ModuleOutput, ScopeConfig } from './GraphBuilder';
 import {
     BaseCollection,
     GraphBuilder,
@@ -640,11 +640,7 @@ export class DSLContext {
 
     scope<T extends ModuleOutput | Collection | CollectionWithRange>(
         target: T,
-        config?: {
-            msPerFrame?: number;
-            triggerThreshold?: number;
-            scale?: number;
-        },
+        config?: ScopeConfig,
     ): T {
         const loc = captureSourceLocation();
         if (

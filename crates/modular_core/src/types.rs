@@ -2888,6 +2888,10 @@ pub struct ScopeStats {
     pub max: f64,
     pub peak_to_peak: f64,
     pub read_offset: u32,
+    /// How far, in buffer samples, the trigger crossing lies before the first
+    /// sample (0 to 1); 0 for an untriggered scope. Drawing each sample this
+    /// much later pins the crossing to the same spot every frame.
+    pub trigger_offset: f64,
 }
 
 /// One VU meter's loudness snapshot, joined to its `VuMeterSpec` by `module_id`.
@@ -2915,6 +2919,19 @@ pub struct Scope {
     /// Voltage range for display (default [-5.0, 5.0]). The scope displays from range[0] to range[1].
     #[serde(default = "default_scope_range")]
     pub range: (f64, f64),
+    /// Draw each channel in its own scope instead of overlaying them.
+    pub split: Option<ScopeSplit>,
+}
+
+/// How a split scope arranges its per-channel views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[napi(string_enum = "lowercase")]
+pub enum ScopeSplit {
+    /// Stacked top to bottom at full width.
+    Vertical,
+    /// Side by side in equal shares of the width.
+    Horizontal,
 }
 
 fn default_scope_range() -> (f64, f64) {
