@@ -184,6 +184,15 @@ describe('computeControlQuickFixes — namespaced modules', () => {
         expect(fix.title).toBe(`Wrap 'resonance' in $slider`);
         expect(apply(source, fix)).toContain(`$slider('resonance', 2.5, `);
     });
+
+    test('a dotted factory split across lines resolves', () => {
+        const { source, fixes } = fixesAt(
+            `$unstable.filter\n  // comment\n  .lp($sine(0), '100hz', 2.|5).out();`,
+        );
+        const fix = wrapFix(fixes);
+        expect(fix.title).toBe(`Wrap 'resonance' in $slider`);
+        expect(apply(source, fix)).toContain(`$slider('resonance', 2.5, `);
+    });
 });
 
 describe('computeControlQuickFixes — direct positional arguments', () => {
