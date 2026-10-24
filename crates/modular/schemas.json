@@ -13189,6 +13189,223 @@
     ]
   },
   {
+    "name": "_erratic",
+    "documentation": "Applies a wandering random shift to a signal.\n\nThe shift spans ±**amount** scaled to the width of [**min**, **max**]: an\namount of 5 moves the signal by up to half the range either way. **bias**\nshrinks one side of that span — at +5 the shift is only upward, at -5 only\ndownward. **speed** sets how quickly the shift changes, from frozen at 0\nthrough smooth drift to white noise at 5. A **trigger** samples and holds\nthe shift on each rising edge.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ErraticParams",
+      "type": "object",
+      "properties": {
+        "amount": {
+          "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "bias": {
+          "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clamp": {
+          "description": "clamp the output to [min, max]",
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "description": "signal to shift",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "max": {
+          "description": "maximum of the input's range",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min": {
+          "description": "minimum of the input's range",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edge samples and holds the current random shift",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "amount"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "randomly shifted signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal to shift",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "amount",
+        "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "rising edge samples and holds the current random shift",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "speed",
+        "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+        "signalType": "control",
+        "defaultValue": 2.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "bias",
+        "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "min",
+        "description": "minimum of the input's range",
+        "signalType": "control",
+        "defaultValue": -5.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "max",
+        "description": "maximum of the input's range",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "amount"
+      }
+    ]
+  },
+  {
     "name": "$hold",
     "documentation": "Stretches a trigger into a fixed-length gate.\n\nA rising edge on the input opens the output at 5V for `time` seconds,\nregardless of when the input falls; the output closes after `time` even if\nthe input is still high. A rising edge while the output is high\nretriggers it: the output drops low for a brief retrigger gap, so\ndownstream envelopes see a new rising edge, and the gate closes `time`\nafter the new edge.\n\n## Example\n\n```js\n// stretch short clock pulses into 100 ms gates\nconst env = $adsr($hold($clock.beatTrigger, 0.1))\n$sine('c4').amplitude(env).out()\n```",
     "paramsSchema": {

@@ -430,8 +430,56 @@ fn video_taps(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
+/// `$saw` into a chain of 32 `_erratic`s. With `modulated`, speed follows an
+/// `$sine` and a `$pulse` triggers the hold; otherwise every setting is a
+/// constant.
+fn erratic_chain(channels: usize, modulated: bool) -> BenchPatch {
+    let mut modules = vec![
+        (
+            "src".to_string(),
+            "$saw",
+            json!({ "freq": poly(0.0, channels) }),
+        ),
+        (
+            "lfo".to_string(),
+            "$sine",
+            json!({ "freq": poly(-4.0, channels) }),
+        ),
+        (
+            "gate".to_string(),
+            "$pulse",
+            json!({ "freq": poly(-3.0, channels) }),
+        ),
+    ];
+    for i in 0..32 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("e{}", i - 1)
+        };
+        let mut params = json!({
+            "input": poly_cable(&prev, "output", channels),
+            "amount": 0.5, "speed": 2.5, "bias": 1.0, "clamp": true,
+        });
+        if modulated {
+            params["speed"] = poly_cable("lfo", "output", channels);
+            params["trigger"] = poly_cable("gate", "output", channels);
+        }
+        modules.push((format!("e{i}"), "_erratic", params));
+    }
+    BenchPatch::new(modules)
+}
+
+fn erratic_constant(channels: usize) -> BenchPatch {
+    erratic_chain(channels, false)
+}
+
+fn erratic_modulated(channels: usize) -> BenchPatch {
+    erratic_chain(channels, true)
+}
+
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 12] = [
+    let cases: [(&str, fn(usize) -> BenchPatch); 14] = [
         ("wide_mix_sample_160", wide_mix_sample),
         ("remap_chain_32", remap_chain),
         ("wide_mix_160", wide_mix),
@@ -444,6 +492,8 @@ fn bench_patches(c: &mut Criterion) {
         ("wavetable_8", wavetables),
         ("eq_8", eqs),
         ("video_tap_16", video_taps),
+        ("erratic_constant_32", erratic_constant),
+        ("erratic_modulated_32", erratic_modulated),
     ];
     for (name, build) in cases {
         let mut group = c.benchmark_group(name);

@@ -107,16 +107,6 @@ impl Lfsr {
     }
 }
 
-/// Catmull–Rom spline through `p0..p3`, evaluated between `p1` (t = 0) and
-/// `p2` (t = 1).
-pub(super) fn catmull_rom(p: [f32; 4], t: f32) -> f32 {
-    let [p0, p1, p2, p3] = p;
-    let a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
-    let b = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
-    let c = 0.5 * (p2 - p0);
-    ((a * t + b) * t + c) * t + p1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,13 +120,6 @@ mod tests {
         let first: Vec<f32> = (0..93).map(|_| lfsr.step(6)).collect();
         let second: Vec<f32> = (0..93).map(|_| lfsr.step(6)).collect();
         assert_eq!(first, second);
-    }
-
-    #[test]
-    fn catmull_rom_hits_its_knots() {
-        let p = [0.3, -0.2, 0.8, 0.1];
-        assert!((catmull_rom(p, 0.0) - p[1]).abs() < 1e-6);
-        assert!((catmull_rom(p, 1.0) - p[2]).abs() < 1e-6);
     }
 
     #[test]
