@@ -67,14 +67,15 @@ impl Default for AllpassChannel {
 }
 
 impl AllpassChannel {
-    /// Seed channel `channel`'s noise floor, so channels self-oscillate
-    /// independently.
-    pub(super) fn seed_noise(&mut self, channel: usize) {
-        self.feedback.seed_noise(channel);
+    /// Seed this channel's noise floor from the module's `base` and its
+    /// index `channel`, so modules and channels self-oscillate independently.
+    pub(super) fn seed_noise(&mut self, base: u64, channel: usize) {
+        self.feedback.seed_noise(base, channel);
     }
 
     /// Recompute whichever coefficients `octaves` (the cutoff relative to the
-    /// sample rate), `resonance` and the gliding stage's `frac` change.
+    /// sample rate), `resonance` and the gliding stage's `frac` change; `frac`
+    /// 0 leaves the gliding stage's for later.
     #[inline(always)]
     fn tune(&mut self, octaves: f32, resonance: f32, frac: f32) {
         let new_cutoff = changed(octaves, self.tuned_octaves);
@@ -88,23 +89,21 @@ impl AllpassChannel {
             self.tuned_resonance = resonance;
             self.k = damping(resonance);
         }
-        let new_tone = new_cutoff || new_resonance;
-        if new_tone {
+        if new_cutoff || new_resonance {
             self.coeffs = StageCoeffs::new(self.g, self.k);
+            self.tuned_frac = f32::NAN;
         }
-        if frac > 0.0 && (new_tone || changed(frac, self.tuned_frac)) {
+        if frac > 0.0 && changed(frac, self.tuned_frac) {
             self.tuned_frac = frac;
             self.gliding = StageCoeffs::from_reciprocal(glide(self.g, frac), self.k);
         }
     }
 
     /// Bring the first `count` stages into use, returning the index from
-    /// which they start settled on their input.
+    /// which they start settled on their input. Before the first sample every
+    /// stage is at rest.
     fn activate(&mut self, count: usize) -> usize {
         let before = self.active;
-        if count > before {
-            self.stages[before..count].fill(Stage::default());
-        }
         self.active = count;
         if self.running { before } else { usize::MAX }
     }
@@ -144,13 +143,13 @@ impl AllpassChannel {
     /// lower one.
     fn crossfade_chain(&mut self, x: f32, stages: f32, step: usize) -> f32 {
         let (lower, upper) = grid_points(stages, step);
-        let settle_from = self.activate(upper);
+        let mix = (stages - lower as f32) / (upper - lower).max(1) as f32;
+        let settle_from = self.activate(if mix > 0.0 { upper } else { lower });
         let below = self.run(0..lower, settle_from, x);
-        if upper == lower {
+        if mix == 0.0 {
             return below;
         }
         let above = self.run(lower..upper, settle_from, below);
-        let mix = (stages - lower as f32) / (upper - lower) as f32;
         below + mix * (above - below)
     }
 
@@ -172,7 +171,7 @@ impl AllpassChannel {
         self.tune(
             sanitize(controls.cutoff) + log2_c4_over_fs,
             sanitize(controls.resonance),
-            frac,
+            if fade_step == 0 { frac } else { 0.0 },
         );
         let x = self.feedback.feed(input, sanitize(controls.feedback));
         let out = if fade_step == 0 {
@@ -180,6 +179,9 @@ impl AllpassChannel {
         } else {
             self.crossfade_chain(x, stages, fade_step)
         };
+        if !out.is_finite() {
+            self.stages = [Stage::default(); MAX_STAGES];
+        }
         self.running = true;
         self.feedback.close(out)
     }

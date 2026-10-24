@@ -241,3 +241,49 @@ fn gliding_stages_do_not_ring_at_nyquist() {
         assert!(largest < 1e-3, "{from} to {to}: curvature {largest}");
     }
 }
+
+#[test]
+fn gliding_stage_follows_a_cutoff_change_made_at_a_whole_count() {
+    // A sine's steady state after a cutoff change made while `stages` sat on
+    // a whole count matches a channel that only ever saw the new cutoff.
+    let sine = |n: usize| (std::f32::consts::TAU * 1_000.0 * n as f32 / SR).sin();
+    let len = SR as usize / 2;
+    let mut moved = channel();
+    for n in 0..len {
+        let c = match n {
+            0..1000 => controls(0.0, 2.5, 1.0),
+            1000..2000 => controls(1.0, 3.0, 1.0),
+            _ => controls(1.0, 2.5, 1.0),
+        };
+        moved.step(sine(n), c, 0, log2_c4_over_fs());
+    }
+    let mut fresh = channel();
+    for n in 0..len {
+        fresh.step(sine(n), controls(1.0, 2.5, 1.0), 0, log2_c4_over_fs());
+    }
+    for n in len..len + 100 {
+        let c = controls(1.0, 2.5, 1.0);
+        let (a, b) = (
+            moved.step(sine(n), c, 0, log2_c4_over_fs()),
+            fresh.step(sine(n), c, 0, log2_c4_over_fs()),
+        );
+        assert!((a - b).abs() < 1e-3, "sample {n}: {a} vs {b}");
+    }
+}
+
+#[test]
+fn recovers_from_an_input_that_overflows_the_stages() {
+    let mut ch = channel();
+    let c = controls(0.0, 4.0, 5.0);
+    for _ in 0..16 {
+        ch.step(f32::MAX, c, 0, log2_c4_over_fs());
+    }
+    let y: Vec<f32> = (0..SR as usize / 10)
+        .map(|n| {
+            let x = (std::f32::consts::TAU * 200.0 * n as f32 / SR).sin();
+            ch.step(x, c, 0, log2_c4_over_fs())
+        })
+        .collect();
+    assert!(y.iter().all(|v| v.is_finite()));
+    assert!(rms(&y, 0.05, 0.1) > 0.1, "silent after overflow");
+}

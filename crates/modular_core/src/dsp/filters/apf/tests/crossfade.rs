@@ -101,3 +101,27 @@ fn fade_step_is_at_most_49() {
     }
     assert!(with(50).is_err());
 }
+
+#[test]
+fn crossfade_moves_off_a_grid_point_without_a_jump() {
+    // Moving off a grid point brings the upper chain in settled, so the
+    // output stays continuous.
+    let mut ch = channel();
+    let len = SR as usize;
+    let mut previous = 0.0;
+    let mut largest = 0.0f32;
+    for n in 0..len {
+        let x = (std::f32::consts::TAU * 50.0 * n as f32 / SR).sin();
+        let stages = if n < len / 2 {
+            9.0
+        } else {
+            9.0 + (n - len / 2) as f32 / len as f32
+        };
+        let y = ch.step(x, controls(0.0, stages, 1.0), 8, log2_c4_over_fs());
+        if n > 0 {
+            largest = largest.max((y - previous).abs());
+        }
+        previous = y;
+    }
+    assert!(largest < 0.02, "largest step {largest}");
+}

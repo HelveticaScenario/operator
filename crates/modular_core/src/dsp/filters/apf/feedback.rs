@@ -102,10 +102,8 @@ impl Default for FeedbackLoop {
 }
 
 impl FeedbackLoop {
-    /// Seed channel `channel`'s noise floor, so channels self-oscillate
-    /// independently.
-    pub(super) fn seed_noise(&mut self, channel: usize) {
-        self.noise.seed(0, channel);
+    pub(super) fn seed_noise(&mut self, base: u64, channel: usize) {
+        self.noise.seed(base, channel);
     }
 
     /// Center the excess bandpass on prewarp `g`.

@@ -8,7 +8,7 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    dsp::utils::C4_HZ_F32,
+    dsp::utils::{C4_HZ_F32, rng::seed_base},
     param_errors::ModuleParamErrors,
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
@@ -112,8 +112,9 @@ struct AllpassState {
 impl Allpass {
     fn init(&mut self, sample_rate: f32) {
         self.state.log2_c4_over_fs = (C4_HZ_F32 / sample_rate).log2();
+        let base = seed_base(self);
         for (ch, state) in self.channel_state.iter_mut().enumerate() {
-            state.seed_noise(ch);
+            state.seed_noise(base, ch);
         }
     }
 
