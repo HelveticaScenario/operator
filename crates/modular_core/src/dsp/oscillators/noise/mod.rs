@@ -82,8 +82,8 @@ enum NoiseKind {
     Velvet,
     /// ±5V that flips sign at random moments, `rate` times per second on average
     Telegraph,
-    /// rests at −5V with single-sample +5V triggers at random moments, `rate`
-    /// per second on average
+    /// rests at −5V with single-sample +5V triggers, `rate` per second on
+    /// average, at loosely irregular moments that never clump
     Dust,
 }
 
@@ -118,14 +118,16 @@ enum NoiseInterp {
 /// Impulse and switching noise:
 /// - **velvet**: exactly one ±5V impulse per tick, at a random moment within it
 /// - **telegraph**: ±5V that flips at random moments, on average `rate` times per second
-/// - **dust**: rests at −5V with single-sample +5V triggers at random moments, on average `rate` per second
+/// - **dust**: rests at −5V with single-sample +5V triggers, on average `rate` per second; like
+///   Mutable Instruments Beads' random grain triggers, each gap is 0.12–2.36× the average, so
+///   triggers never clump or leave long silences
 ///
 /// `rate` clocks the generator: the color is computed at that rate, so slow
 /// rates give random CV (a slow brown is a drunk walk) and audio rates give
 /// lo-fi, band-limited noise. `interp` shapes the output between ticks;
 /// `linear` and `smooth` turn any color into a smooth random LFO. Unconnected,
-/// the generator draws a new value every sample, and telegraph and dust switch
-/// on half of all samples.
+/// the generator draws a new value every sample, telegraph flips on half of all
+/// samples, and dust fires every two samples on average.
 ///
 /// The `channels` parameter sets how many independent channels are generated;
 /// each channel runs its own RNG seeded distinctly, so every channel is a
@@ -185,8 +187,8 @@ impl Noise {
         let color = self.params.color;
 
         // Unconnected, the clock ticks every sample with nothing to
-        // interpolate, and telegraph and dust switch with the maximum-entropy
-        // probability 1/2.
+        // interpolate, telegraph flips with the maximum-entropy probability
+        // 1/2, and dust's gaps average two samples.
         let rate = self.params.rate.as_ref();
         let interp = if rate.is_some() {
             self.params.interp

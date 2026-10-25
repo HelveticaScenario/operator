@@ -64,6 +64,18 @@ pub(super) fn coin(rng: &mut LcgRng) -> f32 {
     rail(rng.next_unit() >= 0.5)
 }
 
+/// Mean of `x(1 + x(1/2 + x(1/3 + x/4)))` for `x` uniform in `[0.1, 1]`.
+const DUST_MEAN_GAP: f32 = 0.883_138_3;
+
+/// Gap to the next dust trigger, in average gaps. Mutable Instruments Beads
+/// spaces its random grain triggers this way: a truncated series for
+/// `−ln(1 − x)`, so gaps fall between about 0.12× and 2.36× the average and
+/// short gaps are more likely than long ones.
+pub(super) fn dust_gap(rng: &mut LcgRng) -> f32 {
+    let x = 0.1 + 0.9 * rng.next_unit();
+    x * (1.0 + x * (0.5 + x * (1.0 / 3.0 + x * 0.25))) / DUST_MEAN_GAP
+}
+
 /// Standard deviation of a sum of four uniform `[-1, 1)` draws.
 const SUM4_STD: f32 = 1.154_700_5;
 

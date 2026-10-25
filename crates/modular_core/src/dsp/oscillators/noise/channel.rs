@@ -1,7 +1,8 @@
 //! Per-channel generator state for `$noise`.
 
 use super::generators::{
-    BLUE_GAIN, BROWN_STEP, Lfsr, LfsrLoop, PINK_GAIN, PinkFilter, coin, gaussian, rail, reflect,
+    BLUE_GAIN, BROWN_STEP, Lfsr, LfsrLoop, PINK_GAIN, PinkFilter, coin, dust_gap, gaussian, rail,
+    reflect,
 };
 use super::{NoiseInterp, NoiseKind};
 use crate::dsp::utils::CatmullRom;
@@ -43,6 +44,9 @@ pub(super) struct NoiseChannelState {
     impulse_sign: f32,
     /// Velvet: the scheduled impulse has not fired yet.
     impulse_pending: bool,
+    /// Dust: time left until the next trigger, in average gaps. f64 for the
+    /// same reason as `phase`.
+    dust_wait: f64,
 }
 
 impl NoiseChannelState {
@@ -87,7 +91,8 @@ impl NoiseChannelState {
         self.schedule_impulse();
 
         match kind {
-            NoiseKind::Velvet | NoiseKind::Telegraph | NoiseKind::Dust => {}
+            NoiseKind::Dust => self.dust_wait = f64::from(dust_gap(&mut self.generator)),
+            NoiseKind::Velvet | NoiseKind::Telegraph => {}
             _ => {
                 if matches!(kind, NoiseKind::Pink | NoiseKind::Blue) {
                     for _ in 0..PINK_WARMUP {
@@ -189,9 +194,15 @@ impl NoiseChannelState {
         rail(self.telegraph_high)
     }
 
-    /// Dust: +1 with probability `p`, else −1.
-    pub(super) fn dust(&mut self, p: f32) -> f32 {
-        rail(self.generator.next_unit() < p)
+    /// Dust: count down `inc` average gaps and return +1 on a sample where a
+    /// trigger fires, else −1. Triggers that fall within one sample merge.
+    pub(super) fn dust(&mut self, inc: f32) -> f32 {
+        self.dust_wait -= f64::from(inc);
+        let fired = self.dust_wait <= 0.0;
+        while self.dust_wait <= 0.0 {
+            self.dust_wait += f64::from(dust_gap(&mut self.generator));
+        }
+        rail(fired)
     }
 }
 

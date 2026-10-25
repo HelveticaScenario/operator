@@ -215,6 +215,52 @@ fn telegraph_and_dust_follow_rate_on_average() {
     assert!(out.iter().all(|&v| v.abs() == 5.0));
 }
 
+/// Beads' gap bounds, `g(0.1)` and `g(1)` for `g(x) = x(1 + x(1/2 + x(1/3 + x/4)))`,
+/// over its mean gap.
+const DUST_GAP_RANGE: (f32, f32) = (0.105_358_3 / 0.883_138_3, 2.083_333_3 / 0.883_138_3);
+
+#[test]
+fn dust_gaps_stay_within_beads_bounds_and_average_the_rate() {
+    // 100 per second at 48 kHz: 480 samples between triggers on average.
+    let average = 480.0;
+    let out = render_seeded(
+        with_rate(NoiseKind::Dust, 100.0, NoiseInterp::Step),
+        4_800_000,
+    );
+    let triggers: Vec<usize> = (0..out.len()).filter(|&i| out[i] == 5.0).collect();
+    let gaps: Vec<f32> = triggers.windows(2).map(|w| (w[1] - w[0]) as f32).collect();
+    let (lo, hi) = DUST_GAP_RANGE;
+    for &gap in &gaps {
+        assert!(
+            gap >= (lo * average).floor() && gap <= (hi * average).ceil(),
+            "gap of {gap} samples outside [{lo}, {hi}] × {average}"
+        );
+    }
+    let mean = gaps.iter().sum::<f32>() / gaps.len() as f32;
+    assert!(
+        (mean / average - 1.0).abs() < 0.01,
+        "mean gap {mean} samples, expected {average}"
+    );
+    // Short gaps are more likely than long ones.
+    let short = gaps.iter().filter(|&&g| g < average).count();
+    assert!(
+        short * 2 > gaps.len(),
+        "{short} of {} gaps short",
+        gaps.len()
+    );
+}
+
+#[test]
+fn dust_without_rate_fires_every_two_samples_on_average() {
+    let out = render_seeded(params(NoiseKind::Dust, 1), 100_000);
+    let triggers = out.iter().filter(|&&v| v == 5.0).count();
+    // Gaps under a sample merge, so slightly fewer than half the samples fire.
+    assert!(
+        (40_000..=50_000).contains(&triggers),
+        "{triggers} triggers in 100000 samples"
+    );
+}
+
 #[test]
 fn slow_brown_wanders_without_jumps() {
     let out = render(
