@@ -87,7 +87,7 @@ const OUTPUT_GAIN: f32 = 1.23;
 
 /// The circuit's state for one hit sequence.
 #[derive(Clone, Copy)]
-struct Voice<L: Lanes = Mono> {
+struct Kick<L: Lanes = Mono> {
     pulse: Pulse<L>,
     /// Voltage across C40.
     shaper: L::S,
@@ -104,7 +104,7 @@ struct Voice<L: Lanes = Mono> {
     output_hp: L::S,
 }
 
-lanewise!(Voice {
+lanewise!(Kick {
     pulse,
     shaper,
     c38,
@@ -117,7 +117,7 @@ lanewise!(Voice {
     output_hp,
 });
 
-impl<L: Lanes> Default for Voice<L> {
+impl<L: Lanes> Default for Kick<L> {
     fn default() -> Self {
         Self {
             pulse: Pulse::default(),
@@ -134,16 +134,16 @@ impl<L: Lanes> Default for Voice<L> {
     }
 }
 
-impl Fire for Voice {
-    fn fire(&mut self, accent: f32, st: &Bd808State) {
+impl Fire for Kick {
+    fn fire(&mut self, accent: f32, sh: &KickShared) {
         self.pulse
-            .fire(pulse_volts(accent), st.timing.trigger_samples);
+            .fire(pulse_volts(accent), sh.timing.trigger_samples);
     }
 }
 
-impl<L: Lanes> Circuit<L> for Voice<L> {
-    type Shared = Bd808State;
-    type Controls = Controls<L>;
+impl<L: Lanes> Circuit<L> for Kick<L> {
+    type Shared = KickShared;
+    type Controls = KickControls<L>;
 
     fn settled(&self) -> L::SM {
         let silent = |v: L::S| v.abs().lt(c(SILENCE));
@@ -154,25 +154,25 @@ impl<L: Lanes> Circuit<L> for Voice<L> {
             .and_then(|| silent(self.tone_lp) & silent(self.level_hp) & silent(self.output_hp))
     }
 
-    fn step(&mut self, st: &Bd808State, controls: &Controls<L>) -> L::S {
-        self.advance(st, controls) * controls.level
+    fn step(&mut self, sh: &KickShared, controls: &KickControls<L>) -> L::S {
+        self.advance(sh, controls) * controls.level
     }
 }
 
 /// The bass drum at every width.
-struct BassDrum;
+struct KickDrum;
 
-impl Drum for BassDrum {
-    type Shared = Bd808State;
-    type Circuit<L: Lanes> = Voice<L>;
-    type Controls<L: Lanes> = Controls<L>;
+impl Drum for KickDrum {
+    type Shared = KickShared;
+    type Circuit<L: Lanes> = Kick<L>;
+    type Controls<L: Lanes> = KickControls<L>;
     type Sources<L: Lanes> = ();
     const RUNS_IN_QUADS: bool = true;
     const RUNS_IN_PAIRS: bool = false;
 }
 
 #[derive(Default)]
-struct Bd808State {
+struct KickShared {
     timing: Timing,
     dt: f32,
     /// Per-sample decay multipliers, which depend only on the sample rate.
@@ -229,7 +229,7 @@ impl Network {
 /// `decay` (its arm capacitance, 1 / (R167·C), and the feedback gain), and
 /// the tone low-pass coefficient, and the output gain levelling `freq`.
 #[derive(Clone, Copy, Default)]
-struct Controls<L: Lanes = Mono> {
+struct KickControls<L: Lanes = Mono> {
     c: L::S,
     a: L::S,
     g: L::S,
@@ -237,7 +237,7 @@ struct Controls<L: Lanes = Mono> {
     level: L::S,
 }
 
-lanewise!(Controls {
+lanewise!(KickControls {
     c,
     a,
     g,
@@ -245,11 +245,11 @@ lanewise!(Controls {
     level
 });
 
-impl<L: Lanes> Voice<L> {
+impl<L: Lanes> Kick<L> {
     /// Advances the circuit one sample and returns the output stage's voltage.
     #[inline]
-    fn advance(&mut self, st: &Bd808State, controls: &Controls<L>) -> L::S {
-        let dt = st.dt;
+    fn advance(&mut self, sh: &KickShared, controls: &KickControls<L>) -> L::S {
+        let dt = sh.dt;
         let vtrig = self.pulse.next();
 
         // Pulse shaper: the shelf passes the edges, and D53 stops the
@@ -262,11 +262,11 @@ impl<L: Lanes> Voice<L> {
             self.shaper = L::S::select(clamped, vtrig - vplus, self.shaper);
         }
         let shaper_rest = vtrig * R163 / (R162 + R163);
-        self.shaper = shaper_rest + (self.shaper - shaper_rest) * st.shaper_mul;
+        self.shaper = shaper_rest + (self.shaper - shaper_rest) * sh.shaper_mul;
 
         // Envelope generator: the trigger pulse holds C38 empty, and Q43
         // grounds the R165/R166 junction for as long as Venv stays high.
-        let charging = self.c38 + (c::<L::S>(RAIL) - self.c38) * st.c38_coeff;
+        let charging = self.c38 + (c::<L::S>(RAIL) - self.c38) * sh.c38_coeff;
         self.c38 = L::S::select(vtrig.gt(c(0.0)), c(0.0), charging);
         let q42 = ((self.c38 - Q42_ON_START) / Q42_ON_WIDTH).clamp(c(0.0), c(1.0));
         let attack = c::<L::S>(1.0) - q42 * q42 * (c::<L::S>(3.0) - q42 * 2.0);
@@ -278,7 +278,7 @@ impl<L: Lanes> Voice<L> {
         let shaved = vrp.gt(c(DIODE_DROP));
         let vrp = L::S::select(shaved, c(DIODE_DROP), vrp);
         self.c39 = L::S::select(shaved, venv - DIODE_DROP, self.c39);
-        self.c39 += (vrp - self.vcomm) * st.c39_step;
+        self.c39 += (vrp - self.vcomm) * sh.c39_step;
 
         // Q43 leakage on negative swings feeds Vcomm a current I(Vcomm)
         // that pulls it back towards ground. Linearised about the last
@@ -301,7 +301,7 @@ impl<L: Lanes> Voice<L> {
         };
         let g_ground = (c::<L::S>(1.0) - attack) / (R165 + R166) + attack / R166 + leak_g;
 
-        let Controls { c: cap, a, g, .. } = *controls;
+        let KickControls { c: cap, a, g, .. } = *controls;
         let g_total = g_ground + (1.0 / R161 + 1.0 / R170);
 
         // States u = (arm1, arm2), the voltages across C41 and C42, with
@@ -357,8 +357,8 @@ impl<L: Lanes> Voice<L> {
 
         // Tone low-pass, then the level and output coupling high-passes.
         let lp = low_pass(&mut self.tone_lp, vbt, controls.tone_coeff);
-        let level = high_pass(&mut self.level_hp, lp, c(st.level_hp_coeff));
-        high_pass(&mut self.output_hp, level, c(st.output_hp_coeff))
+        let level = high_pass(&mut self.level_hp, lp, c(sh.level_hp_coeff));
+        high_pass(&mut self.output_hp, level, c(sh.output_hp_coeff))
     }
 }
 

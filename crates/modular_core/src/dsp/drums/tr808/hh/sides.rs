@@ -155,7 +155,7 @@ impl<I: Input> ChannelInputs<OpenHat> for OpenSide<I> {
             band: cs.band,
             decay: 1.0 / (R132 + VR3 * decay),
             q23: cs.q23,
-            cut: cs.drain,
+            drain: cs.drain,
         };
         (self.trigger.at(ch), controls)
     }

@@ -14,7 +14,7 @@ fn seed(base: u64, channels: &mut [Channel]) {
 /// The inputs every channel of a tom or conga reads.
 struct TomInputs<'a, I> {
     parts: &'static Parts,
-    st: &'a TomState,
+    sh: &'a TomShared,
     trigger: I,
     freq: I,
     decay: I,
@@ -23,27 +23,27 @@ struct TomInputs<'a, I> {
 impl<I: Input> ChannelInputs<TomDrum> for TomInputs<'_, I> {
     type Channel = Channel;
 
-    fn voices(channel: &mut Channel) -> &mut Voices<Voice> {
+    fn voices(channel: &mut Channel) -> &mut Voices<Tom> {
         &mut channel.voices
     }
 
     #[inline(always)]
-    fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, Controls) {
+    fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, TomControls) {
         let network = cs
             .network
             .get((self.freq.at(ch), self.decay.at(ch)), |(freq, decay)| {
-                Network::new(self.parts, freq, decay, self.st.rest_hz)
+                Network::new(self.parts, freq, decay, self.sh.rest_hz)
             });
-        let controls = Controls {
+        let controls = TomControls {
             t: network.t,
-            white: cs.noise.next(self.st.noise_scale),
+            white: cs.noise.next(self.sh.noise_scale),
             level: network.level,
         };
         (self.trigger.at(ch), controls)
     }
 }
 
-impl TomModule {
+impl TomState {
     /// Runs one sample of every channel of the drum built from `parts` on
     /// its `[trigger, accent, freq, decay]`, handing `out` each one's
     /// output.
@@ -59,12 +59,12 @@ impl TomModule {
         let run = Run {
             accent,
             restart,
-            fade_samples: self.st.timing.fade_samples,
-            shared: &self.st,
+            fade_samples: self.shared.timing.fade_samples,
+            shared: &self.shared,
         };
         let inputs = TomInputs {
             parts,
-            st: &self.st,
+            sh: &self.shared,
             trigger,
             freq,
             decay,
@@ -127,13 +127,13 @@ macro_rules! tom_module {
             pub struct $Struct {
                 outputs: [<$Struct Outputs>],
                 params: [<$Struct Params>],
-                state: TomModule,
+                state: TomState,
                 channel_state: Box<[Channel]>,
             }
 
             impl $Struct {
                 fn init(&mut self, sample_rate: f32) {
-                    self.state.st.init(&$parts, sample_rate);
+                    self.state.shared.init(&$parts, sample_rate);
                     self.state.groups = Groups::new();
                 }
 

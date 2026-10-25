@@ -80,17 +80,17 @@ fn rim_rest_hz() -> f32 {
 
 impl Rs808 {
     fn init(&mut self, sample_rate: f32) {
-        let st = &mut self.state;
-        st.timing = Timing::new(PULSE_SECS, sample_rate);
-        st.substeps = (RIM_RATE / sample_rate).round().max(1.0) as u32;
-        let rate = sample_rate * st.substeps as f32;
-        st.dt = 1.0 / rate;
-        st.c24_charge = 1.0 - (-st.dt / (R107 * C24)).exp();
-        st.d63 = d63_table();
+        let sh = &mut self.state;
+        sh.timing = Timing::new(PULSE_SECS, sample_rate);
+        sh.substeps = (RIM_RATE / sample_rate).round().max(1.0) as u32;
+        let rate = sample_rate * sh.substeps as f32;
+        sh.dt = 1.0 / rate;
+        sh.c24_charge = 1.0 - (-sh.dt / (R107 * C24)).exp();
+        sh.d63 = d63_table();
         // Backward Euler on the high-pass's capacitors, with
         // C121·v1' = v2/R322 + (E − v1 − v2)/R325 and
         // C122·v2' = (E − v1 − v2)/R325.
-        let (a, b) = (st.dt / C121, st.dt / C122);
+        let (a, b) = (sh.dt / C121, sh.dt / C122);
         let (m11, m12, m21, m22) = (
             1.0 + a / R325,
             a / R325 - a / R322,
@@ -98,10 +98,10 @@ impl Rs808 {
             1.0 + b / R325,
         );
         let det = m11 * m22 - m12 * m21;
-        st.crack_inv = [m22 / det, -m12 / det, -m21 / det, m11 / det];
+        sh.crack_inv = [m22 / det, -m12 / det, -m21 / det, m11 / det];
         let (d1, d2) = (a / R325, b / R325);
-        st.crack_dir = ((m22 * d1 - m12 * d2) / det, (m11 * d2 - m21 * d1) / det);
-        st.couple_coeff = one_pole_coeff(rc_hz(R324 + R326, C125), rate);
+        sh.crack_dir = ((m22 * d1 - m12 * d2) / det, (m11 * d2 - m21 * d1) / det);
+        sh.couple_coeff = one_pole_coeff(rc_hz(R324 + R326, C125), rate);
     }
 
     fn update(&mut self, _sample_rate: f32) {
@@ -155,7 +155,7 @@ impl Rs808 {
 /// freq]`, handing `out` each one's output.
 #[inline(always)]
 fn rim_tick<I: Input>(
-    st: &RimShared,
+    sh: &RimShared,
     channels: &mut [RimChannel],
     restart: bool,
     [trigger, accent, freq]: [I; 3],
@@ -176,8 +176,8 @@ fn rim_tick<I: Input>(
             accent,
             ch,
             restart,
-            st.timing.fade_samples,
-            st,
+            sh.timing.fade_samples,
+            sh,
             &controls,
         );
         out(ch, rails(v * RIM_GAIN * level));
@@ -244,10 +244,11 @@ pub struct Cl808 {
 
 impl Cl808 {
     fn init(&mut self, sample_rate: f32) {
-        let st = &mut self.state;
-        st.timing = Timing::new(PULSE_SECS, sample_rate);
-        st.dt = 1.0 / sample_rate;
-        st.couple_coeff = one_pole_coeff(rc_hz(R319 + R326, C125), sample_rate);
+        let sh = &mut self.state;
+        sh.timing = Timing::new(PULSE_SECS, sample_rate);
+        sh.dt = 1.0 / sample_rate;
+        sh.couple_coeff = one_pole_coeff(rc_hz(R319 + R326, C125), sample_rate);
+        sh.rest_hz = CLAVES_T.rest_hz(1.0 / R312);
     }
 
     fn update(&mut self, _sample_rate: f32) {
@@ -303,16 +304,15 @@ impl Cl808 {
 /// decay]`, handing `out` each one's output.
 #[inline(always)]
 fn claves_tick<I: Input>(
-    st: &ClavesShared,
+    sh: &ClavesShared,
     channels: &mut [ClavesChannel],
     restart: bool,
     [trigger, accent, freq, decay]: [I; 4],
     mut out: impl FnMut(usize, f32),
 ) {
-    let rest_hz = CLAVES_T.rest_hz(1.0 / R312);
     for (ch, cs) in channels.iter_mut().enumerate() {
         let (t, level) = cs.t.get((freq.at(ch), decay.at(ch)), |(freq, decay)| {
-            let r = voct_to_hz(freq) / rest_hz;
+            let r = voct_to_hz(freq) / sh.rest_hz;
             let t = CLAVES_T.tuned(r, decay_around(decay, CLAVES_DECAY));
             (t, levels::CLAVES.gain(freq))
         });
@@ -321,8 +321,8 @@ fn claves_tick<I: Input>(
             accent,
             ch,
             restart,
-            st.timing.fade_samples,
-            st,
+            sh.timing.fade_samples,
+            sh,
             &t,
         );
         out(ch, rails(v * CLAVES_GAIN * level));

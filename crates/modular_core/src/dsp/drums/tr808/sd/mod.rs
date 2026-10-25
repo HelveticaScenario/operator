@@ -102,7 +102,7 @@ const OUTPUT_GAIN: f32 = 2.925;
 
 /// The circuit's state for one hit sequence.
 #[derive(Clone, Copy, Default)]
-struct Voice<L: Lanes = Mono> {
+struct Snare<L: Lanes = Mono> {
     pulse: Pulse<L>,
     /// Voltage across C57.
     c57: L::S,
@@ -122,7 +122,7 @@ struct Voice<L: Lanes = Mono> {
     out_lp: L::S,
 }
 
-lanewise!(Voice {
+lanewise!(Snare {
     pulse,
     c57,
     low,
@@ -140,20 +140,20 @@ lanewise!(Voice {
 /// Brings a fully accented hit to twice the level of an unaccented one.
 const ACCENT_TRIM: f32 = 0.937;
 
-impl Fire for Voice {
-    fn accent_trim(_: &Sd808State) -> f32 {
+impl Fire for Snare {
+    fn accent_trim(_: &SnareShared) -> f32 {
         ACCENT_TRIM
     }
 
-    fn fire(&mut self, accent: f32, st: &Sd808State) {
+    fn fire(&mut self, accent: f32, sh: &SnareShared) {
         self.pulse
-            .fire(pulse_volts(accent), st.timing.trigger_samples);
+            .fire(pulse_volts(accent), sh.timing.trigger_samples);
     }
 }
 
-impl<L: Lanes> Circuit<L> for Voice<L> {
-    type Shared = Sd808State;
-    type Controls = Controls<L>;
+impl<L: Lanes> Circuit<L> for Snare<L> {
+    type Shared = SnareShared;
+    type Controls = SnareControls<L>;
 
     fn settled(&self) -> L::SM {
         let silent = |v: L::S| v.abs().lt(c(SILENCE));
@@ -166,25 +166,25 @@ impl<L: Lanes> Circuit<L> for Voice<L> {
             .and_then(|| silent(self.snap_couple) & silent(self.out_lp))
     }
 
-    fn step(&mut self, st: &Sd808State, controls: &Controls<L>) -> L::S {
-        self.advance(st, controls) * controls.level
+    fn step(&mut self, sh: &SnareShared, controls: &SnareControls<L>) -> L::S {
+        self.advance(sh, controls) * controls.level
     }
 }
 
 /// The snare at every width.
-struct Snare;
+struct SnareDrum;
 
-impl Drum for Snare {
-    type Shared = Sd808State;
-    type Circuit<L: Lanes> = Voice<L>;
-    type Controls<L: Lanes> = Controls<L>;
+impl Drum for SnareDrum {
+    type Shared = SnareShared;
+    type Circuit<L: Lanes> = Snare<L>;
+    type Controls<L: Lanes> = SnareControls<L>;
     type Sources<L: Lanes> = ();
     const RUNS_IN_QUADS: bool = true;
     const RUNS_IN_PAIRS: bool = false;
 }
 
 #[derive(Default)]
-struct Sd808State {
+struct SnareShared {
     timing: Timing,
     dt: f32,
     /// The low resonator's resting frequency, Hz, and both resonators'
@@ -215,11 +215,11 @@ struct Tuning {
 }
 
 impl Tuning {
-    fn new(st: &Sd808State, freq: f32) -> Self {
-        let r = voct_to_hz(freq) / st.rest_hz;
+    fn new(sh: &SnareShared, freq: f32) -> Self {
+        let r = voct_to_hz(freq) / sh.rest_hz;
         Self {
-            low: LOW.tuned(r, st.low_decay),
-            high: HIGH.tuned(r, st.high_decay),
+            low: LOW.tuned(r, sh.low_decay),
+            high: HIGH.tuned(r, sh.high_decay),
             level: levels::SNARE.gain(freq),
         }
     }
@@ -227,7 +227,7 @@ impl Tuning {
 
 /// The front-panel settings for one sample.
 #[derive(Clone, Copy, Default)]
-struct Controls<L: Lanes = Mono> {
+struct SnareControls<L: Lanes = Mono> {
     low: BridgedT<L>,
     high: BridgedT<L>,
     /// Tone and snappy pot positions, 0–1.
@@ -239,7 +239,7 @@ struct Controls<L: Lanes = Mono> {
     level: L::S,
 }
 
-lanewise!(Controls {
+lanewise!(SnareControls {
     low,
     high,
     tone,
@@ -248,19 +248,19 @@ lanewise!(Controls {
     level
 });
 
-impl<L: Lanes> Voice<L> {
+impl<L: Lanes> Snare<L> {
     /// Advances the circuit one sample, returning IC13's output.
     #[inline]
-    fn advance(&mut self, st: &Sd808State, ctl: &Controls<L>) -> L::S {
-        let dt = st.dt;
+    fn advance(&mut self, sh: &SnareShared, ctl: &SnareControls<L>) -> L::S {
+        let dt = sh.dt;
         let vtrig = self.pulse.next();
 
         // Low resonator. C57 settles within microseconds to its share of the
         // pulse across R189, so IC14a's input is the remainder: a spike at
         // each edge, averaged over the sample to keep its energy exact.
         let c57_rest = vtrig * R189 / (R189 + R190);
-        let vp_low = vtrig - (c57_rest + (self.c57 - c57_rest) * st.c57_avg);
-        self.c57 = c57_rest + (self.c57 - c57_rest) * st.c57_mul;
+        let vp_low = vtrig - (c57_rest + (self.c57 - c57_rest) * sh.c57_avg);
+        self.c57 = c57_rest + (self.c57 - c57_rest) * sh.c57_mul;
         let (low, arms) = ctl.low.step(self.low, vp_low, c(1.0 / R196), c(0.0), dt);
         self.low = arms;
 
@@ -274,7 +274,7 @@ impl<L: Lanes> Voice<L> {
         // C51, then C51 and C52 bleed into Q48's collector node.
         let wiper = vtrig * (ctl.snappy * VR9 + R199) / (R199 + VR9);
         self.c51 = self.c51.max(wiper - Q47_VBE);
-        let chopping = (self.c52 - CHOP_V0).max(c(0.0)).gt(c(0.0));
+        let chopping = self.c52.gt(c(CHOP_V0));
         let g_load = L::S::select(chopping, c((1.0 - CHOP_MEAN) / R185), c(0.0));
         let g_leak = L::S::select(chopping, c(0.0), c(1.0 / LEAK));
         // Backward Euler on (C51, C52), with R185's share of the load as a
@@ -288,17 +288,17 @@ impl<L: Lanes> Voice<L> {
         self.c51 = (a22 * b1 - b2 * a12) / det;
         self.c52 = (b2 * a11 - b1 * a21) / det;
 
-        self.chop += (ctl.white * st.chop_norm - self.chop) * st.chop_coeff;
+        self.chop += (ctl.white * sh.chop_norm - self.chop) * sh.chop_coeff;
         let span = (self.c52 - CHOP_V0).max(c(0.0));
         let collector = self.c52.min(c(CHOP_V0)) + span * (self.chop * CHOP_RMS + CHOP_MEAN);
-        let thinned = st.snap_hp.process(&mut self.snap_hp, collector);
+        let thinned = sh.snap_hp.process(&mut self.snap_hp, collector);
         let snap_current =
-            high_pass(&mut self.snap_couple, thinned, c(st.snap_couple_coeff)) / R205;
+            high_pass(&mut self.snap_couple, thinned, c(sh.snap_couple_coeff)) / R205;
 
         let mixed = low_pass(
             &mut self.out_lp,
             tone_current + snap_current,
-            c(st.out_lp_coeff),
+            c(sh.out_lp_coeff),
         );
         mixed * -R_LEVEL
     }

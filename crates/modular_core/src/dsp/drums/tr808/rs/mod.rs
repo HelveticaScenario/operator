@@ -23,6 +23,10 @@ use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Timing, Voices};
 use crate::dsp::utils::{sanitize, voct_to_hz};
 use crate::poly::{PolyOutput, PolySignal};
 
+mod module;
+
+pub use module::{Cl808, Rs808};
+
 // IC20a's input: C114 into R306, D64 into the R310/R311 divider.
 const IC20_IN: DiodeCoupler = DiodeCoupler {
     c: 0.001e-6,
@@ -31,9 +35,6 @@ const IC20_IN: DiodeCoupler = DiodeCoupler {
     r_ground: 10.0e3,
 };
 
-mod module;
-
-pub use module::{Cl808, Rs808};
 // IC20a's bridged-T: C119 and C117 with R308, R312 to ground. The rim shot
 // switches C118 across C117.
 const R312: f32 = 1.0e3;
@@ -363,6 +364,8 @@ struct ClavesShared {
     timing: Timing,
     dt: f32,
     couple_coeff: f32,
+    /// The stock resonator's frequency, Hz.
+    rest_hz: f32,
 }
 
 /// Brings a fully accented hit to twice the level of an unaccented one.

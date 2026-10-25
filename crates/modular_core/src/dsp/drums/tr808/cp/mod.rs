@@ -20,6 +20,10 @@ use crate::dsp::drums::voice::{Circuit, Fire, Level, Pulse, Quiet, Timing, Voice
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
+mod module;
+
+pub use module::Cp808;
+
 const RAIL: f32 = 15.0;
 const BETA: f32 = 300.0;
 const IS: f64 = 10.0e-15;
@@ -330,7 +334,3 @@ impl<L: Lanes> Circuit<L> for Clap<L> {
         out
     }
 }
-
-mod module;
-
-pub use module::Cp808;

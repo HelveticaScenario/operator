@@ -68,20 +68,20 @@ struct Bd808Outputs {
 pub struct Bd808 {
     outputs: Bd808Outputs,
     params: Bd808Params,
-    state: BdModule,
-    channel_state: Box<[ChannelState]>,
+    state: BdState,
+    channel_state: Box<[Channel]>,
 }
 
 /// The bass drum's per-sample-rate constants and its channel groups.
 #[derive(Default)]
-struct BdModule {
-    st: Bd808State,
-    groups: Groups<BassDrum>,
+struct BdState {
+    shared: KickShared,
+    groups: Groups<KickDrum>,
 }
 
 #[derive(Clone, Copy, Default)]
-struct ChannelState {
-    voices: Voices<Voice>,
+struct Channel {
+    voices: Voices<Kick>,
     /// The bridged-T for the channel's `freq` and `decay`.
     network: Cached<(f32, f32), Network>,
     /// The tone low-pass coefficient for its `tone`.
@@ -91,19 +91,19 @@ struct ChannelState {
 impl Bd808 {
     fn init(&mut self, sample_rate: f32) {
         self.state.groups = Groups::new();
-        let st = &mut self.state.st;
+        let sh = &mut self.state.shared;
         let dt = 1.0 / sample_rate;
-        st.timing = Timing::new(PULSE_SECS, sample_rate);
-        st.dt = dt;
-        st.sample_rate = sample_rate;
+        sh.timing = Timing::new(PULSE_SECS, sample_rate);
+        sh.dt = dt;
+        sh.sample_rate = sample_rate;
         let shaper_tau = C40 * R162 * R163 / (R162 + R163);
-        st.shaper_mul = (-dt / shaper_tau).exp();
-        st.c38_coeff = 1.0 - (-dt / R156_C38).exp();
-        st.c39_step = dt / (R161 * C39);
-        st.level_hp_coeff = one_pole_coeff(LEVEL_HP_HZ, sample_rate);
-        st.output_hp_coeff = one_pole_coeff(OUTPUT_HP_HZ, sample_rate);
+        sh.shaper_mul = (-dt / shaper_tau).exp();
+        sh.c38_coeff = 1.0 - (-dt / R156_C38).exp();
+        sh.c39_step = dt / (R161 * C39);
+        sh.level_hp_coeff = one_pole_coeff(LEVEL_HP_HZ, sample_rate);
+        sh.output_hp_coeff = one_pole_coeff(OUTPUT_HP_HZ, sample_rate);
         let rest_r = 1.0 / (1.0 / R161 + 1.0 / R170 + 1.0 / (R165 + R166));
-        st.rest_hz = 1.0 / (std::f32::consts::TAU * (rest_r * R167).sqrt() * C41_42);
+        sh.rest_hz = 1.0 / (std::f32::consts::TAU * (rest_r * R167).sqrt() * C41_42);
     }
 
     fn update(&mut self, _sample_rate: f32) {
@@ -155,13 +155,13 @@ impl Bd808 {
     }
 }
 
-impl BdModule {
+impl BdState {
     /// Runs one sample of every channel on its `[trigger, accent, freq, decay,
     /// tone]`, handing `out` each one's output.
     #[inline(always)]
     fn tick<I: Input>(
         &mut self,
-        channels: &mut [ChannelState],
+        channels: &mut [Channel],
         restart: bool,
         [trigger, accent, freq, decay, tone]: [I; 5],
         mut out: impl FnMut(usize, f32),
@@ -169,11 +169,11 @@ impl BdModule {
         let run = Run {
             accent,
             restart,
-            fade_samples: self.st.timing.fade_samples,
-            shared: &self.st,
+            fade_samples: self.shared.timing.fade_samples,
+            shared: &self.shared,
         };
         let inputs = BdInputs {
-            st: &self.st,
+            sh: &self.shared,
             trigger,
             freq,
             decay,
@@ -187,31 +187,31 @@ impl BdModule {
 
 /// The inputs every channel of the bass drum reads.
 struct BdInputs<'a, I> {
-    st: &'a Bd808State,
+    sh: &'a KickShared,
     trigger: I,
     freq: I,
     decay: I,
     tone: I,
 }
 
-impl<I: Input> ChannelInputs<BassDrum> for BdInputs<'_, I> {
-    type Channel = ChannelState;
+impl<I: Input> ChannelInputs<KickDrum> for BdInputs<'_, I> {
+    type Channel = Channel;
 
-    fn voices(channel: &mut ChannelState) -> &mut Voices<Voice> {
+    fn voices(channel: &mut Channel) -> &mut Voices<Kick> {
         &mut channel.voices
     }
 
     #[inline(always)]
-    fn inputs(&self, ch: usize, cs: &mut ChannelState) -> (f32, Controls) {
+    fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, KickControls) {
         let network = cs
             .network
             .get((self.freq.at(ch), self.decay.at(ch)), |(freq, decay)| {
-                Network::new(freq, decay, self.st.rest_hz)
+                Network::new(freq, decay, self.sh.rest_hz)
             });
         let tone_coeff = cs.tone.get(self.tone.at(ch), |tone| {
-            one_pole_coeff(tone_hz(tone), self.st.sample_rate)
+            one_pole_coeff(tone_hz(tone), self.sh.sample_rate)
         });
-        let controls = Controls {
+        let controls = KickControls {
             c: network.c,
             a: network.a,
             g: network.g,

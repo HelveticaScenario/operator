@@ -48,8 +48,8 @@ struct Sd808Outputs {
 }
 
 #[derive(Clone, Copy, Default)]
-struct ChannelState {
-    voices: Voices<Voice>,
+struct Channel {
+    voices: Voices<Snare>,
     noise: WhiteNoise,
     /// The resonators tuned for the channel's `freq`.
     tuning: Cached<f32, Tuning>,
@@ -72,39 +72,39 @@ struct ChannelState {
 pub struct Sd808 {
     outputs: Sd808Outputs,
     params: Sd808Params,
-    state: SdModule,
-    channel_state: Box<[ChannelState]>,
+    state: SdState,
+    channel_state: Box<[Channel]>,
 }
 
 /// The snare's per-sample-rate constants and its channel groups.
 #[derive(Default)]
-struct SdModule {
-    st: Sd808State,
-    groups: Groups<Snare>,
+struct SdState {
+    shared: SnareShared,
+    groups: Groups<SnareDrum>,
 }
 
 impl Sd808 {
     fn init(&mut self, sample_rate: f32) {
         self.state.groups = Groups::new();
-        let st = &mut self.state.st;
+        let sh = &mut self.state.shared;
         let dt = 1.0 / sample_rate;
-        st.dt = dt;
-        st.timing = Timing::new(PULSE_SECS, sample_rate);
-        st.rest_hz = LOW.rest_hz(1.0 / R196);
-        st.low_decay = T60_TO_RATE / LOW.decay_rate();
-        st.high_decay = T60_TO_RATE / HIGH.decay_rate();
-        st.noise_scale = WhiteNoise::scale(sample_rate);
+        sh.dt = dt;
+        sh.timing = Timing::new(PULSE_SECS, sample_rate);
+        sh.rest_hz = LOW.rest_hz(1.0 / R196);
+        sh.low_decay = T60_TO_RATE / LOW.decay_rate();
+        sh.high_decay = T60_TO_RATE / HIGH.decay_rate();
+        sh.noise_scale = WhiteNoise::scale(sample_rate);
         let tau = C57 * R189 * R190 / (R189 + R190);
-        st.c57_mul = (-dt / tau).exp();
-        st.c57_avg = tau / dt * (1.0 - st.c57_mul);
+        sh.c57_mul = (-dt / tau).exp();
+        sh.c57_avg = tau / dt * (1.0 - sh.c57_mul);
         // A one-pole low-pass `y += c·(x − y)` passes c / (2 − c) of white
         // noise's power; the generator's uniform samples have rms 1/√3.
-        st.chop_coeff = 1.0 - (-std::f32::consts::TAU * CHOP_HZ * dt).exp();
-        let scale = WhiteNoise::scale(sample_rate);
-        st.chop_norm = 3f32.sqrt() / scale * ((2.0 - st.chop_coeff) / st.chop_coeff).sqrt();
-        st.snap_hp = Biquad::sallen_key_high(C66, C67, R201, R202, sample_rate);
-        st.snap_couple_coeff = one_pole_coeff(rc_hz(R205, C69), sample_rate);
-        st.out_lp_coeff = one_pole_coeff(rc_hz(R_LEVEL, C70), sample_rate);
+        sh.chop_coeff = 1.0 - (-std::f32::consts::TAU * CHOP_HZ * dt).exp();
+        sh.chop_norm =
+            3f32.sqrt() / sh.noise_scale * ((2.0 - sh.chop_coeff) / sh.chop_coeff).sqrt();
+        sh.snap_hp = Biquad::sallen_key_high(C66, C67, R201, R202, sample_rate);
+        sh.snap_couple_coeff = one_pole_coeff(rc_hz(R205, C69), sample_rate);
+        sh.out_lp_coeff = one_pole_coeff(rc_hz(R_LEVEL, C70), sample_rate);
     }
 
     fn update(&mut self, _sample_rate: f32) {
@@ -156,13 +156,13 @@ impl Sd808 {
     }
 }
 
-impl SdModule {
+impl SdState {
     /// Runs one sample of every channel on its `[trigger, accent, freq, tone,
     /// snappy]`, handing `out` each one's output.
     #[inline(always)]
     fn tick<I: Input>(
         &mut self,
-        channels: &mut [ChannelState],
+        channels: &mut [Channel],
         restart: bool,
         [trigger, accent, freq, tone, snappy]: [I; 5],
         mut out: impl FnMut(usize, f32),
@@ -170,11 +170,11 @@ impl SdModule {
         let run = Run {
             accent,
             restart,
-            fade_samples: self.st.timing.fade_samples,
-            shared: &self.st,
+            fade_samples: self.shared.timing.fade_samples,
+            shared: &self.shared,
         };
         let inputs = SdInputs {
-            st: &self.st,
+            sh: &self.shared,
             trigger,
             freq,
             tone,
@@ -188,31 +188,31 @@ impl SdModule {
 
 /// The inputs every channel of the snare reads.
 struct SdInputs<'a, I> {
-    st: &'a Sd808State,
+    sh: &'a SnareShared,
     trigger: I,
     freq: I,
     tone: I,
     snappy: I,
 }
 
-impl<I: Input> ChannelInputs<Snare> for SdInputs<'_, I> {
-    type Channel = ChannelState;
+impl<I: Input> ChannelInputs<SnareDrum> for SdInputs<'_, I> {
+    type Channel = Channel;
 
-    fn voices(channel: &mut ChannelState) -> &mut Voices<Voice> {
+    fn voices(channel: &mut Channel) -> &mut Voices<Snare> {
         &mut channel.voices
     }
 
     #[inline(always)]
-    fn inputs(&self, ch: usize, cs: &mut ChannelState) -> (f32, Controls) {
+    fn inputs(&self, ch: usize, cs: &mut Channel) -> (f32, SnareControls) {
         let tuning = cs
             .tuning
-            .get(self.freq.at(ch), |freq| Tuning::new(self.st, freq));
-        let controls = Controls {
+            .get(self.freq.at(ch), |freq| Tuning::new(self.sh, freq));
+        let controls = SnareControls {
             low: tuning.low,
             high: tuning.high,
             tone: knob(self.tone.at(ch)),
             snappy: knob(self.snappy.at(ch)),
-            white: cs.noise.next(self.st.noise_scale),
+            white: cs.noise.next(self.sh.noise_scale),
             level: tuning.level,
         };
         (self.trigger.at(ch), controls)

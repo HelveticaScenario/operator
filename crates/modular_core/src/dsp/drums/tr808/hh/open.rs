@@ -42,14 +42,14 @@ pub struct OpenControls<L: Lanes = Mono> {
     /// Q23's base current, from the closed hat's envelope, and the
     /// resistance C62 drains through while Q23 conducts.
     pub q23: L::S,
-    pub cut: L::S,
+    pub drain: L::S,
 }
 
 lanewise!(OpenControls {
     band,
     decay,
     q23,
-    cut
+    drain
 });
 
 impl<L: Lanes> Open<L> {
@@ -144,7 +144,7 @@ impl<L: Lanes> Circuit<L> for Open<L> {
         // saturate.
         let z = sh.envelope.impedance::<L>(closed, E62, E62);
         let demand = (q22 + ctl.q23) * BETA;
-        let r = L::S::select(ctl.q23.gt(c(0.0)), ctl.cut, c(R134));
+        let r = L::S::select(ctl.q23.gt(c(0.0)), ctl.drain, c(R134));
         let available = ((x[E62] - DRAIN_SAT) / (z + r)).max(c(0.0));
         let drain = demand.min(available);
         let x = sh

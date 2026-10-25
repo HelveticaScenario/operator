@@ -89,7 +89,7 @@ const D56_DROP: f32 = 0.6;
 
 /// The circuit's state for one hit sequence.
 #[derive(Clone, Copy, Default)]
-struct Voice<L: Lanes = Mono> {
+struct Tom<L: Lanes = Mono> {
     pulse: Pulse<L>,
     /// Voltage across the input coupling capacitor.
     c_in: L::S,
@@ -110,7 +110,7 @@ struct Voice<L: Lanes = Mono> {
     out_lp: L::S,
 }
 
-lanewise!(Voice {
+lanewise!(Tom {
     pulse,
     c_in,
     arms,
@@ -128,7 +128,7 @@ lanewise!(Voice {
 
 /// Per-sample-rate constants for one voice.
 #[derive(Default)]
-struct TomState {
+struct TomShared {
     timing: Timing,
     dt: f32,
     noise: Option<&'static NoiseParts>,
@@ -149,7 +149,7 @@ struct TomState {
     out_lp_coeff: f32,
 }
 
-impl TomState {
+impl TomShared {
     fn init(&mut self, parts: &'static Parts, sample_rate: f32) {
         let dt = 1.0 / sample_rate;
         self.dt = dt;
@@ -180,14 +180,14 @@ impl TomState {
 /// for the current `freq` and `decay`.
 #[derive(Clone, Copy, Default)]
 struct Channel {
-    voices: Voices<Voice>,
+    voices: Voices<Tom>,
     noise: WhiteNoise,
     network: Cached<(f32, f32), Network>,
 }
 
 /// The settings for one sample.
 #[derive(Clone, Copy, Default)]
-struct Controls<L: Lanes = Mono> {
+struct TomControls<L: Lanes = Mono> {
     t: BridgedT<L>,
     /// The white noise generator's voltage. Gated noise keeps its generator
     /// running between hits, so the gate's first sample after a strike draws
@@ -197,34 +197,34 @@ struct Controls<L: Lanes = Mono> {
     level: L::S,
 }
 
-lanewise!(Controls { t, white, level });
+lanewise!(TomControls { t, white, level });
 
 /// The toms and congas at every width.
 struct TomDrum;
 
 impl Drum for TomDrum {
-    type Shared = TomState;
-    type Circuit<L: Lanes> = Voice<L>;
-    type Controls<L: Lanes> = Controls<L>;
+    type Shared = TomShared;
+    type Circuit<L: Lanes> = Tom<L>;
+    type Controls<L: Lanes> = TomControls<L>;
     type Sources<L: Lanes> = ();
     const RUNS_IN_QUADS: bool = true;
     const RUNS_IN_PAIRS: bool = false;
 }
 
-impl Fire for Voice {
-    fn accent_trim(st: &TomState) -> f32 {
-        st.accent_trim
+impl Fire for Tom {
+    fn accent_trim(sh: &TomShared) -> f32 {
+        sh.accent_trim
     }
 
-    fn fire(&mut self, accent: f32, st: &TomState) {
+    fn fire(&mut self, accent: f32, sh: &TomShared) {
         self.pulse
-            .fire(pulse_volts(accent), st.timing.trigger_samples);
+            .fire(pulse_volts(accent), sh.timing.trigger_samples);
     }
 }
 
-impl<L: Lanes> Circuit<L> for Voice<L> {
-    type Shared = TomState;
-    type Controls = Controls<L>;
+impl<L: Lanes> Circuit<L> for Tom<L> {
+    type Shared = TomShared;
+    type Controls = TomControls<L>;
 
     fn settled(&self) -> L::SM {
         let silent = |v: L::S| v.abs().lt(c(SILENCE));
@@ -236,28 +236,28 @@ impl<L: Lanes> Circuit<L> for Voice<L> {
     }
 
     /// Advances the circuit one sample, returning the output mixer's voltage.
-    fn step(&mut self, st: &TomState, ctl: &Controls<L>) -> L::S {
+    fn step(&mut self, sh: &TomShared, ctl: &TomControls<L>) -> L::S {
         let vtrig = self.pulse.next();
-        let out = self.ring(st, &ctl.t, vtrig);
-        let noise = match st.noise {
-            Some(n) => self.gate(n, st, vtrig, ctl.white),
+        let out = self.ring(sh, &ctl.t, vtrig);
+        let noise = match sh.noise {
+            Some(n) => self.gate(n, sh, vtrig, ctl.white),
             None => c(0.0),
         };
 
         // Output mixer: the ring and noise meet through equal resistors, so
         // their average drives C81 into IC13's virtual ground.
         let mix = (out + noise) * 0.5;
-        let hp = high_pass(&mut self.out_hp, mix, c(st.out_hp_coeff));
-        low_pass(&mut self.out_lp, hp, c(st.out_lp_coeff)) * (-2.0 * (R_LEVEL / R_MIX)) * ctl.level
+        let hp = high_pass(&mut self.out_hp, mix, c(sh.out_hp_coeff));
+        low_pass(&mut self.out_lp, hp, c(sh.out_lp_coeff)) * (-2.0 * (R_LEVEL / R_MIX)) * ctl.level
     }
 }
 
-impl<L: Lanes> Voice<L> {
+impl<L: Lanes> Tom<L> {
     /// Advances the input network and bridged-T one sample, returning
     /// IC15's output.
     #[inline]
-    fn ring(&mut self, st: &TomState, t: &BridgedT<L>, vtrig: L::S) -> L::S {
-        let dt = st.dt;
+    fn ring(&mut self, sh: &TomShared, t: &BridgedT<L>, vtrig: L::S) -> L::S {
+        let dt = sh.dt;
         // C73 charges through the divider, so IC15 sees a spike only tens of
         // microseconds long; its average over the sample keeps the energy it
         // delivers exact. D56 stops the falling edge a diode drop below
@@ -266,10 +266,10 @@ impl<L: Lanes> Voice<L> {
         let clipped = across.lt(c(-D56_DROP));
         let vp = L::S::select(
             clipped,
-            c(-D56_DROP * st.in_share),
-            across * st.in_share * st.in_avg,
+            c(-D56_DROP * sh.in_share),
+            across * sh.in_share * sh.in_avg,
         );
-        self.c_in = L::S::select(clipped, vtrig + D56_DROP, vtrig - across * st.in_mul);
+        self.c_in = L::S::select(clipped, vtrig + D56_DROP, vtrig - across * sh.in_mul);
 
         // The tuning network's current is linearised about the junction's
         // new voltage, refined once, so the diodes join the implicit solve as
@@ -277,7 +277,7 @@ impl<L: Lanes> Voice<L> {
         let mut junction = self.junction;
         let mut solved = (c(0.0), self.arms);
         for _ in 0..2 {
-            let (i_tune, g_tune) = tuning_current::<L>(st.tuning, junction);
+            let (i_tune, g_tune) = tuning_current::<L>(sh.tuning, junction);
             solved = t.step(self.arms, vp, g_tune, i_tune - g_tune * junction, dt);
             junction = solved.0 + solved.1.b;
         }
@@ -288,12 +288,12 @@ impl<L: Lanes> Voice<L> {
     }
 
     /// The noise gate's output at C75 for this sample.
-    fn gate(&mut self, n: &NoiseParts, st: &TomState, vtrig: L::S, white: L::S) -> L::S {
-        let dt = st.dt;
+    fn gate(&mut self, n: &NoiseParts, sh: &TomShared, vtrig: L::S, white: L::S) -> L::S {
+        let dt = sh.dt;
         let charging = (vtrig - D55_DROP).gt(self.env);
         self.env = L::S::select(
             charging,
-            self.env + (vtrig - D55_DROP - self.env) * st.env_charge,
+            self.env + (vtrig - D55_DROP - self.env) * sh.env_charge,
             self.env,
         );
         let gated = self.vbe.lt(c(Q52_OFF));
@@ -301,7 +301,7 @@ impl<L: Lanes> Voice<L> {
             c(0.0)
         } else {
             let mut pink = self.pink;
-            let y = st.pink.process(&mut pink, white);
+            let y = sh.pink.process(&mut pink, white);
             self.pink = BiquadState::select(gated, self.pink, pink);
             L::S::select(gated, c(0.0), y)
         };
@@ -349,18 +349,18 @@ impl<L: Lanes> Voice<L> {
 
         let open = ((vbe - Q52_OFF) / Q52_FADE).clamp(c(0.0), c(1.0));
         let drop = open * (ib * Q52_BETA * R221).min(c(VCC - 0.2));
-        let coupled = high_pass(&mut self.gate_hp, -drop, c(st.gate_hp_coeff));
+        let coupled = high_pass(&mut self.gate_hp, -drop, c(sh.gate_hp_coeff));
         low_pass(
             &mut self.gate_lp,
             coupled * R223 / (R221 + R223),
-            c(st.gate_lp_coeff),
+            c(sh.gate_lp_coeff),
         )
     }
 }
 
 /// A tom's per-sample-rate constants and its channel groups.
 #[derive(Default)]
-struct TomModule {
-    st: TomState,
+struct TomState {
+    shared: TomShared,
     groups: Groups<TomDrum>,
 }
