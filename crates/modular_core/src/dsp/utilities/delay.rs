@@ -55,7 +55,12 @@ impl DelayRead {
 
         for channel in 0..channels {
             let delay_time_secs = (self.params.time.get_value(channel) as f64).max(0.0);
-            let back = (delay_time_secs * (sample_rate as f64) - unwritten as f64).max(0.0);
+            // The longest delay is `frame_count - 1` frames whichever cycle
+            // member runs first; with `unwritten`, `back` counts from the
+            // frame before the write position.
+            let delay_frames =
+                (delay_time_secs * (sample_rate as f64)).min(frame_count.saturating_sub(1) as f64);
+            let back = (delay_frames - unwritten as f64).max(0.0);
 
             let buf_channels = self.params.buffer.channel_count().max(1);
             let buf_channel = channel % buf_channels;

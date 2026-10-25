@@ -3299,11 +3299,18 @@ fn zero_delay_in_feedback_cycle_lags_one_sample_when_buffer_enters() {
     );
 }
 
-/// Run a slow `$ramp` through a `$buffer` of `length` seconds into a
-/// `$delayRead` of `time` seconds. Returns each frame's (input, delayed) pair.
-fn ramp_delay_frames(length: f64, time: f64, frames: usize) -> Vec<(f32, f32)> {
+/// Run a `$ramp` at `freq` V/Oct through a `$buffer` of `length` seconds into
+/// a `$delayRead` of `time` seconds, `blocks` internal blocks of `block_size`.
+/// Returns each frame's (input, delayed) pair.
+fn ramp_delay_frames(
+    freq: f64,
+    length: f64,
+    time: f64,
+    block_size: usize,
+    blocks: usize,
+) -> Vec<(f32, f32)> {
     let graph = make_graph(vec![
-        ("src", "$ramp", json!({ "freq": -5.0 })),
+        ("src", "$ramp", json!({ "freq": freq })),
         (
             "buf",
             "$buffer",
@@ -3321,26 +3328,30 @@ fn ramp_delay_frames(length: f64, time: f64, frames: usize) -> Vec<(f32, f32)> {
             }),
         ),
     ]);
-    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
-        .expect("from_graph failed");
+    let patch =
+        from_graph(&graph, SAMPLE_RATE, block_size, &HashMap::new()).expect("from_graph failed");
     let src = patch.sampleables.get("src").unwrap();
     let reader = patch.sampleables.get("reader").unwrap();
-    (0..frames)
-        .map(|_| {
-            process_frame(&patch);
-            (
-                src.get_value_at(DEFAULT_PORT, 0, 0),
-                reader.get_value_at(DEFAULT_PORT, 0, 0),
-            )
-        })
-        .collect()
+    let mut frames = Vec::with_capacity(blocks * block_size);
+    for _ in 0..blocks {
+        process_frame(&patch);
+        for slot in 0..block_size {
+            frames.push((
+                src.get_value_at(DEFAULT_PORT, 0, slot),
+                reader.get_value_at(DEFAULT_PORT, 0, slot),
+            ));
+        }
+    }
+    frames
 }
 
 #[test]
 fn sub_sample_delay_interpolates_only_written_frames() {
     // Half a sample back lies between the two newest frames; the frame after
     // the newest still holds data from a full buffer ago and must not leak in.
-    let frames = ramp_delay_frames(1.0 / 64.0, 0.5 / SAMPLE_RATE as f64, 4_000);
+    // The newer neighbour of the newest frame does not exist yet; on a linear
+    // input its linear extrapolation makes the read exact.
+    let frames = ramp_delay_frames(0.0, 1.0 / 64.0, 0.5 / SAMPLE_RATE as f64, 1, 4_000);
     let mut checked = 0;
     for t in 3..frames.len() {
         let [a, b, c] = [frames[t - 2].0, frames[t - 1].0, frames[t].0];
@@ -3351,19 +3362,19 @@ fn sub_sample_delay_interpolates_only_written_frames() {
         let expected = (b + c) / 2.0;
         let got = frames[t].1;
         assert!(
-            (got - expected).abs() < 1e-4,
+            (got - expected).abs() < 1e-5,
             "frame {t}: expected ~{expected}, got {got}"
         );
         checked += 1;
     }
-    assert!(checked > 3_000);
+    assert!(checked > 3_500);
 }
 
 #[test]
 fn delay_time_at_buffer_length_reads_the_oldest_frame() {
     // A 1/64 s buffer holds 750 frames, so the longest delay it can serve is
     // 749 frames; a longer `time` must not wrap around onto newer audio.
-    let frames = ramp_delay_frames(1.0 / 64.0, 1.0 / 64.0, 4_000);
+    let frames = ramp_delay_frames(-5.0, 1.0 / 64.0, 1.0 / 64.0, 1, 4_000);
     for t in 1_000..frames.len() {
         let expected = frames[t - 749].0;
         let got = frames[t].1;
@@ -3371,5 +3382,93 @@ fn delay_time_at_buffer_length_reads_the_oldest_frame() {
             (got - expected).abs() < 1e-6,
             "frame {t}: expected {expected}, got {got}"
         );
+    }
+}
+
+#[test]
+fn delay_read_matches_across_block_sizes() {
+    // Each slot of a block reads relative to its own write position, so a
+    // 64-sample block reproduces per-sample processing exactly.
+    let time = 10.5 / SAMPLE_RATE as f64;
+    let per_sample = ramp_delay_frames(0.0, 1.0 / 64.0, time, 1, 64 * 40);
+    let per_block = ramp_delay_frames(0.0, 1.0 / 64.0, time, 64, 40);
+    assert_eq!(per_sample, per_block);
+}
+
+#[test]
+fn feedback_loop_length_equals_delay_time() {
+    // `$delay` generates ids that put the buffer first in its cycle. The
+    // recirculated signal must re-enter the buffer exactly `time` frames
+    // after it was written, so comb and Karplus-Strong loops stay in tune.
+    let graph = make_graph(vec![
+        ("src", "$ramp", json!({ "freq": 0.0 })),
+        (
+            "feedback",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "reader", "port": "output", "channel": 0 },
+                "scale": 2.5,
+                "shift": 0.0,
+            }),
+        ),
+        (
+            "mix",
+            "$mix",
+            json!({
+                "inputs": [
+                    { "type": "cable", "module": "src", "port": "output", "channel": 0 },
+                    { "type": "cable", "module": "feedback", "port": "output", "channel": 0 },
+                ],
+            }),
+        ),
+        (
+            "buf",
+            "$buffer",
+            json!({
+                "input": { "type": "cable", "module": "mix", "port": "output", "channel": 0 },
+                "length": 0.01,
+            }),
+        ),
+        (
+            "reader",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": 10.0 / SAMPLE_RATE as f64,
+            }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let value = |id: &str| {
+        patch
+            .sampleables
+            .get(id)
+            .unwrap()
+            .get_value_at(DEFAULT_PORT, 0, 0)
+    };
+
+    let mut written = Vec::new();
+    for t in 0..2_000 {
+        for module in patch.sampleables.values() {
+            module.start_block();
+        }
+        patch.sampleables.get("buf").unwrap().ensure_processed();
+        for module in patch.sampleables.values() {
+            module.ensure_processed();
+        }
+        written.push(value("buf"));
+        let (src, read, buf) = (value("src"), value("reader"), written[t]);
+        assert!(
+            (buf - (src + 0.5 * read)).abs() < 1e-5,
+            "frame {t}: buffer wrote {buf}, expected input {src} + half of {read}"
+        );
+        if t >= 10 {
+            assert!(
+                (read - written[t - 10]).abs() < 1e-6,
+                "frame {t}: read {read}, written 10 frames earlier {}",
+                written[t - 10]
+            );
+        }
     }
 }

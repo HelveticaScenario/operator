@@ -260,10 +260,12 @@ pub trait Sampleable: MessageHandler + Send {
     fn ensure_processed_to(&self, target: usize);
 
     /// Number of slots of the current internal block whose `update` has
-    /// finished. A module mid-update on slot `i` reports `i`, so a reader
-    /// reached re-entrantly through a feedback cycle can tell its source has
-    /// not yet produced that slot. Implementors without a per-block cursor
-    /// report `usize::MAX` (always complete).
+    /// finished. A Sample-mode module mid-update on slot `i` reports `i`, so a
+    /// reader reached re-entrantly through a feedback cycle can tell its source
+    /// has not yet produced that slot. A Block-mode wrapper reports only the
+    /// start of a range until the whole range is done; it is never re-entered,
+    /// so readers always see the finished count. Implementors without a
+    /// per-block cursor report `usize::MAX` (always complete).
     fn processed_to(&self) -> usize {
         usize::MAX
     }
@@ -976,10 +978,10 @@ impl SampleBuffer {
 
     /// Hermite (4-point cubic) read of a circular buffer `back` frames before
     /// frame `newest`, treating the buffer as a history running from `newest`
-    /// back to the frame after it. `back` clamps to `[0, frame_count - 1]` and
-    /// neighbours clamp at both ends, so a read never touches the frame after
-    /// `newest`, which holds the oldest audio. Allocation-free; safe for the
-    /// audio thread.
+    /// back to the frame after it. `back` clamps to `[0, frame_count - 1]`, and
+    /// interpolation neighbours past either end of that history are
+    /// extrapolated linearly, so a read never wraps from the newest frame onto
+    /// the oldest. Allocation-free; safe for the audio thread.
     #[inline]
     pub fn read_hermite_behind(&self, channel: usize, newest: usize, back: f32) -> f32 {
         let n = self.frame_count;
@@ -990,20 +992,27 @@ impl SampleBuffer {
         let back = back.clamp(0.0, (n - 1) as f32);
         let whole = back.floor() as usize;
         let frac = back - whole as f32;
-        let at = |k: usize| self.read(channel, (newest % n + n - k.min(n - 1)) % n);
+        let at = |k: usize| self.read(channel, (newest % n + n - k) % n);
         if frac <= f32::EPSILON {
             return at(whole);
         }
 
+        // A fractional `back` is below `n - 1`, so `whole + 1` is in range.
+        let y1 = at(whole);
+        let y2 = at(whole + 1);
+        let y0 = if whole == 0 {
+            2.0 * y1 - y2
+        } else {
+            at(whole - 1)
+        };
+        let y3 = if whole + 2 < n {
+            at(whole + 2)
+        } else {
+            2.0 * y2 - y1
+        };
         // Catmull-Rom is symmetric, so interpolating from newer toward older
         // matches the forward read of the same frames.
-        hermite4(
-            at(whole.saturating_sub(1)),
-            at(whole),
-            at(whole + 1),
-            at(whole + 2),
-            frac,
-        )
+        hermite4(y0, y1, y2, y3, frac)
     }
 }
 
