@@ -355,7 +355,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$mulHz" => json!({ "input": 0.0, "factor": 1.0 }),
         "$curve" => json!({ "input": 0.0, "exp": 1.0 }),
         "$cycle" => json!({ "pattern": mini_payload("0") }),
-        "$slew" | "$hold" | "$motionFollower" | "$quantizer" | "$unison" | "$crush"
+        "$lpg" | "$slew" | "$hold" | "$motionFollower" | "$quantizer" | "$unison" | "$crush"
         | "$feedback" | "$pulsar" | "$rising" | "$falling" | "$stereoMix" | "$mixDown" => {
             json!({ "input": 0.0 })
         }
@@ -3549,4 +3549,174 @@ fn feedback_loop_length_equals_delay_time() {
             );
         }
     }
+}
+
+// ─── $lpg ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn lpg_passes_input_through_when_unpatched() {
+    let m = make_module("$lpg", "lpg", json!({ "input": 3.0 }));
+    assert!(approx_eq(settle_and_read(m.as_ref(), 10), 3.0, 1e-6));
+}
+
+#[test]
+fn lpg_level_opens_and_closes_the_gate() {
+    let open = make_module("$lpg", "lpg", json!({ "input": 1.0, "level": 5.0 }));
+    let sample = settle_and_read(open.as_ref(), 48000);
+    assert!(
+        approx_eq(sample, 1.0, 0.01),
+        "open gate: expected ~1.0, got {sample}"
+    );
+
+    let closed = make_module("$lpg", "lpg", json!({ "input": 1.0, "level": 0.0 }));
+    let sample = settle_and_read(closed.as_ref(), 48000);
+    assert!(
+        sample.abs() < 1e-3,
+        "closed gate: expected ~0, got {sample}"
+    );
+}
+
+#[test]
+fn lpg_ping_swings_from_level_to_fully_open_and_back() {
+    // 0.3 V compresses to a vactrol floor of 1.3 * 0.06 / 0.36.
+    let floor = 1.3 * 0.06 / 0.36;
+    let m = make_module(
+        "$lpg",
+        "lpg",
+        json!({ "input": 1.0, "trigger": 5.0, "level": 0.3, "decay": 0.0 }),
+    );
+    let out = collect_samples(m.as_ref(), 48000);
+    let (_, peak) = min_max(&out);
+    let (min, _) = min_max(&out[4800..]);
+    assert!(peak > 0.99, "ping should open the gate fully, peak {peak}");
+    assert!(
+        approx_eq(out[47999], floor, 1e-3),
+        "gate should settle back to the level floor {floor}, got {}",
+        out[47999]
+    );
+    assert!(min >= floor - 1e-3, "gate fell below the floor: {min}");
+}
+
+#[test]
+fn lpg_trigger_pings_and_decay_sets_the_tail() {
+    let ping = |decay: f32| {
+        let m = make_module(
+            "$lpg",
+            "lpg",
+            json!({ "input": 1.0, "trigger": 5.0, "decay": decay }),
+        );
+        collect_samples(m.as_ref(), 48000)
+    };
+    let short = ping(0.0);
+    let long = ping(5.0);
+
+    let (_, peak) = min_max(&short);
+    assert!(peak > 0.5, "ping should open the gate, peak {peak}");
+    assert!(
+        short[47999].abs() < 1e-3,
+        "short decay should close within 1s"
+    );
+    assert!(
+        long[24000] > short[24000] + 0.1,
+        "long decay should ring longer: {} vs {}",
+        long[24000],
+        short[24000]
+    );
+}
+
+#[test]
+fn lpg_color_brightens_a_half_open_gate() {
+    // A 5 kHz sine through a half-open gate: low color filters it away,
+    // high color bleeds it through.
+    let peak = |color: f32| {
+        let graph = make_graph(vec![
+            ("osc", "$sine", json!({ "freq": 4.25 })),
+            (
+                "lpg",
+                "$lpg",
+                json!({
+                    "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                    "level": 1.0,
+                    "color": color,
+                }),
+            ),
+        ]);
+        let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+            .expect("from_graph failed");
+        let lpg = patch.sampleables.get("lpg").unwrap();
+        let mut out = Vec::new();
+        for _ in 0..9600 {
+            process_frame(&patch);
+            out.push(lpg.get_value_at(DEFAULT_PORT, 0, 0));
+        }
+        let (mn, mx) = min_max(&out[4800..]);
+        mx.max(-mn)
+    };
+    let dark = peak(0.0);
+    let bright = peak(5.0);
+    assert!(
+        bright > dark * 4.0,
+        "high color should pass far more highs: bright {bright}, dark {dark}"
+    );
+}
+
+/// Largest sample-to-sample step over `n` samples of `channel`.
+fn max_step(module: &dyn Sampleable, channel: usize, n: usize, mut prev: f32) -> f32 {
+    let mut s = Stepper::new();
+    let mut step: f32 = 0.0;
+    for _ in 0..n {
+        let slot = s.tick(module);
+        let v = module.get_value_at(DEFAULT_PORT, channel, slot);
+        step = step.max((v - prev).abs());
+        prev = v;
+    }
+    step
+}
+
+#[test]
+fn lpg_crossfades_into_and_out_of_bypass() {
+    let bypassed = make_module("$lpg", "lpg", json!({ "input": 1.0 }));
+    assert!(approx_eq(
+        settle_and_read(bypassed.as_ref(), 480),
+        1.0,
+        1e-6
+    ));
+
+    let gated = make_module("$lpg", "lpg", json!({ "input": 1.0, "level": 0.0 }));
+    gated.transfer_state_from(bypassed.as_ref());
+    let step = max_step(gated.as_ref(), 0, 480, 1.0);
+    assert!(step < 0.01, "entering the gate jumped by {step}");
+    assert!(settle_and_read(gated.as_ref(), 480).abs() < 1e-3);
+
+    let reopened = make_module("$lpg", "lpg", json!({ "input": 1.0 }));
+    reopened.transfer_state_from(gated.as_ref());
+    let step = max_step(reopened.as_ref(), 0, 480, 0.0);
+    assert!(step < 0.01, "leaving the gate jumped by {step}");
+    assert!(approx_eq(
+        settle_and_read(reopened.as_ref(), 480),
+        1.0,
+        1e-6
+    ));
+}
+
+#[test]
+fn lpg_added_channels_do_not_ping_on_a_held_trigger() {
+    let old = make_module(
+        "$lpg",
+        "lpg",
+        json!({ "input": [1.0, 1.0], "trigger": 5.0, "decay": 0.0 }),
+    );
+    let _ = collect_samples(old.as_ref(), 48000);
+
+    let new = make_module(
+        "$lpg",
+        "lpg",
+        json!({ "input": [1.0, 1.0, 1.0], "trigger": 5.0, "decay": 0.0 }),
+    );
+    new.transfer_state_from(old.as_ref());
+    let (_, peak) = min_max(&collect_channel(new.as_ref(), 2, 4800));
+    assert!(
+        peak < 1e-3,
+        "added channel pinged on a held trigger, peak {peak}"
+    );
 }
