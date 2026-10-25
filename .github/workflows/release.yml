@@ -1,13 +1,64 @@
 name: Release
 on:
     push:
-        tags:
-            - 'v*'
+        branches:
+            - master
     workflow_dispatch:
 
+concurrency:
+    group: release
+    cancel-in-progress: false
+
 jobs:
-    release:
+    # A release is due when package.json names a version that has release
+    # notes (.changes/vX.Y.Z.md) but no published GitHub release yet; merging
+    # the release PR is what creates that state. The release starts as a draft
+    # so the update feed, which ignores drafts, never serves it half-uploaded.
+    draft:
+        name: Create draft release
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        outputs:
+            release: ${{ steps.draft.outputs.release }}
+            version: ${{ steps.draft.outputs.version }}
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Create draft release
+              id: draft
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  VERSION=$(node -p "require('./package.json').version")
+                  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+                  NOTES=".changes/v$VERSION.md"
+                  if [ "$GITHUB_REF" != "refs/heads/master" ] || [ ! -f "$NOTES" ]; then
+                    echo "release=false" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  IS_DRAFT=$(gh release view "v$VERSION" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+                  case "$IS_DRAFT" in
+                    false)
+                      echo "release=false" >> "$GITHUB_OUTPUT"
+                      ;;
+                    true)
+                      echo "release=true" >> "$GITHUB_OUTPUT"
+                      ;;
+                    missing)
+                      tail -n +2 "$NOTES" > "$RUNNER_TEMP/notes.md"
+                      gh release create "v$VERSION" --draft --target "$GITHUB_SHA" \
+                        --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+                      echo "release=true" >> "$GITHUB_OUTPUT"
+                      ;;
+                  esac
+
+    build:
         name: Build and Release
+        needs: draft
+        # Outside a release, a manual run still builds and tests every platform.
+        if: needs.draft.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
         runs-on: ${{ matrix.os }}
         strategy:
             fail-fast: false
@@ -117,8 +168,8 @@ jobs:
             - name: Run tests
               run: yarn test
 
-            - name: Publish
-              if: startsWith(github.ref, 'refs/tags/')
+            - name: Publish to draft release
+              if: needs.draft.outputs.release == 'true'
               run: yarn forge-publish
               env:
                   NODE_OPTIONS: '--max-old-space-size=6144'
@@ -138,3 +189,17 @@ jobs:
                   if [ -f "$KEYCHAIN_PATH" ]; then
                     security delete-keychain $KEYCHAIN_PATH
                   fi
+
+    publish:
+        name: Publish release
+        needs: [draft, build]
+        if: needs.draft.outputs.release == 'true'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - name: Publish release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  VERSION: ${{ needs.draft.outputs.version }}
+              run: gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest

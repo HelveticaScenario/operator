@@ -163,6 +163,21 @@ Within that invariant, comment well:
 
 Models to emulate: `crates/modular_core/src/types.rs` (safety invariants), `src/main/bufferSwitch.ts` (boundary semantics).
 
+### Changelog
+
+Every PR that changes something a user can notice adds a release-note entry: `npx changie new -k <Kind> -b "<text>"`, which writes `.changes/unreleased/*.yaml`. CI fails a PR that changes `src/` or `crates/` without one unless it is labelled `no-changelog` (refactors, internal tooling, test-only work). Users read these in the app before deciding to update, so write for musicians, not developers:
+
+- **Kinds:** `Breaking` (an existing patch can sound or behave differently, or stop running — includes any change to an experimental module's API or sound), `New`, `Improved`, `Fixed`. `Breaking` bumps the minor version (pre-1.0); the rest bump the patch.
+- **Say what the user can now do or what changes in their patch.** Name modules and params as they appear in the DSL (`$comp`, `attack`). No internals: no crate, file, struct, thread, or refactor names.
+- **One entry per change, one or two sentences.** Several entries in one PR are fine when it ships several user-visible changes.
+- **Every `Breaking` entry shows the migration**: a short before/after code block of a patch.
+
+Entries are reviewed in the PR diff; the release PR collects them.
+
+### Releasing
+
+Nothing is committed to master except through a PR. On every push to master, the Release PR workflow runs `scripts/release/prepare.mjs` and keeps a `Release vX.Y.Z` PR (branch `release/next`) up to date: it batches the pending entries into `.changes/vX.Y.Z.md`, regenerates `CHANGELOG.md`, and sets `package.json`'s version. Merging that PR ships the release: `release.yml` creates a draft GitHub release whose notes are that version's entries, builds every platform into it, and publishes it once all uploads succeed. To force a specific version (e.g. `v1.0.0`), commit `.changes/release-as` containing it; the next prepare consumes it.
+
 ## Tooling
 
 - **Node 24.12.0 / Yarn 4.12.0** pinned via Volta.
