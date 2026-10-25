@@ -94,7 +94,12 @@ const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
 const rows = experimentalModules().map((m) => {
     const date = lastChanged(m.file);
     const days = date ? Math.round((today - Date.parse(date)) / DAY_MS) : 0;
-    return { ...m, date: date ?? 'uncommitted', days, overdue: days > OVERDUE_DAYS };
+    return {
+        ...m,
+        date: date ?? 'uncommitted',
+        days,
+        overdue: days > OVERDUE_DAYS,
+    };
 });
 
 if (rows.length > 0) {

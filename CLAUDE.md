@@ -144,7 +144,7 @@ Use it to verify the "no heap allocation on the audio thread" rule above. Notes:
 - **Not a reason:** failing the alloc audit or another engine rule. A module that breaks those never merges.
 - **Graduate** by deleting the flag (the name stays, so patches keep working) once param conventions are followed (0–5 knob ranges, V/Oct), docs and runnable examples exist, tests exist, the API has been stable for a while, and the user signs off explicitly.
 - Changes to an experimental module's API or sound are still breaking changes: changelog kind `Breaking`.
-- `yarn experimental:report` lists experimental modules and flags those unchanged for over 60 days as overdue.
+- `yarn experimental:report` lists experimental modules and flags those unchanged for over 60 days as overdue; every release PR includes it.
 
 ### Reserved Output Names
 
