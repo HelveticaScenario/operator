@@ -112,6 +112,42 @@ fn lpf_chain(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
+/// `$saw` into a 50-stage `$apf` whose cutoff an audio-rate `$sine` sweeps,
+/// so its coefficients are recomputed every sample.
+fn apf_swept_modules(channels: usize) -> Vec<(String, &'static str, Value)> {
+    vec![
+        (
+            "src".to_string(),
+            "$saw",
+            json!({ "freq": poly(0.0, channels) }),
+        ),
+        (
+            "lfo".to_string(),
+            "$sine",
+            json!({ "freq": poly(-2.0, channels) }),
+        ),
+        (
+            "apf".to_string(),
+            "$apf",
+            json!({
+                "input": poly_cable("src", "output", channels),
+                "cutoff": poly_cable("lfo", "output", channels),
+                "stages": 50.0,
+                "resonance": 2.0,
+            }),
+        ),
+    ]
+}
+
+fn apf_swept(channels: usize) -> BenchPatch {
+    BenchPatch::new(apf_swept_modules(channels))
+}
+
+/// [`apf_swept`] in Sample mode, as in a feedback cycle.
+fn apf_swept_sample(channels: usize) -> BenchPatch {
+    BenchPatch::with_mode(apf_swept_modules(channels), ProcessingMode::Sample)
+}
+
 /// `$saw` into a chain of 32 `$scaleAndShift`s with constant scale and
 /// shift: almost no DSP, so this measures per-module engine overhead.
 fn scale_chain(channels: usize) -> BenchPatch {
@@ -486,6 +522,8 @@ fn bench_patches(c: &mut Criterion) {
         ("scale_fallback_32", scale_fallback),
         ("scale_chain_32", scale_chain),
         ("lpf_chain_32", lpf_chain),
+        ("apf_swept_50", apf_swept),
+        ("apf_swept_sample_50", apf_swept_sample),
         ("voices_8", voices),
         ("comp_chain_8", comp_chain),
         ("grains_4", grains),

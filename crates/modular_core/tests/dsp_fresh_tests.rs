@@ -311,7 +311,9 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$sine" | "$saw" | "$pulse" | "$supersaw" | "$ramp" | "$swell" => json!({ "freq": 0.0 }),
         "$pSine" | "$pSaw" | "$pPulse" => json!({ "phase": 0.0 }),
         "$macro" => json!({ "freq": 0.0, "engine": "virtualAnalog" }),
-        "$lpf" | "$hpf" | "$jup6f" | "$multimode" => json!({ "input": 0.0, "cutoff": 0.0 }),
+        "$lpf" | "$hpf" | "$jup6f" | "$multimode" | "$apf" => {
+            json!({ "input": 0.0, "cutoff": 0.0 })
+        }
         "$unstable.filter.lp"
         | "$unstable.filter.hp"
         | "$unstable.filter.bp"
