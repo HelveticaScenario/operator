@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use super::HatShared;
 use super::sides::{Channel, ClosedHat, ClosedSide, OpenHat, OpenSide};
 use crate::dsp::drums::group::{Groups, Run};
-use crate::dsp::drums::input::{Input, Live, each_slot_of};
+use crate::dsp::drums::input::{Held, Hold, Input, Live, each_slot_of};
 use crate::dsp::drums::tr808::metal::MetalFilters;
 use crate::dsp::drums::voice::rails;
 use crate::dsp::utils::rng::seed_base;
@@ -49,6 +49,12 @@ struct Hh808Params {
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
+    /// sample the controls on each strike of either hat and hold them until
+    /// the next, as accent always is, so changes reach only the hits after
+    /// them (default false)
+    #[serde(default)]
+    #[deserr(default)]
+    hold: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -88,6 +94,7 @@ pub struct Hh808 {
 
 #[derive(Default)]
 struct HhState {
+    hold: Hold<2, 2>,
     shared: HatShared,
     filters: MetalFilters,
     closed: Groups<ClosedHat>,
@@ -116,6 +123,7 @@ impl Hh808 {
         self.state.tick(
             &mut self.channel_state[..channels],
             p.restart,
+            p.hold,
             inputs,
             |ch, closed, open| {
                 o.closed.set(ch, rails(closed));
@@ -148,7 +156,7 @@ impl Hh808 {
             [closed, open, accent, decay, cut],
             |inputs, [mut both, mut closed, mut open]| {
                 self.state
-                    .tick(channel_state, p.restart, inputs, |ch, c, o| {
+                    .tick(channel_state, p.restart, p.hold, inputs, |ch, c, o| {
                         closed.set(ch, rails(c));
                         open.set(ch, rails(o));
                         both.set(ch, rails(c + o));
@@ -167,9 +175,14 @@ impl HhState {
         &mut self,
         channels: &mut [Channel],
         restart: bool,
+        hold: bool,
         [closed, open, accent, decay, cut]: [I; 5],
         mut out: impl FnMut(usize, f32, f32),
     ) {
+        let [decay, cut] = self
+            .hold
+            .apply(hold, channels.len(), [closed, open], [decay, cut]);
+        let (closed, open) = (Held::Live(closed), Held::Live(open));
         let mut closed_out = [0.0; PORT_MAX_CHANNELS];
         let side = ClosedSide {
             trigger: closed,

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
+use crate::dsp::drums::input::{Cached, Hold, Input, Live, each_slot};
 use crate::dsp::drums::tr808::circuit::PULSE_SECS;
 use crate::dsp::drums::tr808::levels;
 use crate::dsp::drums::voice::{Timing, rails};
@@ -29,6 +29,12 @@ struct Rs808Params {
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
+    /// sample the controls on each strike and hold them until the next, as
+    /// accent always is, so changes reach only the hits after them (default
+    /// false)
+    #[serde(default)]
+    #[deserr(default)]
+    hold: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -54,8 +60,22 @@ struct Rs808Outputs {
 pub struct Rs808 {
     outputs: Rs808Outputs,
     params: Rs808Params,
-    state: RimShared,
+    state: RsState,
     channel_state: Box<[RimChannel]>,
+}
+
+/// The rim shot's per-sample-rate constants and its held `freq`.
+#[derive(Default)]
+struct RsState {
+    shared: RimShared,
+    hold: Hold<1, 1>,
+}
+
+/// The claves' per-sample-rate constants and their held `freq` and `decay`.
+#[derive(Default)]
+struct ClState {
+    shared: ClavesShared,
+    hold: Hold<1, 2>,
 }
 
 /// A rim shot channel: its circuits, and its resonators tuned to its
@@ -80,7 +100,7 @@ fn rim_rest_hz() -> f32 {
 
 impl Rs808 {
     fn init(&mut self, sample_rate: f32) {
-        let sh = &mut self.state;
+        let sh = &mut self.state.shared;
         sh.timing = Timing::new(PULSE_SECS, sample_rate);
         sh.substeps = (RIM_RATE / sample_rate).round().max(1.0) as u32;
         let rate = sample_rate * sh.substeps as f32;
@@ -114,9 +134,10 @@ impl Rs808 {
         ];
         let out = &mut self.outputs.sample;
         rim_tick(
-            &self.state,
+            &mut self.state,
             &mut self.channel_state[..channels],
             p.restart,
+            p.hold,
             inputs,
             |ch, v| out.set(ch, v),
         );
@@ -142,9 +163,14 @@ impl Rs808 {
             range,
             [trigger, accent, freq],
             |inputs, mut slot| {
-                rim_tick(&self.state, channel_state, p.restart, inputs, |ch, v| {
-                    slot.set(ch, v)
-                })
+                rim_tick(
+                    &mut self.state,
+                    channel_state,
+                    p.restart,
+                    p.hold,
+                    inputs,
+                    |ch, v| slot.set(ch, v),
+                )
             },
         );
         Some(())
@@ -155,12 +181,15 @@ impl Rs808 {
 /// freq]`, handing `out` each one's output.
 #[inline(always)]
 fn rim_tick<I: Input>(
-    sh: &RimShared,
+    state: &mut RsState,
     channels: &mut [RimChannel],
     restart: bool,
+    hold: bool,
     [trigger, accent, freq]: [I; 3],
     mut out: impl FnMut(usize, f32),
 ) {
+    let [freq] = state.hold.apply(hold, channels.len(), [trigger], [freq]);
+    let sh = &state.shared;
     for (ch, cs) in channels.iter_mut().enumerate() {
         // `freq` scales both resonators and keeps their stock decays.
         let (controls, level) = cs.controls.get(freq.at(ch), |freq| {
@@ -213,6 +242,12 @@ struct Cl808Params {
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
+    /// sample the controls on each strike and hold them until the next, as
+    /// accent always is, so changes reach only the hits after them (default
+    /// false)
+    #[serde(default)]
+    #[deserr(default)]
+    hold: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -238,13 +273,13 @@ struct Cl808Outputs {
 pub struct Cl808 {
     outputs: Cl808Outputs,
     params: Cl808Params,
-    state: ClavesShared,
+    state: ClState,
     channel_state: Box<[ClavesChannel]>,
 }
 
 impl Cl808 {
     fn init(&mut self, sample_rate: f32) {
-        let sh = &mut self.state;
+        let sh = &mut self.state.shared;
         sh.timing = Timing::new(PULSE_SECS, sample_rate);
         sh.dt = 1.0 / sample_rate;
         sh.couple_coeff = one_pole_coeff(rc_hz(R319 + R326, C125), sample_rate);
@@ -262,9 +297,10 @@ impl Cl808 {
         ];
         let out = &mut self.outputs.sample;
         claves_tick(
-            &self.state,
+            &mut self.state,
             &mut self.channel_state[..channels],
             p.restart,
+            p.hold,
             inputs,
             |ch, v| out.set(ch, v),
         );
@@ -291,9 +327,14 @@ impl Cl808 {
             range,
             [trigger, accent, freq, decay],
             |inputs, mut slot| {
-                claves_tick(&self.state, channel_state, p.restart, inputs, |ch, v| {
-                    slot.set(ch, v)
-                })
+                claves_tick(
+                    &mut self.state,
+                    channel_state,
+                    p.restart,
+                    p.hold,
+                    inputs,
+                    |ch, v| slot.set(ch, v),
+                )
             },
         );
         Some(())
@@ -304,12 +345,17 @@ impl Cl808 {
 /// decay]`, handing `out` each one's output.
 #[inline(always)]
 fn claves_tick<I: Input>(
-    sh: &ClavesShared,
+    state: &mut ClState,
     channels: &mut [ClavesChannel],
     restart: bool,
+    hold: bool,
     [trigger, accent, freq, decay]: [I; 4],
     mut out: impl FnMut(usize, f32),
 ) {
+    let [freq, decay] = state
+        .hold
+        .apply(hold, channels.len(), [trigger], [freq, decay]);
+    let sh = &state.shared;
     for (ch, cs) in channels.iter_mut().enumerate() {
         let (t, level) = cs.t.get((freq.at(ch), decay.at(ch)), |(freq, decay)| {
             let r = voct_to_hz(freq) / sh.rest_hz;

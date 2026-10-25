@@ -25,6 +25,12 @@ struct Cb808Params {
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
+    /// sample the controls on each strike and hold them until the next, as
+    /// accent always is, so changes reach only the hits after them (default
+    /// false)
+    #[serde(default)]
+    #[deserr(default)]
+    hold: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -50,8 +56,15 @@ struct Cb808Outputs {
 pub struct Cb808 {
     outputs: Cb808Outputs,
     params: Cb808Params,
-    state: BellShared,
+    state: CbState,
     channel_state: Box<[Channel]>,
+}
+
+/// The cowbell's per-sample-rate constants and its held `freq`.
+#[derive(Default)]
+struct CbState {
+    shared: BellShared,
+    hold: Hold<1, 1>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -67,7 +80,7 @@ struct Channel {
 
 impl Cb808 {
     fn init(&mut self, sample_rate: f32) {
-        let sh = &mut self.state;
+        let sh = &mut self.state.shared;
         sh.timing = Timing::new(PULSE_SECS, sample_rate);
         sh.substeps = (CB_RATE / sample_rate).round().max(1.0) as u32;
         let rate = sample_rate * sh.substeps as f32;
@@ -109,9 +122,10 @@ impl Cb808 {
         ];
         let out = &mut self.outputs.sample;
         tick(
-            &self.state,
+            &mut self.state,
             &mut self.channel_state[..channels],
             p.restart,
+            p.hold,
             sample_rate,
             inputs,
             |ch, v| out.set(ch, v),
@@ -139,9 +153,10 @@ impl Cb808 {
             [trigger, accent, freq],
             |inputs, mut slot| {
                 tick(
-                    &self.state,
+                    &mut self.state,
                     channel_state,
                     p.restart,
+                    p.hold,
                     sample_rate,
                     inputs,
                     |ch, v| slot.set(ch, v),
@@ -156,13 +171,16 @@ impl Cb808 {
 /// handing `out` each one's output.
 #[inline(always)]
 fn tick<I: Input>(
-    sh: &BellShared,
+    state: &mut CbState,
     channels: &mut [Channel],
     restart: bool,
+    hold: bool,
     sample_rate: f32,
     [trigger, accent, freq]: [I; 3],
     mut out: impl FnMut(usize, f32),
 ) {
+    let [freq] = state.hold.apply(hold, channels.len(), [trigger], [freq]);
+    let sh = &state.shared;
     for (ch, cs) in channels.iter_mut().enumerate() {
         let (inc, level) = cs.tuning.get(freq.at(ch), |freq| {
             let r = voct_to_hz(freq) / COWBELL_HZ[0];

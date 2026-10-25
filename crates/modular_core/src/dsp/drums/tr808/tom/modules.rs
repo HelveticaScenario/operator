@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::input::{Held, Input, Live, each_slot};
 use crate::dsp::drums::voice::rails;
 
 /// Seeds each channel's noise from the module's [`seed_base`].
@@ -53,9 +53,14 @@ impl TomState {
         parts: &'static Parts,
         channels: &mut [Channel],
         restart: bool,
+        hold: bool,
         [trigger, accent, freq, decay]: [I; 4],
         mut out: impl FnMut(usize, f32),
     ) {
+        let [freq, decay] = self
+            .hold
+            .apply(hold, channels.len(), [trigger], [freq, decay]);
+        let trigger = Held::Live(trigger);
         let run = Run {
             accent,
             restart,
@@ -113,6 +118,12 @@ macro_rules! tom_module {
                 #[serde(default)]
                 #[deserr(default)]
                 restart: bool,
+                /// sample the controls on each strike and hold them until the
+                /// next, as accent always is, so changes reach only the hits
+                /// after them (default false)
+                #[serde(default)]
+                #[deserr(default)]
+                hold: bool,
             }
 
             #[derive(Outputs, JsonSchema)]
@@ -151,6 +162,7 @@ macro_rules! tom_module {
                         &$parts,
                         &mut self.channel_state[..channels],
                         p.restart,
+                        p.hold,
                         inputs,
                         |ch, v| out.set(ch, v),
                     );
@@ -181,6 +193,7 @@ macro_rules! tom_module {
                                 &$parts,
                                 channel_state,
                                 p.restart,
+                                p.hold,
                                 inputs,
                                 |ch, v| slot.set(ch, v),
                             )

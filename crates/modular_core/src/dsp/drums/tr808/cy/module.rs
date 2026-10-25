@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Input, Live, each_slot};
+use crate::dsp::drums::input::{Held, Hold, Input, Live, each_slot};
 use crate::dsp::drums::tr808::circuit::PULSE_SECS;
 use crate::dsp::drums::voice::{Timing, knob, rails};
 
@@ -33,6 +33,12 @@ struct Cy808Params {
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
+    /// sample the controls on each strike and hold them until the next, as
+    /// accent always is, so changes reach only the hits after them (default
+    /// false)
+    #[serde(default)]
+    #[deserr(default)]
+    hold: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -65,6 +71,7 @@ pub struct Cy808 {
 
 #[derive(Default)]
 struct CyState {
+    hold: Hold<1, 2>,
     shared: CymbalShared,
     filters: MetalFilters,
     groups: Groups<CymbalDrum>,
@@ -111,6 +118,7 @@ impl Cy808 {
         self.state.tick(
             &mut self.channel_state[..channels],
             p.restart,
+            p.hold,
             inputs,
             |ch, v| out.set(ch, v),
         );
@@ -138,7 +146,9 @@ impl Cy808 {
             [trigger, accent, decay, tone],
             |inputs, mut slot| {
                 self.state
-                    .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
+                    .tick(channel_state, p.restart, p.hold, inputs, |ch, v| {
+                        slot.set(ch, v)
+                    })
             },
         );
         Some(())
@@ -153,9 +163,14 @@ impl CyState {
         &mut self,
         channels: &mut [Channel],
         restart: bool,
+        hold: bool,
         [trigger, accent, decay, tone]: [I; 4],
         mut out: impl FnMut(usize, f32),
     ) {
+        let [decay, tone] = self
+            .hold
+            .apply(hold, channels.len(), [trigger], [decay, tone]);
+        let trigger = Held::Live(trigger);
         let run = Run {
             accent,
             restart,

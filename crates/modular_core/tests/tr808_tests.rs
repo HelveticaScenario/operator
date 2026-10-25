@@ -25,71 +25,6 @@ fn render_retriggered(
     render_clocks(module_type, params, &[("trigger", hz)], "output", secs)
 }
 
-/// Render `secs` of `output` with `params` and a `$pulse` clock on each
-/// `(port, hz)`, and return it with the sample index of each edge of the
-/// first clock.
-fn render_clocks(
-    module_type: &str,
-    mut params: Value,
-    clocks: &[(&str, f32)],
-    output: &str,
-    secs: f32,
-) -> (Vec<f32>, Vec<usize>) {
-    const BLOCK: usize = 64;
-    let mut modules = Vec::new();
-    for (k, &(port, hz)) in clocks.iter().enumerate() {
-        let id = format!("clock{k}");
-        params[port] = json!({ "type": "cable", "module": id, "port": "output", "channel": 0 });
-        modules.push((id, "$pulse", json!({ "freq": voct(hz) })));
-    }
-    modules.push(("drum".to_string(), module_type, params));
-    let deserializers = get_params_deserializers();
-    TEST_SEED_BASE.set(Some(SEED));
-    let mut patch = Patch::new();
-    patch
-        .insert_modules(
-            modules.into_iter().map(|(id, module_type, params)| {
-                let cached = deserializers[module_type](params).unwrap();
-                (
-                    id,
-                    module_type.to_string(),
-                    DeserializedParams {
-                        params: cached.params,
-                        channel_count: cached.channel_count,
-                    },
-                    ProcessingMode::Block,
-                )
-            }),
-            SR,
-            BLOCK,
-        )
-        .unwrap();
-    patch.connect_all();
-    let ids: Vec<String> = (0..clocks.len()).map(|k| format!("clock{k}")).collect();
-    let drum = &patch.sampleables["drum"];
-    let (mut x, mut strikes, mut prev) = (Vec::new(), Vec::new(), 0.0);
-    for _ in 0..(secs * SR) as usize / BLOCK {
-        for id in &ids {
-            patch.sampleables[id].start_block();
-        }
-        drum.start_block();
-        for id in &ids {
-            patch.sampleables[id].ensure_processed_to(BLOCK);
-        }
-        drum.ensure_processed_to(BLOCK);
-        let first = &patch.sampleables[&ids[0]];
-        for i in 0..BLOCK {
-            let gate = first.get_value_at("output", 0, i);
-            if prev < 1.0 && gate >= 1.0 {
-                strikes.push(x.len());
-            }
-            prev = gate;
-            x.push(drum.get_value_at(output, 0, i));
-        }
-    }
-    (x, strikes)
-}
-
 /// Peak level between consecutive strikes.
 fn hit_peaks(x: &[f32], strikes: &[usize]) -> Vec<f32> {
     strikes.windows(2).map(|w| peak(&x[w[0]..w[1]])).collect()
@@ -1051,4 +986,24 @@ fn voices_are_silent_until_struck() {
     }
     let hats = json!({ "closed": 0.0, "open": 0.0 });
     assert_silent_until_struck(HH, hats, &["output", "closed", "open"]);
+}
+
+#[test]
+fn hold_keeps_the_open_hats_decay_from_its_strike() {
+    // The decay control swings from 5 V to −5 V an eighth of a second into
+    // the open hit. Held, the hat sounds as one at a steady 5 V.
+    let tail = |decay: Option<f32>, hold: bool| {
+        let mut params = json!({ "closed": 0.0, "hold": hold });
+        let mut clocks = vec![("open", 1.0)];
+        match decay {
+            Some(volts) => params["decay"] = json!(volts),
+            None => clocks.push(("decay", 4.0)),
+        }
+        let (x, _) = render_clocks(HH, params, &clocks, "open", 0.4);
+        rms(&x[(0.2 * SR) as usize..])
+    };
+    let steady = tail(Some(5.0), false);
+    let (held, live) = (tail(None, true), tail(None, false));
+    assert!((held / steady - 1.0).abs() < 0.01, "{held} {steady}");
+    assert!(live < 0.5 * steady, "{live} {steady}");
 }

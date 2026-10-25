@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
+use crate::dsp::drums::input::{Cached, Held, Hold, Input, Live, each_slot};
 use crate::dsp::drums::tr909::circuit::{TRIG_SECS, tapered_pot};
 use crate::dsp::drums::voice::{Timing, knob, rails};
 
@@ -41,6 +41,12 @@ struct Bd909Params {
     #[serde(default)]
     #[deserr(default)]
     restart: bool,
+    /// sample the controls on each strike and hold them until the next, as
+    /// accent always is, so changes reach only the hits after them (default
+    /// false)
+    #[serde(default)]
+    #[deserr(default)]
+    hold: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -74,6 +80,7 @@ pub struct Bd909 {
 
 #[derive(Default)]
 struct BdState {
+    hold: Hold<1, 4>,
     shared: KickShared,
     groups: Groups<KickDrum>,
 }
@@ -124,6 +131,7 @@ impl Bd909 {
         self.state.tick(
             &mut self.channel_state[..channels],
             p.restart,
+            p.hold,
             inputs,
             |ch, v| out.set(ch, v),
         );
@@ -153,7 +161,9 @@ impl Bd909 {
             [trigger, accent, freq, sweep, decay, attack],
             |inputs, mut slot| {
                 self.state
-                    .tick(channel_state, p.restart, inputs, |ch, v| slot.set(ch, v))
+                    .tick(channel_state, p.restart, p.hold, inputs, |ch, v| {
+                        slot.set(ch, v)
+                    })
             },
         );
         Some(())
@@ -168,9 +178,17 @@ impl BdState {
         &mut self,
         channels: &mut [Channel],
         restart: bool,
+        hold: bool,
         [trigger, accent, freq, sweep, decay, attack]: [I; 6],
         mut out: impl FnMut(usize, f32),
     ) {
+        let [freq, sweep, decay, attack] = self.hold.apply(
+            hold,
+            channels.len(),
+            [trigger],
+            [freq, sweep, decay, attack],
+        );
+        let trigger = Held::Live(trigger);
         let run = Run {
             accent,
             restart,

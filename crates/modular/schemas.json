@@ -939,6 +939,11 @@
             }
           ]
         },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
@@ -1111,6 +1116,11 @@
               "type": "null"
             }
           ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
         },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
@@ -1296,6 +1306,11 @@
             }
           ]
         },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
@@ -1453,6 +1468,11 @@
             }
           ]
         },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
@@ -1606,6 +1626,11 @@
               "type": "null"
             }
           ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
         },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
@@ -2007,6 +2032,11 @@
             }
           ]
         },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
           "type": "boolean",
@@ -2186,6 +2216,11 @@
               "type": "null"
             }
           ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike of either hat and hold them until\nthe next, as accent always is, so changes reach only the hits after\nthem (default false)",
+          "type": "boolean",
+          "default": false
         },
         "open": {
           "description": "rising edges strike the open hat",
@@ -2383,6 +2418,11 @@
             }
           ]
         },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
           "type": "boolean",
@@ -2547,6 +2587,11 @@
               "type": "null"
             }
           ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
         },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
@@ -2713,6 +2758,11 @@
             }
           ]
         },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
           "type": "boolean",
@@ -2877,6 +2927,11 @@
               "type": "null"
             }
           ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
         },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
@@ -3043,6 +3098,11 @@
             }
           ]
         },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
           "type": "boolean",
@@ -3207,6 +3267,11 @@
               "type": "null"
             }
           ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
         },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
@@ -3383,6 +3448,11 @@
               "type": "null"
             }
           ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
         },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
@@ -3564,6 +3634,11 @@
               "type": "null"
             }
           ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
         },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
@@ -4014,6 +4089,11 @@
             }
           ]
         },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
           "type": "boolean",
@@ -4179,6 +4259,11 @@
             }
           ]
         },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
           "type": "boolean",
@@ -4343,6 +4428,11 @@
               "type": "null"
             }
           ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
         },
         "restart": {
           "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",

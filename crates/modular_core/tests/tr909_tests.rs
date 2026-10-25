@@ -192,6 +192,26 @@ fn sd_snappy_adds_noise() {
 }
 
 #[test]
+fn hold_keeps_the_controls_of_the_strike() {
+    // The tone control swings from 5 V to −5 V an eighth of a second into
+    // the hit. Held, the hit sounds as one at a steady 5 V.
+    let tail = |tone: Option<f32>, hold: bool| {
+        let mut params = json!({ "snappy": 5.0, "hold": hold });
+        let mut clocks = vec![("trigger", 1.0)];
+        match tone {
+            Some(volts) => params["tone"] = json!(volts),
+            None => clocks.push(("tone", 4.0)),
+        }
+        let (x, _) = render_clocks(SD, params, &clocks, "output", 0.25);
+        rms(&x[(0.15 * SR) as usize..])
+    };
+    let steady = tail(Some(5.0), false);
+    let (held, live) = (tail(None, true), tail(None, false));
+    assert!((held / steady - 1.0).abs() < 0.01, "{held} {steady}");
+    assert!(live < 0.5 * steady, "{live} {steady}");
+}
+
+#[test]
 fn sd_tone_lengthens_the_noise() {
     // On the hardware, the noise 100–250 ms after the strike is some 20 dB
     // louder with the tone knob all the way up than all the way down.

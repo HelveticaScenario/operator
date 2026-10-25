@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
+use crate::dsp::drums::input::{Cached, Held, Hold, Input, Live, each_slot};
 use crate::dsp::drums::tr909::circuit::TRIG_SECS;
 use crate::dsp::drums::voice::{Timing, knob, rails};
 
@@ -33,6 +33,7 @@ impl Drum for TomDrum {
 
 #[derive(Default)]
 struct TomState {
+    hold: Hold<1, 2>,
     shared: TomShared,
     groups: Groups<TomDrum>,
 }
@@ -101,10 +102,15 @@ impl TomState {
         &mut self,
         channels: &mut [Channel],
         restart: bool,
+        hold: bool,
         stock: f32,
         [trigger, accent, freq, decay]: [I; 4],
         mut out: impl FnMut(usize, f32),
     ) {
+        let [freq, decay] = self
+            .hold
+            .apply(hold, channels.len(), [trigger], [freq, decay]);
+        let trigger = Held::Live(trigger);
         let run = Run {
             accent,
             restart,
@@ -168,6 +174,12 @@ macro_rules! tom_module {
                 #[serde(default)]
                 #[deserr(default)]
                 restart: bool,
+                /// sample the controls on each strike and hold them until the
+                /// next, as accent always is, so changes reach only the hits
+                /// after them (default false)
+                #[serde(default)]
+                #[deserr(default)]
+                hold: bool,
             }
 
             #[derive(Outputs, JsonSchema)]
@@ -205,6 +217,7 @@ macro_rules! tom_module {
                         .tick(
                             &mut self.channel_state[..channels],
                             p.restart,
+                            p.hold,
                             [<$Struct Params>]::FREQ_DEFAULT,
                             inputs,
                             |ch, v| out.set(ch, v),
@@ -236,6 +249,7 @@ macro_rules! tom_module {
                                 .tick(
                                     channel_state,
                                     p.restart,
+                                    p.hold,
                                     [<$Struct Params>]::FREQ_DEFAULT,
                                     inputs,
                                     |ch, v| slot.set(ch, v),

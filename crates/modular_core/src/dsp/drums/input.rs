@@ -6,8 +6,8 @@ use std::ops::Range;
 
 use crate::BlockPort;
 use crate::block_input::BlockInput;
-use crate::dsp::utils::sanitize;
-use crate::poly::PolySignal;
+use crate::dsp::utils::{SchmittTrigger, sanitize};
+use crate::poly::{PORT_MAX_CHANNELS, PolySignal};
 
 /// One input's value on each channel for the sample being run.
 pub trait Input: Copy {
@@ -77,6 +77,80 @@ impl<K: Copy + PartialEq, V: Copy> Cached<K, V> {
     }
 }
 
+/// `N` control inputs held from strike to strike: while holding, each
+/// channel reads the values they had on its last rising edge on any of `T`
+/// trigger inputs, detected as its voice detects a strike.
+#[derive(Clone, Copy)]
+pub struct Hold<const T: usize, const N: usize> {
+    edges: [[SchmittTrigger; T]; PORT_MAX_CHANNELS],
+    values: [[f32; N]; PORT_MAX_CHANNELS],
+    /// Whether each channel's `values` have been taken since holding began.
+    taken: [bool; PORT_MAX_CHANNELS],
+    holding: bool,
+}
+
+impl<const T: usize, const N: usize> Default for Hold<T, N> {
+    fn default() -> Self {
+        Self {
+            edges: [[SchmittTrigger::default(); T]; PORT_MAX_CHANNELS],
+            values: [[0.0; N]; PORT_MAX_CHANNELS],
+            taken: [false; PORT_MAX_CHANNELS],
+            holding: false,
+        }
+    }
+}
+
+impl<const T: usize, const N: usize> Hold<T, N> {
+    /// The `controls` the first `channels` channels read this sample, given
+    /// this sample's `triggers`: while `hold`, their values on each channel's
+    /// last strike, or on the sample holding began; otherwise live.
+    #[inline(always)]
+    pub fn apply<I: Input>(
+        &mut self,
+        hold: bool,
+        channels: usize,
+        triggers: [I; T],
+        controls: [I; N],
+    ) -> [Held<'_, I, N>; N] {
+        if !hold {
+            if self.holding {
+                self.holding = false;
+                self.taken = [false; PORT_MAX_CHANNELS];
+            }
+            return controls.map(Held::Live);
+        }
+        self.holding = true;
+        for ch in 0..channels {
+            let mut struck = false;
+            for (edge, trigger) in self.edges[ch].iter_mut().zip(triggers) {
+                struck |= edge.process(trigger.at(ch));
+            }
+            if struck || !self.taken[ch] {
+                self.taken[ch] = true;
+                self.values[ch] = controls.map(|control| control.at(ch));
+            }
+        }
+        std::array::from_fn(|k| Held::Stored(&self.values, k))
+    }
+}
+
+/// An input read live, or from the values a [`Hold`] took.
+#[derive(Clone, Copy)]
+pub enum Held<'a, I, const N: usize> {
+    Live(I),
+    Stored(&'a [[f32; N]; PORT_MAX_CHANNELS], usize),
+}
+
+impl<I: Input, const N: usize> Input for Held<'_, I, N> {
+    #[inline(always)]
+    fn at(self, ch: usize) -> f32 {
+        match self {
+            Self::Live(input) => input.at(ch),
+            Self::Stored(values, k) => values[ch][k],
+        }
+    }
+}
+
 /// Runs `tick` on each slot of `range`, with that slot's rows of `inputs`,
 /// to write the slot's channels of `out` through [`Slot::set`].
 #[inline(always)]
@@ -113,5 +187,43 @@ impl Slot<'_> {
     #[inline(always)]
     pub fn set(&mut self, ch: usize, value: f32) {
         self.0[ch] = sanitize(value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One sample of `hold` over two channels, with each channel's two
+    /// triggers in `triggers` and its control in `control`.
+    fn read(
+        hold: &mut Hold<2, 1>,
+        on: bool,
+        triggers: [[f32; 2]; 2],
+        control: [f32; 2],
+    ) -> [f32; 2] {
+        let first = [triggers[0][0], triggers[1][0]];
+        let second = [triggers[0][1], triggers[1][1]];
+        let [held] = hold.apply(on, 2, [&first[..], &second[..]], [&control[..]]);
+        [held.at(0), held.at(1)]
+    }
+
+    #[test]
+    fn holds_from_strike_to_strike_on_either_trigger() {
+        let mut hold = Hold::default();
+        let quiet = [[0.0; 2]; 2];
+        // Holding begins with the controls of that sample.
+        assert_eq!(read(&mut hold, true, quiet, [1.0, 2.0]), [1.0, 2.0]);
+        assert_eq!(read(&mut hold, true, quiet, [3.0, 4.0]), [1.0, 2.0]);
+        // A strike on channel 0's first trigger takes channel 0's control.
+        let first = [[5.0, 0.0], [0.0, 0.0]];
+        assert_eq!(read(&mut hold, true, first, [5.0, 6.0]), [5.0, 2.0]);
+        // One on channel 1's second trigger takes channel 1's.
+        let second = [[5.0, 0.0], [0.0, 5.0]];
+        assert_eq!(read(&mut hold, true, second, [7.0, 8.0]), [5.0, 8.0]);
+        // Released, the controls read live; holding again starts afresh.
+        assert_eq!(read(&mut hold, false, quiet, [9.0, 10.0]), [9.0, 10.0]);
+        assert_eq!(read(&mut hold, true, quiet, [11.0, 12.0]), [11.0, 12.0]);
+        assert_eq!(read(&mut hold, true, quiet, [13.0, 14.0]), [11.0, 12.0]);
     }
 }

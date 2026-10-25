@@ -22,7 +22,7 @@ use super::circuit::{
 };
 use crate::dsp::drums::analog::{Exp, VT, converged, high_pass, low_pass, one_pole_coeff, rc_hz};
 use crate::dsp::drums::group::{ChannelInputs, Drum, Groups, Run};
-use crate::dsp::drums::input::Cached;
+use crate::dsp::drums::input::{Cached, Hold};
 use crate::dsp::drums::lanes::{Lanes, Lanewise, Mask, Mono, Real, c, lanewise};
 use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Timing, Voices};
 use crate::dsp::utils::rng::seed_base;
@@ -361,6 +361,7 @@ impl<L: Lanes> Tom<L> {
 /// A tom's per-sample-rate constants and its channel groups.
 #[derive(Default)]
 struct TomState {
+    hold: Hold<1, 2>,
     shared: TomShared,
     groups: Groups<TomDrum>,
 }

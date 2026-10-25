@@ -16,7 +16,7 @@ use super::circuit::{PULSE_SECS, pulse_volts};
 use super::levels;
 use super::metal::{COWBELL_HZ, DUTY, metal_pulse};
 use crate::dsp::drums::analog::{high_pass, one_pole_coeff, rc_hz};
-use crate::dsp::drums::input::{Cached, Input, Live, each_slot};
+use crate::dsp::drums::input::{Cached, Hold, Input, Live, each_slot};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
 use crate::dsp::drums::voice::{Circuit, Fire, Pulse, Timing, Voices, rails};
 use crate::dsp::utils::rng::{LcgRng, seed_base};

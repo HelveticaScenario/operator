@@ -5,6 +5,7 @@
 //! binary are expected.
 #![allow(dead_code)]
 
+use modular_core::Patch;
 use modular_core::dsp::utils::rng::TEST_SEED_BASE;
 use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
@@ -64,6 +65,71 @@ pub fn render_at(module_type: &str, mut params: Value, secs: f32, sample_rate: f
 
 pub fn render(module_type: &str, params: Value, secs: f32) -> Vec<f32> {
     render_at(module_type, params, secs, SR)
+}
+
+/// Render `secs` of `output` with `params` and a `$pulse` clock on each
+/// `(port, hz)`, and return it with the sample index of each edge of the
+/// first clock.
+pub fn render_clocks(
+    module_type: &str,
+    mut params: Value,
+    clocks: &[(&str, f32)],
+    output: &str,
+    secs: f32,
+) -> (Vec<f32>, Vec<usize>) {
+    const BLOCK: usize = 64;
+    let mut modules = Vec::new();
+    for (k, &(port, hz)) in clocks.iter().enumerate() {
+        let id = format!("clock{k}");
+        params[port] = json!({ "type": "cable", "module": id, "port": "output", "channel": 0 });
+        modules.push((id, "$pulse", json!({ "freq": voct(hz) })));
+    }
+    modules.push(("drum".to_string(), module_type, params));
+    let deserializers = get_params_deserializers();
+    TEST_SEED_BASE.set(Some(SEED));
+    let mut patch = Patch::new();
+    patch
+        .insert_modules(
+            modules.into_iter().map(|(id, module_type, params)| {
+                let cached = deserializers[module_type](params).unwrap();
+                (
+                    id,
+                    module_type.to_string(),
+                    DeserializedParams {
+                        params: cached.params,
+                        channel_count: cached.channel_count,
+                    },
+                    ProcessingMode::Block,
+                )
+            }),
+            SR,
+            BLOCK,
+        )
+        .unwrap();
+    patch.connect_all();
+    let ids: Vec<String> = (0..clocks.len()).map(|k| format!("clock{k}")).collect();
+    let drum = &patch.sampleables["drum"];
+    let (mut x, mut strikes, mut prev) = (Vec::new(), Vec::new(), 0.0);
+    for _ in 0..(secs * SR) as usize / BLOCK {
+        for id in &ids {
+            patch.sampleables[id].start_block();
+        }
+        drum.start_block();
+        for id in &ids {
+            patch.sampleables[id].ensure_processed_to(BLOCK);
+        }
+        drum.ensure_processed_to(BLOCK);
+        let first = &patch.sampleables[&ids[0]];
+        for i in 0..BLOCK {
+            let gate = first.get_value_at("output", 0, i);
+            if prev < 1.0 && gate >= 1.0 {
+                strikes.push(x.len());
+            }
+            prev = gate;
+            x.push(drum.get_value_at(output, 0, i));
+        }
+    }
+    (x, strikes)
 }
 
 /// Asserts a voice with `params`, none of which strike it, keeps each of
