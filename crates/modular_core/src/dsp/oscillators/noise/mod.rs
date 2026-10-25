@@ -1,9 +1,9 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::dsp::utils::rng::seed_base;
+use crate::dsp::utils::rng::{hash_bipolar, seed_base};
 use crate::dsp::utils::voct_to_hz;
-use crate::poly::{PolyOutput, PolySignal};
+use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal};
 
 mod channel;
 mod generators;
@@ -11,7 +11,7 @@ mod generators;
 mod tests;
 
 use channel::NoiseChannelState;
-use generators::LFSR_SHORT_CYCLE;
+use generators::{LFSR_LONG_PERIOD, LFSR_SHORT_CYCLE, LfsrLoop, LfsrPhases, lfsr_even_phase};
 
 fn default_channels() -> usize {
     1
@@ -23,7 +23,7 @@ fn noise_derive_channel_count(params: &NoiseParams) -> usize {
     params
         .channels
         .max(rate_channels)
-        .clamp(1, crate::poly::PORT_MAX_CHANNELS)
+        .clamp(1, PORT_MAX_CHANNELS)
 }
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -161,6 +161,11 @@ pub struct Noise {
 struct NoiseState {
     last_noise_type: NoiseKind,
     inv_sample_rate: f32,
+    /// Random per-module seed that places the LFSR channels, drawn when the
+    /// module's first channels are seeded. It transfers with the module, so
+    /// channels a patch update adds play short-mode cycles distinct from the
+    /// transferred channels'.
+    lfsr_seed: u32,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -221,13 +226,40 @@ impl crate::types::PatchUpdateHandler for Noise {
     /// its stable per-instance heap address. Transferred channels keep their
     /// seeded RNG, so each stream stays continuous across patch updates.
     fn on_patch_update(&mut self) {
-        let base = seed_base(self);
+        self.prepare_channels(seed_base(self));
+    }
+}
+
+impl Noise {
+    /// The body of `on_patch_update`, seeding new channels from `base`.
+    fn prepare_channels(&mut self, base: u64) {
         let color = self.params.color;
         let color_changed = self.state.last_noise_type != color;
         self.state.last_noise_type = color;
+        let fresh = !self.channel_state.iter().any(|state| state.seeded);
+        if fresh {
+            let unit = (hash_bipolar(base, 0) + 1.0) * 0.5;
+            self.state.lfsr_seed = (unit * f64::from(u32::MAX)) as u32;
+        }
+        let lfsr_seed = self.state.lfsr_seed;
+        let channels = self.channel_state.len();
+        // Channels added beside running ones claim long-mode phases away from
+        // the current phases of the running channels.
+        let mut phases = LfsrPhases::new(
+            self.channel_state
+                .iter()
+                .filter(|state| state.seeded)
+                .map(NoiseChannelState::lfsr_phase),
+        );
         for (ch, state) in self.channel_state.iter_mut().enumerate() {
             if !state.seeded {
-                state.seed(base, ch, color);
+                let phase = if fresh {
+                    lfsr_even_phase(lfsr_seed % LFSR_LONG_PERIOD, ch, channels)
+                } else {
+                    phases.claim()
+                };
+                let lfsr_loop = LfsrLoop::for_channel(lfsr_seed, ch);
+                state.seed(base, ch, phase, lfsr_loop, color);
             } else if color_changed {
                 state.reset(color);
             }
