@@ -178,7 +178,8 @@ fn comp_chain(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
-/// Two seconds of deterministic white noise at 48 kHz, for `$granularSampler`.
+/// Two seconds of deterministic white noise at 48 kHz, for `$grains` and
+/// `$granularSampler`.
 fn noise_wav() -> Arc<WavData> {
     let mut state = 1u32;
     let samples = (0..96_000)
@@ -210,8 +211,37 @@ fn table_wav() -> Arc<WavData> {
     ))
 }
 
-/// 4 `$granularSampler` clouds, triggered at 5, 20, 80 and 320 Hz.
+/// 4 `$grains` clouds (≈ 2.5, 10, 30 and 60 active grains per channel), each
+/// gated by its own slow pulse.
 fn grains(channels: usize) -> BenchPatch {
+    let mut modules = Vec::new();
+    for (i, (density, length)) in [(2.5, 1.0), (10.0, 1.0), (10.0, 3.0), (20.0, 3.0)]
+        .iter()
+        .enumerate()
+    {
+        let gate = format!("gate{i}");
+        modules.push((
+            gate.clone(),
+            "$pulse",
+            json!({ "freq": poly(-6.0, channels), "width": 4.5 }),
+        ));
+        modules.push((
+            format!("grains{i}"),
+            "$grains",
+            json!({
+                "wav": { "type": "wav_ref", "path": "noise", "channels": 1 },
+                "pitch": poly(0.0, channels),
+                "gate": poly_cable(&gate, "output", channels),
+                "density": density,
+                "length": length,
+            }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
+/// 4 `$granularSampler` clouds, triggered at 5, 20, 80 and 320 Hz.
+fn granular(channels: usize) -> BenchPatch {
     let mut modules = Vec::new();
     for (i, rate) in [5.0f32, 20.0, 80.0, 320.0].iter().enumerate() {
         let trigger = format!("trigger{i}");
@@ -259,11 +289,12 @@ fn wavetables(channels: usize) -> BenchPatch {
 }
 
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 5] = [
+    let cases: [(&str, fn(usize) -> BenchPatch); 6] = [
         ("lpf_chain_32", lpf_chain),
         ("voices_8", voices),
         ("comp_chain_8", comp_chain),
         ("grains_4", grains),
+        ("granular_4", granular),
         ("wavetable_8", wavetables),
     ];
     for (name, build) in cases {

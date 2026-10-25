@@ -69,9 +69,11 @@ impl TriggerQueue {
     }
 
     /// Hand `accept` the triggers whose onset the inner sample `ago` engine
-    /// samples before engine sample `now` has reached, oldest first, until
-    /// it declines one. `delay` is the resampler's input delay in engine
-    /// samples and `ratio` converts engine samples to inner samples.
+    /// samples before engine sample `now` has reached, oldest first. A
+    /// trigger `accept` declines stays queued in order for a later sample,
+    /// without holding back the triggers behind it. `delay` is the
+    /// resampler's input delay in engine samples and `ratio` converts engine
+    /// samples to inner samples.
     pub fn take_due(
         &mut self,
         now: u64,
@@ -80,8 +82,11 @@ impl TriggerQueue {
         ratio: f32,
         mut accept: impl FnMut(GrainTrigger) -> bool,
     ) {
-        while self.len > 0 {
-            let p = self.items[self.head];
+        // Onsets only get later along the queue, so the due triggers lead it.
+        let mut kept = [0u64; CAPACITY / 64];
+        let mut due = 0;
+        while due < self.len {
+            let p = self.items[self.slot(due)];
             let late = (now - p.sample) as f32 + p.age - ago - delay;
             if late < 0.0 {
                 break;
@@ -91,10 +96,82 @@ impl TriggerQueue {
                 ..p.grain
             };
             if !accept(grain) {
-                break;
+                kept[due / 64] |= 1 << (due % 64);
             }
-            self.head = self.slot(1);
-            self.len -= 1;
+            due += 1;
         }
+        // Close the gaps from the back, so the kept triggers end just before
+        // the ones not yet due and keep their order.
+        let mut write = due;
+        for read in (0..due).rev() {
+            if kept[read / 64] & (1 << (read % 64)) != 0 {
+                write -= 1;
+                self.items[self.slot(write)] = self.items[self.slot(read)];
+            }
+        }
+        self.head = self.slot(write);
+        self.len -= write;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trigger(voice: usize) -> GrainTrigger {
+        GrainTrigger {
+            voice,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_declined_trigger_does_not_hold_back_the_rest() {
+        let mut q = TriggerQueue::default();
+        for (i, voice) in [0, 0, 1, 2].into_iter().enumerate() {
+            q.push(i as u64, 1.0, trigger(voice));
+        }
+        // Voice 0 takes one grain start per sample.
+        let mut taken = Vec::new();
+        let mut busy = false;
+        q.take_due(10, 0.0, 0.0, 1.0, |t| {
+            if t.voice == 0 && busy {
+                return false;
+            }
+            busy |= t.voice == 0;
+            taken.push(t.voice);
+            true
+        });
+        assert_eq!(taken, vec![0, 1, 2]);
+        let mut rest = Vec::new();
+        q.take_due(11, 0.0, 0.0, 1.0, |t| {
+            rest.push(t.voice);
+            true
+        });
+        assert_eq!(rest, vec![0]);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn triggers_not_yet_due_stay_queued_behind_declined_ones() {
+        let mut q = TriggerQueue::default();
+        q.push(0, 1.0, trigger(0));
+        q.push(1, 1.0, trigger(1));
+        q.push(5, 1.0, trigger(2));
+        // With a 3-sample input delay, the trigger from sample 5 is not due
+        // at sample 5.
+        let mut first = Vec::new();
+        q.take_due(5, 0.0, 3.0, 1.0, |t| {
+            first.push(t.voice);
+            t.voice != 0
+        });
+        assert_eq!(first, vec![0, 1]);
+        let mut later = Vec::new();
+        q.take_due(10, 0.0, 0.0, 1.0, |t| {
+            later.push(t.voice);
+            true
+        });
+        assert_eq!(later, vec![0, 2]);
+        assert!(q.is_empty());
     }
 }

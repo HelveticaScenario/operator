@@ -65,13 +65,18 @@ message_handlers!(impl Scan {});
 
 /// `counter` stepped by `distance` and brought back within 0 to `length`.
 fn step(counter: f32, distance: f32, length: f32, snap_on_wrap: bool) -> f32 {
-    // A non-positive or NaN length counts as the smallest positive one.
+    // A non-positive or NaN length counts as the smallest positive one, and
+    // an infinite one as the largest finite one.
     let length = if length > 0.0 {
-        length
+        length.min(f32::MAX)
     } else {
         f32::MIN_POSITIVE
     };
     let c = counter + if distance.is_finite() { distance } else { 0.0 };
+    // A step too large to represent lands on 0.
+    if !c.is_finite() {
+        return 0.0;
+    }
     if c > length {
         if snap_on_wrap {
             return 0.0;
@@ -252,6 +257,21 @@ mod tests {
         }
         assert_eq!(step(1.0, f32::NAN, 4.0, false), 1.0);
         assert_eq!(step(1.0, f32::INFINITY, 4.0, false), 1.0);
+        for snap in [false, true] {
+            let c = step(0.0, -1.0, f32::INFINITY, snap);
+            assert!((0.0..=f32::MAX).contains(&c), "{snap}: {c}");
+            let c = step(f32::MAX, f32::MAX, f32::MAX, snap);
+            assert!((0.0..=f32::MAX).contains(&c), "{snap}: {c}");
+        }
+    }
+
+    #[test]
+    fn recovers_when_length_returns_from_infinity() {
+        let mut m = make(f32::INFINITY, -1.0, false);
+        fire(&mut m, 1);
+        m.params.length = PolySignal::mono(Signal::Volts(4.0));
+        let counts = fire(&mut m, 2);
+        assert!(counts.iter().all(|c| (0.0..=4.0).contains(c)), "{counts:?}");
     }
 
     #[test]

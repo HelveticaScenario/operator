@@ -2,8 +2,7 @@
 //! voice's buffer instead of a live recording.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use deserr::Deserr;
 use schemars::JsonSchema;
@@ -16,23 +15,15 @@ use crate::poly::{
 };
 use crate::types::{PatchUpdateHandler, PolySignalFields, WavData};
 
-use super::buffer::{GrainBuffer, MAX_LOADED_FRAMES};
+use super::buffer::GrainBuffer;
 use super::chain::Media;
-use super::grain::HEAD_CROSSING_SAFETY_ZONE;
 use super::grains_chain::{GrainsChain, GrainsVoice};
-use super::granular::GranularCore;
 use super::player::{GrainParams, GrainTrigger};
-use super::primitives::Decimator2;
 use super::queue::TriggerQueue;
-use super::resample::{MonoHistory, Resampler};
+use super::resample::Resampler;
 use super::voice::VoiceControls;
+use super::wav_load::cached_load;
 use super::{FULL_SCALE_VOLTS, GranularQuality, grain_params, unit};
-
-/// Shortest loaded buffer, so grains keep clear of the head on both sides.
-const MIN_LOADED_FRAMES: usize = 4 * (HEAD_CROSSING_SAFETY_ZONE as usize + 1);
-
-/// Loaded buffers kept for reuse across patch updates and engine restarts.
-const CACHED_LOADS: usize = 16;
 
 /// A voice fully wet with no feedback: frozen, it records nothing.
 const CONTROLS: VoiceControls = VoiceControls {
@@ -194,7 +185,6 @@ impl GranularSampler {
         self.state.chain.allocate();
         for voice in self.channel_state.iter_mut() {
             voice.allocate_playback();
-            voice.voice.smoothed = CONTROLS;
         }
         let state = &mut self.state;
         state.engine_sample_rate = sample_rate;
@@ -321,126 +311,6 @@ impl PatchUpdateHandler for GranularSampler {
             }
         }
     }
-}
-
-/// A file loaded for one quality: a buffer per channel, tagged `source`.
-struct Load {
-    /// `None` for the silence that stands in for a missing file.
-    wav: Option<Arc<WavData>>,
-    media: Media,
-    source: u64,
-    channels: Vec<Arc<GrainBuffer>>,
-}
-
-/// `wav` loaded for `media` and the id tagging its buffers, reusing a recent
-/// load. Each cached load holds its file, so the file's address identifies it
-/// for as long as the load is cached. Main thread only.
-fn cached_load(wav: Option<&Arc<WavData>>, media: Media) -> (u64, Vec<Arc<GrainBuffer>>) {
-    static CACHE: Mutex<Vec<Load>> = Mutex::new(Vec::new());
-    // 0 tags a recording.
-    static NEXT_SOURCE: AtomicU64 = AtomicU64::new(1);
-    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    let found = cache.iter().position(|l| {
-        l.media == media
-            && match (&l.wav, wav) {
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            }
-    });
-    if let Some(i) = found {
-        let load = cache.remove(i);
-        let result = (load.source, load.channels.clone());
-        cache.push(load);
-        return result;
-    }
-    let channels: Vec<_> = match wav {
-        Some(w) => (0..w.channel_count().max(1))
-            .map(|c| Arc::new(load_buffer(w, c, media)))
-            .collect(),
-        None => vec![Arc::new(silent_buffer(media))],
-    };
-    let source = NEXT_SOURCE.fetch_add(1, Ordering::Relaxed);
-    cache.push(Load {
-        wav: wav.cloned(),
-        media,
-        source,
-        channels: channels.clone(),
-    });
-    if cache.len() > CACHED_LOADS {
-        cache.remove(0);
-    }
-    (source, channels)
-}
-
-/// Record channel `channel` of `wav` as `media` records its input: converted
-/// to the hardware rate, halved for clean tape's grain engine, and stored
-/// through the recording path at the quality's bit depth with no feedback.
-/// The buffer is as long as the file, within its limits. Main thread only.
-fn load_buffer(wav: &WavData, channel: usize, media: Media) -> GrainBuffer {
-    let samples = wav.channel(channel);
-    let hardware_rate = media.sample_rate();
-    let ratio = media.granular_ratio();
-    let grain_rate = hardware_rate / ratio as f32;
-    let frames = (samples.len() as f64 * grain_rate as f64 / wav.sample_rate() as f64).round();
-    let frames = (frames as usize).clamp(MIN_LOADED_FRAMES, MAX_LOADED_FRAMES);
-    let mut core = GranularCore::default();
-    core.allocate_frames(frames);
-    core.reset(grain_rate, media.resolution(), frames);
-
-    let mut resampler = Resampler::default();
-    resampler.allocate(wav.sample_rate());
-    resampler.configure(wav.sample_rate(), hardware_rate);
-    let mut history = MonoHistory::default();
-    history.allocate();
-    // Hardware samples produced before the file reaches the converter's
-    // output.
-    let mut lead = (resampler.input_delay() * resampler.ratio()).round() as usize;
-    let mut decimator = Decimator2::default();
-    let mut pair = 0;
-    let mut written = 0;
-    let mut n = 0;
-    while written < frames {
-        history.write(
-            resampler.input_index(),
-            samples.get(n).copied().unwrap_or(0.0),
-        );
-        n += 1;
-        resampler.tick(|inner, _| {
-            if lead > 0 {
-                lead -= 1;
-                return;
-            }
-            if written == frames {
-                return;
-            }
-            let x = inner.read(&history);
-            if ratio == 1 {
-                core.load(x);
-                written += 1;
-                return;
-            }
-            decimator.push(x);
-            pair += 1;
-            if pair == ratio {
-                pair = 0;
-                core.load(decimator.output());
-                written += 1;
-            }
-        });
-    }
-    let mut buffer = std::mem::take(&mut core.buffer);
-    buffer.share();
-    buffer
-}
-
-/// The shortest buffer, silent, for a WAV that is missing or empty.
-fn silent_buffer(media: Media) -> GrainBuffer {
-    let mut buffer = GrainBuffer::default();
-    buffer.allocate_frames(MIN_LOADED_FRAMES);
-    buffer.reset(media.resolution(), MIN_LOADED_FRAMES);
-    buffer.share();
-    buffer
 }
 
 message_handlers!(impl GranularSampler {});

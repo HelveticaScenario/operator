@@ -19,6 +19,7 @@ mod reverb;
 mod sampler;
 mod verb;
 mod voice;
+mod wav_load;
 mod wow_flutter;
 
 #[cfg(test)]
@@ -27,6 +28,7 @@ mod tests;
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use crate::dsp::utils::sanitize;
 use crate::poly::{PolySignal, PolySignalExt};
 
 use chain::Media;
@@ -74,11 +76,6 @@ fn unit(v: f32) -> f32 {
     (v / FULL_SCALE_VOLTS).clamp(0.0, 1.0)
 }
 
-#[inline]
-fn finite(x: f32) -> f32 {
-    if x.is_finite() { x } else { 0.0 }
-}
-
 /// Unspread grain controls of `voice`, read from the grain inputs in volts.
 fn grain_params(
     time: &Option<PolySignal>,
@@ -92,9 +89,9 @@ fn grain_params(
     let root = root_freq.value_or(voice, 0.0);
     GrainParams {
         time: unit(time.value_or(voice, 0.0)),
-        size: (finite(size.value_or(voice, 2.75)) / FULL_SCALE_VOLTS).clamp(-1.0, 1.0),
+        size: (sanitize(size.value_or(voice, 2.75)) / FULL_SCALE_VOLTS).clamp(-1.0, 1.0),
         shape: unit(shape.value_or(voice, 3.33)),
-        pitch: finite((freq - root) * 12.0).clamp(-84.0, 84.0),
+        pitch: sanitize((freq - root) * 12.0).clamp(-84.0, 84.0),
         spread: 0.0,
     }
 }
@@ -102,7 +99,7 @@ fn grain_params(
 /// Channel `ch` of an audio input in hardware units.
 #[inline]
 fn input_value(input: &PolySignal, ch: usize) -> f32 {
-    finite(input.get_value(ch)) * (1.0 / FULL_SCALE_VOLTS)
+    sanitize(input.get_value(ch)) * (1.0 / FULL_SCALE_VOLTS)
 }
 
 /// Fold a poly input to stereo in hardware units: even channels feed the left
@@ -123,5 +120,5 @@ fn fold_input(input: &PolySignal) -> Frame {
     if channels % 2 == 1 {
         r += input.get_value(channels - 1);
     }
-    Frame::new(finite(l), finite(r)) * (1.0 / FULL_SCALE_VOLTS)
+    Frame::new(sanitize(l), sanitize(r)) * (1.0 / FULL_SCALE_VOLTS)
 }

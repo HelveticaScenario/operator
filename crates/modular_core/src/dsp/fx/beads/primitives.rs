@@ -121,34 +121,33 @@ impl Ramp {
     }
 }
 
-/// Peak limiter with fast attack and a release set by `decay` (a per-sample
+/// Peak limiter at full scale (±5 V) with instant attack, so no sample
+/// leaves above it, and a two-stage release set by `decay` (a per-sample
 /// coefficient).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Limiter {
     peak: f32,
     peak_lp: f32,
     decay: f32,
-    max_peak: f32,
 }
 
 impl Limiter {
-    pub fn init(&mut self, decay: f32, max_peak: f32) {
+    pub fn init(&mut self, decay: f32) {
         self.peak = 0.5;
         self.peak_lp = 0.5;
         self.decay = decay;
-        self.max_peak = max_peak;
     }
 
     /// Track the peak `level` of one sample and return the gain to apply.
     #[inline]
     pub fn gain(&mut self, level: f32) -> f32 {
-        slope(&mut self.peak, level.min(40.0), 0.1, self.decay);
+        slope(&mut self.peak, level, 1.0, self.decay);
         let peak = self.peak;
-        slope(&mut self.peak_lp, peak, 0.5, self.decay);
-        if self.peak_lp <= self.max_peak {
+        slope(&mut self.peak_lp, peak, 1.0, self.decay);
+        if self.peak_lp <= 1.0 {
             1.0
         } else {
-            self.max_peak / self.peak_lp
+            1.0 / self.peak_lp
         }
     }
 
@@ -396,5 +395,25 @@ impl Interpolator2 {
             *y = acc;
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_limiter_lets_no_sample_above_its_peak() {
+        let mut limiter = Limiter::default();
+        limiter.init(1.0 / (48_000.0 * 4.0));
+        for n in 0..4800 {
+            let x = if n < 100 {
+                0.1
+            } else {
+                200.0 * ((n % 7) as f32 - 3.0)
+            };
+            let y = limiter.process_mono(x);
+            assert!(y.abs() <= 1.0 + 1e-6, "{n}: {x} → {y}");
+        }
     }
 }

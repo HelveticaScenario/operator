@@ -19,8 +19,8 @@ struct Limiters {
 
 impl Limiters {
     fn init(&mut self, sample_rate: f32) {
-        self.pre.init(1.0 / (sample_rate * 4.0), 0.9);
-        self.output.init(1.0 / (sample_rate * 6.0), 0.9);
+        self.pre.init(1.0 / (sample_rate * 4.0));
+        self.output.init(1.0 / (sample_rate * 6.0));
     }
 }
 
@@ -53,7 +53,8 @@ impl GrainsVoice {
         self.output.allocate();
     }
 
-    fn configure(&mut self, media: Media) {
+    /// Switch to `media`, clearing the voice's recording, grains and output.
+    pub fn configure(&mut self, media: Media) {
         self.voice.configure(media);
         self.limiters.init(media.sample_rate());
         self.output.clear();
@@ -69,6 +70,9 @@ pub struct GrainsChain {
     clock: BlockClock,
     /// Smoothed stereo width in volts.
     width: f32,
+    /// Whether a control block has run; the first starts `width` at its
+    /// target.
+    started: bool,
     /// Position within the current pair of hardware samples (clean tape).
     pair_pos: usize,
     stereo_limiters: Limiters,
@@ -102,9 +106,13 @@ impl GrainsChain {
     }
 
     /// Queue a grain start for its voice; false when that voice already has
-    /// one waiting.
+    /// one waiting. A trigger for a voice the module no longer has, carried
+    /// over from a wider module, is dropped.
     pub fn offer(&mut self, voices: &mut [GrainsVoice], t: GrainTrigger) -> bool {
-        let voice = &mut voices[t.voice].voice;
+        let Some(v) = voices.get_mut(t.voice) else {
+            return true;
+        };
+        let voice = &mut v.voice;
         if voice.trigger.is_some() {
             return false;
         }
@@ -133,7 +141,11 @@ impl GrainsChain {
         }
         let block = self.clock.size();
         let grain_block = block / self.media.granular_ratio();
-        self.width += POT_LP * (width() - self.width);
+        let target = width();
+        if !self.started {
+            (self.width, self.started) = (target, true);
+        }
+        self.width += POT_LP * (target - self.width);
         let n = voices.len();
         for (i, v) in voices.iter_mut().enumerate() {
             v.voice.start_block(controls(i), block, grain_block);

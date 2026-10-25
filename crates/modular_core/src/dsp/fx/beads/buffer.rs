@@ -21,9 +21,6 @@ const INTERPOLATION_TAIL: usize = 4;
 /// Samples captured while frozen and crossfaded back in when recording resumes.
 const FREEZE_TAIL_SIZE: usize = 256;
 
-/// Largest buffer any quality records into (16 s of 8-bit audio at 24 kHz).
-pub const MAX_BUFFER_FRAMES: usize = 384_000;
-
 /// Largest loaded buffer, so read indices up to three buffer lengths fit an
 /// `i32`.
 pub const MAX_LOADED_FRAMES: usize = 1 << 29;
@@ -89,11 +86,14 @@ pub fn mulaw_round_trip(x: f32) -> f32 {
     mulaw_to_linear(linear_to_mulaw(clip16((x * 32768.0) as i32)))
 }
 
+/// A sample in the storage format of `resolution`. µ-law codes are stored
+/// inverted so that silence is stored as 0 in every format, and zeroed
+/// storage needs no clearing.
 #[inline]
 fn encode(resolution: Resolution, x: f32) -> i16 {
     let pcm = clip16((x * 32768.0) as i32);
     match resolution {
-        Resolution::MuLaw8 => linear_to_mulaw(pcm) as i16,
+        Resolution::MuLaw8 => (linear_to_mulaw(pcm) ^ 0xff) as i16,
         Resolution::Linear12 => (pcm >> 4) as i16,
         Resolution::Linear16 => pcm as i16,
     }
@@ -112,7 +112,7 @@ pub struct Linear16Codec;
 impl Codec for MuLaw8Codec {
     #[inline(always)]
     fn decode(v: i16) -> f32 {
-        mulaw_to_linear(v as u8)
+        mulaw_to_linear(v as u8 ^ 0xff)
     }
 }
 
@@ -152,6 +152,8 @@ pub struct GrainBuffer {
     frozen: bool,
     /// Identity of a loaded buffer's contents; 0 for a recording.
     source: u64,
+    /// Whether every stored sample is still 0, as allocated.
+    clean: bool,
 }
 
 impl Default for GrainBuffer {
@@ -168,19 +170,28 @@ impl Default for GrainBuffer {
             duration: 1,
             frozen: false,
             source: 0,
+            clean: true,
         }
     }
 }
 
 impl GrainBuffer {
-    /// Allocate storage. Main thread only.
-    pub fn allocate(&mut self) {
-        self.allocate_frames(MAX_BUFFER_FRAMES);
-    }
-
-    /// Allocate storage for `frames` samples. Main thread only.
+    /// Allocate silent storage for `frames` samples. Zeroed allocations
+    /// come from the system already cleared, so this is cheap even for long
+    /// buffers. Main thread only.
     pub fn allocate_frames(&mut self, frames: usize) {
         self.items = Items::Recorded(vec![0; frames + INTERPOLATION_TAIL]);
+        self.clean = true;
+    }
+
+    /// Samples of storage, without the interpolation tail.
+    pub fn frames(&self) -> usize {
+        self.items().len().saturating_sub(INTERPOLATION_TAIL)
+    }
+
+    /// Whether the buffer has storage to record into.
+    pub fn records(&self) -> bool {
+        matches!(&self.items, Items::Recorded(v) if !v.is_empty())
     }
 
     /// Make the contents read-only and cheap to clone; clones share them.
@@ -188,6 +199,20 @@ impl GrainBuffer {
     pub fn share(&mut self) {
         if let Items::Recorded(v) = &mut self.items {
             self.items = Items::Loaded(std::mem::take(v).into());
+        }
+    }
+
+    /// The stored sample at `i`.
+    #[cfg(test)]
+    pub fn raw(&self, i: usize) -> i16 {
+        self.items()[i]
+    }
+
+    /// Whether another buffer reads this one's shared contents.
+    pub fn shared_elsewhere(&self) -> bool {
+        match &self.items {
+            Items::Recorded(_) => false,
+            Items::Loaded(a) => Arc::strong_count(a) > 1,
         }
     }
 
@@ -224,11 +249,14 @@ impl GrainBuffer {
         self.frozen = false;
         self.written_since_last_frozen = 0;
         self.duration = self.max_delay;
-        let zero = encode(resolution, 0.0);
-        if let Items::Recorded(v) = &mut self.items {
+        if let Items::Recorded(v) = &mut self.items
+            && !self.clean
+        {
             let used = (max_delay + INTERPOLATION_TAIL).min(v.len());
-            v[..used].fill(zero);
+            v[..used].fill(0);
         }
+        // Recording starts as soon as the buffer is reset.
+        self.clean = false;
         self.freeze_tail = [0.0; FREEZE_TAIL_SIZE];
     }
 

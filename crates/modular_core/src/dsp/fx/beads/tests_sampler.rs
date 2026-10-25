@@ -1,4 +1,5 @@
 use super::super::tests::{SR, poly_volts, rms};
+use super::super::wav_load::MIN_LOADED_FRAMES;
 use super::*;
 use crate::types::{OutputStruct, SampleBuffer};
 

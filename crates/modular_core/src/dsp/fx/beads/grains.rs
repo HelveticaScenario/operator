@@ -8,12 +8,14 @@ use crate::dsp::utils::rng::{LcgRng, seed_base};
 use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal, PolySignalExt};
 use crate::types::PatchUpdateHandler;
 
+use super::buffer::GrainBuffer;
 use super::chain::Media;
 use super::grains_chain::{GrainsChain, GrainsVoice};
 use super::player::{GrainParams, GrainTrigger};
 use super::queue::TriggerQueue;
 use super::resample::Resampler;
 use super::voice::VoiceControls;
+use super::wav_load::silent_buffer;
 use super::{FULL_SCALE_VOLTS, GranularQuality, grain_params, input_value, unit};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -78,6 +80,31 @@ struct GranularParams {
     #[serde(default)]
     #[deserr(default)]
     quality: GranularQuality,
+    /// A silent recording buffer per voice at `quality`, made by `init`.
+    #[serde(skip)]
+    #[deserr(skip)]
+    #[schemars(skip)]
+    fresh: Option<Fresh>,
+}
+
+/// Silent recording buffers made on the main thread. A voice takes one in
+/// `on_patch_update` when it has no recording at the module's quality, and
+/// leaves the buffer it gives up here, to drop with the params on the main
+/// thread. A clone starts empty, as `init` fills it.
+#[derive(Default)]
+struct Fresh(Vec<GrainBuffer>);
+
+impl Clone for Fresh {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl crate::types::Connect for Fresh {
+    fn apply_default_connections(&mut self) {}
+    fn connect(&mut self, _patch: &crate::patch::Patch) {}
+    fn collect_cables(&self, _sink: &mut Vec<String>) {}
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -141,19 +168,31 @@ pub struct Granular {
 }
 
 impl Granular {
-    /// Allocate every voice and configure for the initial quality. Main
-    /// thread.
+    /// Allocate every voice and a fresh recording buffer for each, and
+    /// configure for the initial quality. Until `on_patch_update` hands them
+    /// their buffers, the voices share a silent one. Main thread.
     fn init(&mut self, sample_rate: f32) {
         let seed = seed_base(self);
         self.state.chain.allocate();
+        let media = self.params.quality.media();
+        let silence = silent_buffer(media);
         for voice in self.channel_state.iter_mut() {
             voice.allocate();
+            voice.voice.granular.buffer = silence.clone();
         }
+        let fresh = (0..self.channel_state.len())
+            .map(|_| {
+                let mut buffer = GrainBuffer::default();
+                buffer.allocate_frames(media.max_delay());
+                buffer
+            })
+            .collect();
+        self.params.fresh = Some(Fresh(fresh));
         let state = &mut self.state;
         state.engine_sample_rate = sample_rate;
         state.resampler.allocate(sample_rate);
         state.rng.seed(seed, 0);
-        self.configure(self.params.quality.media());
+        self.configure(media);
     }
 
     fn configure(&mut self, media: Media) {
@@ -246,8 +285,24 @@ impl PatchUpdateHandler for Granular {
         for (i, v) in self.channel_state.iter_mut().enumerate() {
             v.voice.dry_source = i < channels;
         }
+        // A quality change clears every voice, and a voice new to this
+        // module still holds the silent stand-in: both take a fresh buffer,
+        // which needs no clearing here. Other voices keep recording into
+        // their own.
         let media = self.params.quality.media();
-        if media != self.state.media {
+        let reconfigure = media != self.state.media;
+        if let Some(Fresh(fresh)) = &mut self.params.fresh {
+            for (v, b) in self.channel_state.iter_mut().zip(fresh.iter_mut()) {
+                let buffer = &mut v.voice.granular.buffer;
+                if (reconfigure || !buffer.records()) && b.records() {
+                    std::mem::swap(buffer, b);
+                    if !reconfigure {
+                        v.configure(media);
+                    }
+                }
+            }
+        }
+        if reconfigure {
             self.configure(media);
         }
     }

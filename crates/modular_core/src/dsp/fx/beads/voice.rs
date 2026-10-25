@@ -36,6 +36,10 @@ pub struct Voice {
     pub start: Option<GrainStartRequest>,
 
     pub smoothed: VoiceControls,
+    /// Whether the voice has run a control block. Before its first, its
+    /// controls and placement start at their targets instead of gliding in
+    /// from 0, so a new voice doesn't leak its dry signal while `mix` rises.
+    pub started: bool,
     pub dry: Ramp,
     pub wet: Ramp,
     /// Left and right gains placing the voice in the stereo field.
@@ -51,9 +55,10 @@ pub struct Voice {
 }
 
 impl Voice {
-    /// Allocate buffers. Main thread only.
+    /// Allocate the input history. The recording buffer is handed to the
+    /// voice separately, so a voice can keep its recording across patch
+    /// updates. Main thread only.
     pub fn allocate(&mut self) {
-        self.granular.allocate();
         self.history.allocate();
         self.allocate_playback();
     }
@@ -117,6 +122,9 @@ impl Voice {
     /// Smooth this block's `controls` and set the gain ramps over `block`
     /// hardware samples (`grain_block` grain-engine samples).
     pub fn start_block(&mut self, controls: VoiceControls, block: usize, grain_block: usize) {
+        if !self.started {
+            self.smoothed = controls;
+        }
         let s = &mut self.smoothed;
         s.feedback += POT_LP * (controls.feedback - s.feedback);
         s.dry_wet += POT_LP * (controls.dry_wet - s.dry_wet);
@@ -128,9 +136,16 @@ impl Voice {
     }
 
     /// Ramp the voice's stereo placement to `place` over `block` samples.
+    /// Called after [`Self::start_block`], it ends the voice's first block.
     pub fn start_place(&mut self, place: [f32; 2], block: usize) {
-        self.place[0].start(place[0], block);
-        self.place[1].start(place[1], block);
+        for (ramp, &target) in self.place.iter_mut().zip(&place) {
+            if self.started {
+                ramp.start(target, block);
+            } else {
+                ramp.reset(target);
+            }
+        }
+        self.started = true;
     }
 
     #[inline]

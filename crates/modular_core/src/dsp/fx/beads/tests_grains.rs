@@ -17,12 +17,29 @@ fn grains_params(quality: GranularQuality) -> GranularParams {
         feedback: None,
         mix: None,
         quality,
+        fresh: None,
     }
 }
 
 /// Build a module the way the engine does: one voice per channel of the
 /// widest input, `init`, then `on_patch_update`.
 fn make_grains(params: GranularParams, sample_rate: f32) -> Granular {
+    let mut m = construct(params, sample_rate);
+    m.on_patch_update();
+    m
+}
+
+/// Carry `old`'s state into `new` as a patch update does: the whole module
+/// state, and the voices both modules have.
+fn transfer(old: &mut Granular, new: &mut Granular) {
+    std::mem::swap(&mut old.state, &mut new.state);
+    let n = old.channel_state.len().min(new.channel_state.len());
+    new.channel_state[..n].swap_with_slice(&mut old.channel_state[..n]);
+    new.on_patch_update();
+}
+
+/// A module up to the point where state transfer happens.
+fn construct(params: GranularParams, sample_rate: f32) -> Granular {
     let channels = params
         .poly_signal_fields()
         .iter()
@@ -41,7 +58,6 @@ fn make_grains(params: GranularParams, sample_rate: f32) -> Granular {
         _block_index: Default::default(),
     };
     m.init(sample_rate);
-    m.on_patch_update();
     m
 }
 
@@ -258,17 +274,100 @@ fn freeze_keeps_replaying_the_held_audio() {
     );
 }
 
-#[test]
-fn quality_change_reconfigures_on_patch_update() {
-    let mut m = make_grains(grains_params(GranularQuality::Digital), SR);
-    for n in 0..4800 {
-        step(&mut m, sine(220.0, n, SR, 1.0), 0.0, SR);
+/// Record a second of a sine into every voice.
+fn record(m: &mut Granular) {
+    for n in 0..48_000 {
+        step(m, sine(220.0, n, SR, 1.0), 0.0, SR);
     }
-    m.params.quality = GranularQuality::DirtyTape;
-    m.on_patch_update();
-    assert_eq!(m.state.media, Media::DirtyTape);
+}
+
+fn recording_level(m: &Granular, voice: usize) -> usize {
+    let buffer = &m.channel_state[voice].voice.granular.buffer;
+    (0..buffer.max_delay())
+        .filter(|&i| buffer.raw(i as usize) != 0)
+        .count()
+}
+
+#[test]
+fn a_quality_change_takes_a_fresh_buffer_of_the_new_length() {
+    let mut old = make_grains(grains_params(GranularQuality::Digital), SR);
+    record(&mut old);
+    assert!(recording_level(&old, 0) > 0);
+    let mut new = construct(grains_params(GranularQuality::DirtyTape), SR);
+    transfer(&mut old, &mut new);
+    assert_eq!(new.state.media, Media::DirtyTape);
+    let buffer = &new.channel_state[0].voice.granular.buffer;
+    assert_eq!(buffer.max_delay() as usize, Media::DirtyTape.max_delay());
+    assert_eq!(recording_level(&new, 0), 0);
     for n in 0..4800 {
-        let (l, r) = step(&mut m, sine(220.0, n, SR, 1.0), 0.0, SR);
+        let (l, r) = step(&mut new, sine(220.0, n, SR, 1.0), 0.0, SR);
+        assert!(l.is_finite() && r.is_finite());
+    }
+}
+
+#[test]
+fn an_unchanged_quality_keeps_the_recording() {
+    let mut old = make_grains(grains_params(GranularQuality::DirtyTape), SR);
+    record(&mut old);
+    let recorded = recording_level(&old, 0);
+    assert!(recorded > 0);
+    let mut new = construct(grains_params(GranularQuality::DirtyTape), SR);
+    transfer(&mut old, &mut new);
+    assert_eq!(recording_level(&new, 0), recorded);
+    // Later patch updates keep it too.
+    new.on_patch_update();
+    assert_eq!(recording_level(&new, 0), recorded);
+}
+
+#[test]
+fn a_fresh_dirty_tape_buffer_plays_silence() {
+    let mut p = grains_params(GranularQuality::DirtyTape);
+    p.mix = poly_volts(&[5.0]);
+    p.time = poly_volts(&[5.0]);
+    let mut m = make_grains(p, SR);
+    for n in 0..24_000 {
+        let trig = if n % 2400 < 10 { 5.0 } else { 0.0 };
+        let (l, r) = step(&mut m, 0.0, trig, SR);
+        assert!(l.abs() < 1e-6 && r.abs() < 1e-6, "{l} {r} at {n}");
+    }
+}
+
+#[test]
+fn new_voices_get_their_own_buffers() {
+    let mut old = make_grains(grains_params(GranularQuality::Digital), SR);
+    record(&mut old);
+    let mut p = grains_params(GranularQuality::Digital);
+    p.freq = poly_volts(&[0.0, 0.5]);
+    let mut new = construct(p, SR);
+    transfer(&mut old, &mut new);
+    assert!(recording_level(&new, 0) > 0);
+    assert_eq!(recording_level(&new, 1), 0);
+    let buffer = &new.channel_state[1].voice.granular.buffer;
+    assert_eq!(buffer.max_delay() as usize, Media::Digital.max_delay());
+}
+
+#[test]
+fn narrowing_drops_triggers_for_voices_that_are_gone() {
+    // At 44.1 kHz triggers wait for the resampled input, so some are still
+    // queued at the patch update.
+    let sr = 44_100.0;
+    let mut p = grains_params(GranularQuality::Digital);
+    p.freq = poly_volts(&[0.0, 0.25, 0.5, 0.75]);
+    p.mix = poly_volts(&[5.0]);
+    let mut old = make_grains(p, sr);
+    for n in 0..4_000 {
+        old.params.input = PolySignal::mono(Signal::Volts(sine(220.0, n, sr, 1.0)));
+        old.params.trigger = poly_volts(&[if n % 7 == 0 { 5.0 } else { 0.0 }]);
+        old.update(sr);
+    }
+    old.params.trigger = poly_volts(&[5.0]);
+    old.update(sr);
+    assert!(!old.state.pending.is_empty());
+    let mut new = construct(grains_params(GranularQuality::Digital), sr);
+    transfer(&mut old, &mut new);
+    assert_eq!(new.channel_state.len(), 1);
+    for n in 0..4_000 {
+        let (l, r) = step(&mut new, sine(220.0, n, sr, 1.0), 0.0, sr);
         assert!(l.is_finite() && r.is_finite());
     }
 }
@@ -312,6 +411,78 @@ fn an_unspread_voice_outputs_its_stereo_left_channel() {
 }
 
 #[test]
+fn a_new_fully_wet_module_passes_no_dry_signal() {
+    for q in ALL_QUALITIES {
+        let mut p = grains_params(q);
+        p.mix = poly_volts(&[5.0]);
+        p.width = volts(5.0);
+        let mut m = make_grains(p, SR);
+        for n in 0..4800 {
+            let x = ((n as f32 * 130.8 / SR).fract() * 2.0 - 1.0) * 4.0;
+            let (l, r) = step(&mut m, x, 0.0, SR);
+            assert!(l.abs() < 1e-4 && r.abs() < 1e-4, "{q:?} at {n}: {l} {r}");
+        }
+    }
+}
+
+#[test]
+fn a_voice_added_by_a_patch_update_passes_no_dry_signal() {
+    let mut p = grains_params(GranularQuality::Digital);
+    p.mix = poly_volts(&[5.0]);
+    let mut old = make_grains(p.clone(), SR);
+    for n in 0..4800 {
+        step(&mut old, sine(220.0, n, SR, 4.0), 0.0, SR);
+    }
+    p.input = PolySignal::poly(&[Signal::Volts(0.0), Signal::Volts(0.0)]);
+    let mut new = construct(p, SR);
+    transfer(&mut old, &mut new);
+    for n in 0..4800 {
+        let x = Signal::Volts(sine(220.0, n, SR, 4.0));
+        new.params.input = PolySignal::poly(&[x.clone(), x]);
+        new.params.trigger = poly_volts(&[0.0]);
+        new.update(SR);
+        let v = new.outputs.voices.get(1);
+        assert!(v.abs() < 1e-4, "sample {n}: {v}");
+    }
+}
+
+#[test]
+fn no_grain_leaves_above_the_limit_from_the_first() {
+    // Four loud voices of short and long grains, panned hard, from the
+    // module's first grain on. Digital runs at the engine rate, so nothing
+    // after the limiters can overshoot them.
+    for size in [0.0, 2.75] {
+        let (quality, limit) = (GranularQuality::Digital, 5.0001);
+        let mut p = grains_params(quality);
+        p.input = PolySignal::poly(&vec![Signal::Volts(0.0); 4]);
+        p.mix = poly_volts(&[5.0]);
+        p.size = poly_volts(&[size]);
+        p.shape = poly_volts(&[5.0]);
+        p.spread = poly_volts(&[5.0]);
+        p.width = volts(5.0);
+        let mut m = make_grains(p, SR);
+        for n in 0..96_000 {
+            let x = ((n as f32 * 130.8 / SR).fract() * 2.0 - 1.0) * 5.0;
+            m.params.input = PolySignal::poly(&vec![Signal::Volts(x); 4]);
+            let trig = n >= 48_000 && n % 6000 < 10;
+            m.params.trigger = poly_volts(&[if trig { 5.0 } else { 0.0 }]);
+            m.update(SR);
+            for ch in 0..2 {
+                let y = m.outputs.sample.get(ch);
+                assert!(y.abs() <= limit, "{quality:?} size {size}, sample {n}: {y}");
+            }
+            for v in 0..4 {
+                let y = m.outputs.voices.get(v);
+                assert!(
+                    y.abs() <= limit,
+                    "{quality:?} size {size}, voice {v}, sample {n}: {y}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn width_places_the_voices_in_stereo() {
     let mut p = grains_params(GranularQuality::Digital);
     p.mix = poly_volts(&[0.0]);
@@ -329,8 +500,7 @@ fn width_places_the_voices_in_stereo() {
         }
     }
     assert!(rms(&l) > 0.5, "left {}", rms(&l));
-    // The smoothed width only approaches 5, leaving the far side a trace.
-    assert!(rms(&r) < 0.01 * rms(&l), "right {}", rms(&r));
+    assert!(rms(&r) < 1e-4 * rms(&l), "right {}", rms(&r));
 }
 
 /// Render `params` over a 440 Hz input per channel and return each output

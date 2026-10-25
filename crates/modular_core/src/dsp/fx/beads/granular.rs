@@ -32,10 +32,6 @@ pub struct GranularCore {
 }
 
 impl GranularCore {
-    pub fn allocate(&mut self) {
-        self.buffer.allocate();
-    }
-
     /// Configure for a new quality, clearing the buffer and all grains.
     pub fn reset(&mut self, sample_rate: f32, resolution: Resolution, max_delay: usize) {
         self.buffer.reset(resolution, max_delay);
@@ -43,7 +39,7 @@ impl GranularCore {
         self.feedback.reset(0.0);
         self.previous = 0.0;
         self.dc_blocker.init(40.0 / sample_rate, 0.5);
-        self.input_limiter.init(1.0 / sample_rate, 0.95);
+        self.input_limiter.init(1.0 / sample_rate);
         (self.lp_coefficient, self.soft_limit_gain) = match resolution {
             Resolution::MuLaw8 => (0.75, 1.75),
             Resolution::Linear12 => (0.9, 1.3),

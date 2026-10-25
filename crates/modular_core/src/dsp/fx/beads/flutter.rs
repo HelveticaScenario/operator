@@ -4,15 +4,19 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::dsp::utils::rng::{LcgRng, seed_base};
-use crate::poly::{PolyOutput, PolySignal};
+use crate::dsp::utils::sanitize;
+use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal};
 
 use super::wow_flutter::{WowModulation, write_read};
 use super::{FULL_SCALE_VOLTS, input_value};
 
 /// Rate the hardware runs its wow and flutter at.
 const HARDWARE_RATE: f32 = 24000.0;
-/// Longest modulated delay, in samples at [`HARDWARE_RATE`].
-const MAX_HARDWARE_DELAY: f32 = 124.0;
+/// Delay swing at `intensity` 5, relative to the hardware's.
+const MAX_DEPTH: f32 = 2.0;
+/// Longest modulated delay, in samples at [`HARDWARE_RATE`]: the hardware's
+/// 1 + 122 at the deepest swing, plus the interpolated read.
+const MAX_HARDWARE_DELAY: f32 = 2.0 + 122.0 * MAX_DEPTH;
 /// The hardware's low-pass coefficient at [`HARDWARE_RATE`].
 const HARDWARE_LP: f32 = 0.95;
 /// Control blocks per second.
@@ -24,6 +28,16 @@ const BLOCK_RATE: f32 = 4000.0;
 struct WowFlutterParams {
     /// audio input
     input: PolySignal,
+    /// how fast the tape wobbles; each volt doubles it, and 2.5 is Beads'
+    /// dirty tape (0–5, default 2.5)
+    #[signal(default = 2.5, range = (0.0, 5.0))]
+    #[deserr(default)]
+    speed: Option<MonoSignal>,
+    /// how deep the wobble is: 0 = none, 2.5 = Beads' dirty tape, 5 = twice
+    /// as deep (default 2.5)
+    #[signal(default = 2.5, range = (0.0, 5.0))]
+    #[deserr(default)]
+    intensity: Option<MonoSignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -57,6 +71,9 @@ struct WowFlutterState {
 /// Tape wow and flutter from Mutable Instruments Beads' dirty tape setting:
 /// slow, drifting pitch wobble with a slight softening of the highs. Every
 /// channel wobbles together, like one tape carrying them all.
+///
+/// `speed` and `intensity` set how fast and how deep the wobble is; their
+/// defaults are Beads'. Faster and deeper both bend the pitch further.
 ///
 /// ```js
 /// const grains = $pulse('8hz')
@@ -92,9 +109,13 @@ impl WowFlutter {
     fn update(&mut self, _sample_rate: f32) {
         let state = &mut self.state;
         if state.block_pos == 0 {
+            let p = &self.params;
+            let control = |s: &Option<MonoSignal>| sanitize(s.value_or(2.5)).clamp(0.0, 5.0);
+            let speed = (control(&p.speed) - 2.5).exp2();
+            let depth = control(&p.intensity) / 5.0 * MAX_DEPTH;
             state
                 .modulation
-                .start_block(state.block_size, &mut state.rng);
+                .start_block(state.block_size, &mut state.rng, speed, depth);
         }
         state.block_pos = (state.block_pos + 1) % state.block_size;
         let delay = state.modulation.next() * state.ratio;
@@ -126,6 +147,8 @@ mod tests {
             state: Default::default(),
             params: WowFlutterParams {
                 input: PolySignal::poly(&vec![Signal::Volts(0.0); channels]),
+                speed: None,
+                intensity: None,
             },
             channel_state: (0..channels).map(|_| Line::default()).collect(),
             _channel_count: channels,
@@ -174,21 +197,63 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn wobbles_the_pitch() {
-        let mut m = make(1, SR);
-        let out = run(&mut m, 4 * 48_000, |i, _| {
+    fn volts(v: f32) -> Option<MonoSignal> {
+        Some(MonoSignal::from_poly(PolySignal::mono(Signal::Volts(v))))
+    }
+
+    /// Shortest and longest period of a 1 kHz tone through `m`, in samples.
+    fn period_range(m: &mut WowFlutter) -> (f64, f64) {
+        let out = run(m, 4 * 48_000, |i, _| {
             (std::f32::consts::TAU * 1000.0 * i as f32 / SR).sin()
         });
         let c = crossings(&out[0][48_000..]);
-        let periods: Vec<f64> = c.windows(2).map(|w| w[1] - w[0]).collect();
-        let (min, max) = periods
-            .iter()
-            .fold((f64::MAX, f64::MIN), |(lo, hi), &p| (lo.min(p), hi.max(p)));
+        c.windows(2)
+            .map(|w| w[1] - w[0])
+            .fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p), hi.max(p)))
+    }
+
+    #[test]
+    fn wobbles_the_pitch() {
+        let (min, max) = period_range(&mut make(1, SR));
         // A steady 1 kHz tone is 48 samples per cycle; the wobble stretches
         // and squeezes it.
         assert!(max - min > 0.1, "periods {min}..{max}");
         assert!((min - 48.0).abs() < 3.0 && (max - 48.0).abs() < 3.0);
+    }
+
+    #[test]
+    fn no_intensity_leaves_the_pitch_steady() {
+        let mut m = make(1, SR);
+        m.params.intensity = volts(0.0);
+        let (min, max) = period_range(&mut m);
+        // Within the accuracy of the zero-crossing estimate.
+        assert!(max - min < 0.05, "periods {min}..{max}");
+    }
+
+    #[test]
+    fn speed_and_intensity_deepen_the_wobble() {
+        let swing = |speed: f32, intensity: f32| {
+            let mut m = make(1, SR);
+            m.params.speed = volts(speed);
+            m.params.intensity = volts(intensity);
+            let (min, max) = period_range(&mut m);
+            max - min
+        };
+        let beads = swing(2.5, 2.5);
+        assert!(swing(2.5, 5.0) > 1.5 * beads, "deeper");
+        assert!(swing(4.5, 2.5) > 2.0 * beads, "faster");
+        assert!(swing(0.5, 2.5) < 0.5 * beads, "slower");
+    }
+
+    #[test]
+    fn the_deepest_fastest_wobble_stays_finite() {
+        let mut m = make(1, SR);
+        m.params.speed = volts(5.0);
+        m.params.intensity = volts(5.0);
+        let out = run(&mut m, 4 * 48_000, |i, _| {
+            (std::f32::consts::TAU * 1000.0 * i as f32 / SR).sin()
+        });
+        assert!(out[0].iter().all(|x| x.is_finite() && x.abs() < 5.0));
     }
 
     #[test]

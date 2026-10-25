@@ -8,7 +8,8 @@ use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal};
 use super::chain::{BlockClock, POT_LP};
 use super::primitives::{Frame, Limiter};
 use super::reverb::{Reverb, ReverbSettings};
-use super::{FULL_SCALE_VOLTS, finite, fold_input, unit};
+use super::{FULL_SCALE_VOLTS, fold_input, unit};
+use crate::dsp::utils::sanitize;
 
 /// Hardware rate the reverb's delays are tuned to at `size` 0.
 const HARDWARE_RATE: f32 = 48000.0;
@@ -41,8 +42,8 @@ impl OutputStage {
         self.scale = scale;
         self.clock.configure(sample_rate);
         self.reverb.set_sample_rate(sample_rate, scale);
-        self.pre_reverb_limiter.init(1.0 / (sample_rate * 4.0), 0.9);
-        self.output_limiter.init(1.0 / (sample_rate * 6.0), 0.9);
+        self.pre_reverb_limiter.init(1.0 / (sample_rate * 4.0));
+        self.output_limiter.init(1.0 / (sample_rate * 6.0));
     }
 
     /// Wipe the reverb tank, for a fresh module.
@@ -142,7 +143,7 @@ struct BeadsReverbState {
 /// `size` 0 and `tone` 1 for digital, 0 and 2 for clean tape, 2.5 and 2 for
 /// vintage, and 5 and 2 for dirty tape. The input passes through clean, so
 /// put `$granular` or `$wowFlutter` before it for their colour. Peaks above
-/// ±4.5 V are limited.
+/// ±5 V are limited.
 ///
 /// ```js
 /// $reverb($saw('c3'), 4, { size: 5, tone: 2 }).out()
@@ -175,7 +176,7 @@ impl BeadsReverb {
             started,
         } = &mut self.state;
         if stage.tick_block() {
-            let control = |s: &Option<MonoSignal>, default| unit(finite(s.value_or(default)));
+            let control = |s: &Option<MonoSignal>, default| unit(sanitize(s.value_or(default)));
             let (size_target, tone_target) =
                 (control(&params.size, 0.0), control(&params.tone, 1.0));
             if !*started {
@@ -343,7 +344,7 @@ pub(super) mod tests {
         for setting in SETTINGS {
             let mut m = make(setting, 0.0);
             for n in 0..20_000 {
-                let x = (std::f32::consts::TAU * 330.0 * n as f32 / SR).sin() * 4.0;
+                let x = (std::f32::consts::TAU * 330.0 * n as f32 / SR).sin() * 5.0;
                 let (l, r) = step(&mut m, x);
                 // The reverb's dry gain ramps up over its first block.
                 if n < 100 {

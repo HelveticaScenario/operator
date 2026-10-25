@@ -1,5 +1,5 @@
-//! Dirty-tape wow and flutter: a short modulated delay driven by a slow wow
-//! LFO, a faster flutter LFO and a random modulator, then a one-pole low-pass.
+//! Dirty-tape wow and flutter: a short delay modulated by a slow wow LFO, a
+//! faster flutter LFO and a random modulator.
 
 use super::primitives::{Ramp, SineOscillator};
 use crate::dsp::utils::rng::LcgRng;
@@ -40,9 +40,11 @@ impl WowModulation {
         self.delay.reset(0.0);
     }
 
-    /// Advance the modulators by one control block of `block_size` samples.
-    pub fn start_block(&mut self, block_size: usize, rng: &mut LcgRng) {
-        let size = block_size as f32;
+    /// Advance the modulators by one control block of `block_size` samples,
+    /// running `speed` times the hardware's rates and swinging the delay
+    /// `depth` times as far.
+    pub fn start_block(&mut self, block_size: usize, rng: &mut LcgRng, speed: f32, depth: f32) {
+        let size = block_size as f32 * speed;
         let previous_phase = self.random_modulation.phase();
         let random_modulation = self.random_modulation.render(self.random_frequency * size);
         if self.random_modulation.phase() >= 0.25 && previous_phase < 0.25 {
@@ -53,7 +55,7 @@ impl WowModulation {
         let amount = 1.0 - 0.4 * random_modulation;
         let wow = self.wow.render(self.one_hertz * 0.23 * size * fm);
         let flutter = self.flutter.render(self.one_hertz * 1.99 * size);
-        let delay = 1.0 + (105.0 * wow + 17.0 * flutter) * amount;
+        let delay = 1.0 + (105.0 * wow + 17.0 * flutter) * amount * depth;
         self.delay.start(delay, block_size);
     }
 
