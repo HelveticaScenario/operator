@@ -18172,6 +18172,135 @@
     ]
   },
   {
+    "name": "$coinFlip",
+    "documentation": "Lets triggers through at random.\n\nEach trigger on **input** flips a weighted coin. Heads sends it to the\nmain output, tails to **rejected**. Gates keep their length, and each\nchannel flips on its own.\n\nPlace it after `$clockDivider` to turn a steady clock into a loose rhythm,\nor use both outputs to split one stream between two sounds.\n\n```js\n// Each beat lands on the kick or the snare, 75/25:\nconst flip = $coinFlip($clock.beatTrigger, 3.75)\n$tr808.kick(flip).out()\n$tr808.snare(flip.rejected).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CoinFlipParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "triggers or gates to pass at random",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "probability": {
+          "description": "chance each trigger passes: 0 = never, 2.5 = half the time, 5 = always",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "triggers that pass",
+        "polyphonic": true,
+        "default": true
+      },
+      {
+        "name": "rejected",
+        "description": "triggers that don't pass",
+        "polyphonic": true,
+        "default": false
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "triggers or gates to pass at random",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "probability",
+        "description": "chance each trigger passes: 0 = never, 2.5 = half the time, 5 = always",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "probability"
+      }
+    ]
+  },
+  {
     "name": "$scan",
     "documentation": "Steps a counter by `distance` on each trigger, wrapping it within 0 to\n`length`.\n\nA step past `length` wraps around by the overshoot, as many times as it\ntakes, and so does a step below 0. With `snapOnWrap`, a step past\n`length` lands on 0 and a step below 0 lands on `length`. A counter\nexactly at `length` stays there. `reset` sets the counter to 0, and wins\nover a trigger in the same sample. Lengths are read at each trigger, so a\nshorter `length` takes effect on the next step.\n\n```js\n// Pitch steps of a quarter octave, wrapping within an octave:\n$sine($scan(1, 0.25, $pulse('4hz'))).out()\n```",
     "paramsSchema": {
