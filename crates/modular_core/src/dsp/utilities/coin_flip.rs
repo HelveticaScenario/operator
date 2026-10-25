@@ -38,11 +38,15 @@ struct CoinFlipChannelState {
 
 impl CoinFlipChannelState {
     /// Advance one sample and return the `(output, rejected)` voltages.
+    /// `probability` is read only on a rising edge.
     #[inline]
-    fn step(&mut self, input: f32, probability: f32) -> (f32, f32) {
+    fn step(&mut self, input: f32, probability: impl FnOnce() -> f32) -> (f32, f32) {
         let (high, edge) = self.input.process_with_edge(input);
         if edge.is_rising() {
-            self.heads = self.rng.next_unit() < probability.clamp(0.0, 5.0) / 5.0;
+            let chance = probability().clamp(0.0, 5.0) / 5.0;
+            // `next_unit` can round up to exactly 1.0, so certainty is checked
+            // explicitly.
+            self.heads = chance >= 1.0 || self.rng.next_unit() < chance;
         }
         let gate = |on: bool| {
             if on {
@@ -80,10 +84,10 @@ pub struct CoinFlip {
 impl CoinFlip {
     fn update(&mut self, _sample_rate: f32) {
         for ch in 0..self.channel_count() {
-            let (output, rejected) = self.channel_state[ch].step(
-                self.params.input.get_value(ch),
-                self.params.probability.value_or(ch, 2.5),
-            );
+            let (output, rejected) = self.channel_state[ch]
+                .step(self.params.input.get_value(ch), || {
+                    self.params.probability.value_or(ch, 2.5)
+                });
             self.outputs.output.set(ch, output);
             self.outputs.rejected.set(ch, rejected);
         }
@@ -228,6 +232,8 @@ mod tests {
                 outcomes[ch].push(passed);
             }
         }
-        assert!(outcomes.windows(2).all(|w| w[0] != w[1]));
+        for (a, b) in (0..channels).flat_map(|a| (a + 1..channels).map(move |b| (a, b))) {
+            assert_ne!(outcomes[a], outcomes[b], "channels {a} and {b} match");
+        }
     }
 }
