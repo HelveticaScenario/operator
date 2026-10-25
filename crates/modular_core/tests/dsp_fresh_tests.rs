@@ -383,9 +383,6 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$delayRead" => {
             json!({ "buffer": { "type": "buffer_ref", "module": "test-module", "port": "buffer", "channels": 1 }, "time": 0.1 })
         }
-        "$grains" => {
-            json!({ "pitch": 0.0, "wav": { "type": "wav_ref", "path": "test", "channels": 1 }, "gate": 0.0 })
-        }
         "_mediaAudio" => {
             json!({ "wav": { "type": "wav_ref", "path": "test", "channels": 1 } })
         }
@@ -402,12 +399,19 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$adsr" => json!({ "gate": 0.0 }),
         "$perc" => json!({ "trigger": 0.0 }),
         "$clockDivider" => json!({ "division": 2, "input": 0.0 }),
+        "$scan" => json!({ "length": 1.0, "distance": 1.0, "trigger": 0.0 }),
         "$sah" => json!({ "input": 0.0, "trigger": 0.0 }),
         "$tah" => json!({ "input": 0.0, "gate": 0.0 }),
         "$dattorro" => json!({ "input": 0.0 }),
         "$plate" => json!({ "input": 0.0 }),
         "$unstable.reverb" => json!({ "input": 0.0 }),
         "$unstable.reverb2" => json!({ "input": 0.0 }),
+        "$reverb" => json!({ "input": 0.0 }),
+        "$granular" => json!({ "input": 0.0 }),
+        "$granularSampler" => {
+            json!({ "wav": { "type": "wav_ref", "path": "test", "channels": 1 } })
+        }
+        "$wowFlutter" => json!({ "input": 0.0 }),
         "$eq" => json!({ "input": 0.0 }),
         "$filterDC" => json!({ "input": 0.0 }),
         "$quantNoise" => json!({ "input": 0.0, "amount": 1.0 }),

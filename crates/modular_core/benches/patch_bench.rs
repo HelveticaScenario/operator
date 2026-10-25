@@ -178,7 +178,7 @@ fn comp_chain(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
-/// Two seconds of deterministic white noise at 48 kHz, for `$grains`.
+/// Two seconds of deterministic white noise at 48 kHz, for `$granularSampler`.
 fn noise_wav() -> Arc<WavData> {
     let mut state = 1u32;
     let samples = (0..96_000)
@@ -210,29 +210,22 @@ fn table_wav() -> Arc<WavData> {
     ))
 }
 
-/// 4 `$grains` clouds (≈ 2.5, 10, 30 and 60 active grains per channel), each
-/// gated by its own slow pulse.
+/// 4 `$granularSampler` clouds, triggered at 5, 20, 80 and 320 Hz.
 fn grains(channels: usize) -> BenchPatch {
     let mut modules = Vec::new();
-    for (i, (density, length)) in [(2.5, 1.0), (10.0, 1.0), (10.0, 3.0), (20.0, 3.0)]
-        .iter()
-        .enumerate()
-    {
-        let gate = format!("gate{i}");
+    for (i, rate) in [5.0f32, 20.0, 80.0, 320.0].iter().enumerate() {
+        let trigger = format!("trigger{i}");
         modules.push((
-            gate.clone(),
+            trigger.clone(),
             "$pulse",
-            json!({ "freq": poly(-6.0, channels), "width": 4.5 }),
+            json!({ "freq": poly((rate / 261.625_58).log2(), channels) }),
         ));
         modules.push((
             format!("grains{i}"),
-            "$grains",
+            "$granularSampler",
             json!({
                 "wav": { "type": "wav_ref", "path": "noise", "channels": 1 },
-                "pitch": poly(0.0, channels),
-                "gate": poly_cable(&gate, "output", channels),
-                "density": density,
-                "length": length,
+                "trigger": poly_cable(&trigger, "output", channels),
             }),
         ));
     }

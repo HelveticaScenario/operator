@@ -54,6 +54,8 @@ export interface OutputSchemaWithRange {
     polyphonic?: boolean;
     minValue?: number;
     maxValue?: number;
+    /** Fixed channel count; absent outputs follow the module's channel count. */
+    channels?: number;
 }
 
 const ResolvedModuleOutput = z.object({
@@ -2099,10 +2101,11 @@ export class ModuleNode {
             outputSchema.maxValue !== undefined;
 
         if (polyphonic) {
-            // Return Collection(WithRange) for each channel (based on derived channel count)
+            // Return Collection(WithRange) for each channel of the output
+            const channels = outputSchema.channels ?? this.channelCount;
             if (hasRange) {
                 const outputs: ModuleOutputWithRange[] = [];
-                for (let i = 0; i < this.channelCount; i++) {
+                for (let i = 0; i < channels; i++) {
                     outputs.push(
                         new ModuleOutputWithRange(
                             this.builder,
@@ -2117,7 +2120,7 @@ export class ModuleNode {
                 return new CollectionWithRange(...outputs);
             }
             const outputs: ModuleOutput[] = [];
-            for (let i = 0; i < this.channelCount; i++) {
+            for (let i = 0; i < channels; i++) {
                 outputs.push(
                     new ModuleOutput(this.builder, this.id, portName, i),
                 );

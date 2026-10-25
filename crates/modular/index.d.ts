@@ -502,6 +502,11 @@ export interface OutputSchema {
   minValue?: number
   /** The maximum value of the raw output range (before any remapping) */
   maxValue?: number
+  /**
+   * Fixed channel count of a polyphonic output; `None` follows the
+   * module's derived channel count.
+   */
+  channels?: number
 }
 
 export interface PatchGraph {
