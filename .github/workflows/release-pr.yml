@@ -1,0 +1,67 @@
+name: Release PR
+on:
+    push:
+        branches:
+            - master
+    workflow_dispatch:
+
+concurrency:
+    group: release-pr
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    release-pr:
+        name: Open or update the release PR
+        runs-on: ubuntu-latest
+        steps:
+            # PRs and commits made with GITHUB_TOKEN do not trigger workflows,
+            # so the release PR would never get its required CI checks. The
+            # release app's token does.
+            - name: Get release app token
+              id: app-token
+              uses: actions/create-github-app-token@v2
+              with:
+                  app-id: ${{ vars.RELEASE_APP_ID }}
+                  private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24.12.0
+                  cache: 'yarn'
+
+            - name: Install dependencies
+              run: yarn install --frozen-lockfile
+
+            - name: Prepare release
+              id: prepare
+              run: node scripts/release/prepare.mjs
+
+            - name: Write PR body
+              if: steps.prepare.outputs.version
+              env:
+                  VERSION: ${{ steps.prepare.outputs.version }}
+              run: |
+                  {
+                    echo "Merging this PR publishes **v$VERSION**. Review the release notes below — they are what users see before updating."
+                    echo
+                    tail -n +2 ".changes/v$VERSION.md"
+                  } > "$RUNNER_TEMP/release-pr-body.md"
+
+            - name: Open or update release PR
+              if: steps.prepare.outputs.version
+              uses: peter-evans/create-pull-request@v7
+              with:
+                  token: ${{ steps.app-token.outputs.token }}
+                  branch: release/next
+                  delete-branch: true
+                  title: Release v${{ steps.prepare.outputs.version }}
+                  commit-message: Release v${{ steps.prepare.outputs.version }}
+                  body-path: ${{ runner.temp }}/release-pr-body.md
+                  labels: release
