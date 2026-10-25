@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use modular_core::module_state::{ModuleLiveState, ModuleStateMeta};
 use modular_core::patch::Patch;
 use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Shared map of live per-module editor state, keyed by module id. Each value is
 /// a module's pre-allocated, type-erased live slot (see
@@ -1766,6 +1766,22 @@ impl AudioState {
     }
 }
 
+/// How long an immediate patch swap waits after `Start` while the audio thread
+/// warms up (see `AudioProcessor::warm_up_since`): long enough for the thread
+/// to reach full speed before a large patch's first render.
+const WARM_UP_HOLD: Duration = Duration::from_millis(30);
+
+/// Share of each callback's period spent busy while warming up.
+const WARM_UP_LOAD: f32 = 0.5;
+
+/// Busy-waits until `deadline`.
+fn busy_until(deadline: Instant) {
+    let mut x = 1.0f32;
+    while Instant::now() < deadline {
+        x = std::hint::black_box(x * 1.000_001);
+    }
+}
+
 /// Shared state that both AudioState (main thread) and AudioProcessor (audio thread) can access
 pub struct AudioSharedState {
     pub stopped: Arc<AtomicBool>,
@@ -1858,6 +1874,12 @@ struct AudioProcessor {
     midi_manager: Arc<MidiInputManager>,
     /// Queued patch update waiting for its trigger condition
     queued_update: Option<(PatchUpdate, QueuedTrigger)>,
+    /// When `Start` armed the warm-up, until a callback renders the started
+    /// patch. macOS slows the nearly idle audio thread while stopped, so the
+    /// patch's first full render would overrun and the device would drop
+    /// buffers; until then callbacks are padded with busy work and an
+    /// immediate swap waits [`WARM_UP_HOLD`].
+    warm_up_since: Option<Instant>,
     /// Transport state meter - written each frame, read by main thread
     transport_meter: Arc<TransportMeter>,
     /// Sample rate of the audio stream
@@ -1922,6 +1944,7 @@ impl AudioProcessor {
             module_states: shared.module_states,
             midi_manager: shared.midi_manager,
             queued_update: None,
+            warm_up_since: None,
             transport_meter: shared.transport_meter,
             sample_rate,
             block_size,
@@ -2059,6 +2082,7 @@ impl AudioProcessor {
                     }
                 }
                 GraphCommand::Start => {
+                    self.warm_up_since = Some(Instant::now());
                     if self.link.is_active() {
                         // With Link: keep `stopped=true` and arm a pending start.
                         // The buffer-level phase check releases `stopped` when the
@@ -2076,6 +2100,7 @@ impl AudioProcessor {
                     }
                 }
                 GraphCommand::Stop => {
+                    self.warm_up_since = None;
                     // Stop is handled via the stopped flag.
                     // Also clear any pending start so a later peer-start does not
                     // resurrect a cancelled patch, and propagate stop to peers.
@@ -2327,6 +2352,26 @@ impl AudioProcessor {
         }
     }
 
+    /// Whether an immediate patch swap still waits for the start warm-up.
+    fn holds_swap_for_warm_up(&self, now: Instant) -> bool {
+        self.warm_up_since
+            .is_some_and(|since| now.duration_since(since) < WARM_UP_HOLD)
+    }
+
+    /// Whether the callback ending now pads itself with busy work: true from
+    /// `Start` until a callback renders the started patch while running,
+    /// which ends the warm-up.
+    fn warming_up(&mut self) -> bool {
+        if self.warm_up_since.is_none() {
+            return false;
+        }
+        if self.is_stopped() || self.process_order.is_empty() {
+            return true;
+        }
+        self.warm_up_since = None;
+        false
+    }
+
     /// Force every module — including those not reachable from the output or any
     /// scope — to advance to slot `end` within the current internal block, in
     /// cache-efficient producer-before-consumer order. Each wrapper memoises per
@@ -2576,9 +2621,9 @@ where
                             // refill fills it under the new patch).
                             let trigger_sample: Option<usize> =
                                 match audio_processor.queued_update.as_ref().map(|(_, t)| t) {
-                                    Some(QueuedTrigger::Immediate) => {
-                                        Some(audio_processor.block_pos)
-                                    }
+                                    Some(QueuedTrigger::Immediate) => (!audio_processor
+                                        .holds_swap_for_warm_up(Instant::now()))
+                                    .then_some(audio_processor.block_pos),
                                     Some(QueuedTrigger::NextBar) => audio_processor
                                         .fill_and_scan_trigger(
                                             "barTrigger",
@@ -2863,6 +2908,11 @@ where
                                 audio_processor.eager_fill_clock(swap_pos, eager_end, written);
                             }
                         }
+                    }
+
+                    if audio_processor.warming_up() {
+                        let period = num_frames as f32 / audio_processor.sample_rate;
+                        busy_until(callback_start + Duration::from_secs_f32(period * WARM_UP_LOAD));
                     }
 
                     // Transport meter — read at the last sample we just consumed.
@@ -4275,6 +4325,46 @@ mod tests {
             matches!(trigger, QueuedTrigger::Immediate),
             "superseding update applies immediately"
         );
+    }
+
+    #[test]
+    fn start_holds_immediate_swaps_while_warming_up() {
+        let (mut cmd_producer, mut processor) = create_test_processor();
+        assert!(!processor.holds_swap_for_warm_up(Instant::now()));
+        cmd_producer.push(GraphCommand::Start).unwrap();
+        processor.process_commands();
+        let since = processor.warm_up_since.expect("Start arms the warm-up");
+        assert!(processor.holds_swap_for_warm_up(since));
+        assert!(!processor.holds_swap_for_warm_up(since + WARM_UP_HOLD));
+    }
+
+    #[test]
+    fn stop_cancels_the_warm_up() {
+        let (mut cmd_producer, mut processor) = create_test_processor();
+        cmd_producer.push(GraphCommand::Start).unwrap();
+        cmd_producer.push(GraphCommand::Stop).unwrap();
+        processor.process_commands();
+        assert!(!processor.warming_up());
+        assert!(!processor.holds_swap_for_warm_up(Instant::now()));
+    }
+
+    #[test]
+    fn warm_up_lasts_until_the_started_patch_renders() {
+        let (mut cmd_producer, mut processor) = create_test_processor();
+        cmd_producer.push(GraphCommand::Start).unwrap();
+        processor.process_commands();
+        // Running, but the started patch has not swapped in yet.
+        assert!(processor.warming_up());
+
+        let id = modular_core::types::ROOT_CLOCK_ID.to_string();
+        processor
+            .patch
+            .sampleables
+            .insert(id.clone(), build_root_clock(processor.block_size));
+        processor.process_order_ids = vec![id];
+        processor.rebuild_process_order_ptrs();
+        assert!(!processor.warming_up(), "a running patch ends the warm-up");
+        assert!(processor.warm_up_since.is_none());
     }
 
     #[test]
