@@ -6,6 +6,7 @@ use crate::types::{ModuleSchema, SampleableConstructor};
 pub mod chaos;
 pub mod consts;
 pub mod core;
+pub mod drums;
 pub mod dynamics;
 pub mod filters;
 pub mod fx;
@@ -23,6 +24,7 @@ pub fn get_constructors() -> HashMap<String, SampleableConstructor> {
     let mut map = HashMap::new();
     chaos::install_constructors(&mut map);
     core::install_constructors(&mut map);
+    drums::install_constructors(&mut map);
     dynamics::install_constructors(&mut map);
     fx::install_constructors(&mut map);
     oscillators::install_constructors(&mut map);
@@ -56,6 +58,7 @@ pub fn get_params_deserializers() -> HashMap<String, ParamsDeserializer> {
     let mut map = HashMap::new();
     chaos::install_params_deserializers(&mut map);
     core::install_params_deserializers(&mut map);
+    drums::install_params_deserializers(&mut map);
     dynamics::install_params_deserializers(&mut map);
     fx::install_params_deserializers(&mut map);
     oscillators::install_params_deserializers(&mut map);
@@ -73,6 +76,7 @@ pub fn schema() -> Vec<ModuleSchema> {
     [
         chaos::schemas(),
         core::schemas(),
+        drums::schemas(),
         dynamics::schemas(),
         fx::schemas(),
         oscillators::schemas(),

@@ -1,7 +1,7 @@
 /**
  * Dotted name of a call's callee, read from the syntax tree so the whitespace,
  * newlines, and comments a patch may put around the dots never reach it:
- * `$tr808\n  .bd` and `$tr808.bd` both name `$tr808.bd`.
+ * `$tr808\n  .kick` and `$tr808.kick` both name `$tr808.kick`.
  */
 import { Node } from 'ts-morph';
 

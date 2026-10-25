@@ -34,7 +34,7 @@ pub fn poly_cable(module: &str, channels: usize) -> Value {
 pub fn build(
     src_mode: ProcessingMode,
     dut_mode: ProcessingMode,
-    module_type: &'static str,
+    module_type: &str,
     params: Value,
 ) -> Patch {
     let deserializers = get_params_deserializers();
@@ -119,7 +119,7 @@ const STEP_PATTERNS: [&[usize]; 2] = [&[BLOCK_SIZE], &[1, 10, 11, 40, BLOCK_SIZE
 /// Every sample of `dut` under each processing mode and step pattern, checked
 /// against `reference(src, lfo)`.
 pub fn check_module(
-    module_type: &'static str,
+    module_type: &str,
     params: Value,
     reference: impl Fn(&[f32], &[f32]) -> Vec<f32>,
 ) {
@@ -143,7 +143,7 @@ pub fn check_module(
 
 /// Every sample of `dut` under each processing mode and step pattern matches
 /// the per-sample `update` path (`dut` in Sample mode).
-pub fn check_paths_agree(module_type: &'static str, params: Value) {
+pub fn check_paths_agree(module_type: &str, params: Value) {
     let reference = build(
         ProcessingMode::Block,
         ProcessingMode::Sample,
@@ -201,7 +201,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 /// count) for several blocks in Block mode, from Sample-mode producers, and
 /// in Sample mode itself, through every step pattern. Requires the binary's
 /// global allocator to be [`CountingAllocator`].
-pub fn allocations_while_rendering(module_type: &'static str, params: Value) -> usize {
+pub fn allocations_while_rendering(module_type: &str, params: Value) -> usize {
     let modes = [
         (ProcessingMode::Block, ProcessingMode::Block),
         (ProcessingMode::Sample, ProcessingMode::Block),
