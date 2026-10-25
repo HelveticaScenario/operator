@@ -5,6 +5,7 @@ import type {
     Scope,
     ScopeChannel,
     ScopeMode,
+    ScopeSplit,
 } from '@modular/core';
 import type { VuMeterDef } from '../../shared/dsl/vuMeterTypes';
 import {
@@ -46,6 +47,15 @@ export type ScopeWithLocation = Scope & {
     /** Feeds an editor panel, never drawn as a scope view of its own. */
     headless?: boolean;
 };
+
+/** Options accepted by `.scope()`. */
+export interface ScopeConfig {
+    msPerFrame?: number;
+    triggerThreshold?: number;
+    triggerWaitToRender?: boolean;
+    range?: [number, number];
+    split?: ScopeSplit;
+}
 
 // Extended OutputSchema interface that includes optional range
 export interface OutputSchemaWithRange {
@@ -171,6 +181,22 @@ export interface MonoOutOptions {
     mute?: boolean;
     /** When any output is soloed, only soloed outputs are audible */
     solo?: boolean;
+}
+
+/** Options for `.erratic()` on a signal without a known range */
+export interface ErraticOptions {
+    /** Rising edge samples and holds the current random shift */
+    trigger?: PolySignal;
+    /** How fast the shift wanders: 0 = frozen, 5 = white noise (default 2) */
+    speed?: PolySignal;
+    /** Skews the shift upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
+    bias?: PolySignal;
+}
+
+/** Options for `.erratic()` on a ranged signal */
+export interface RangedErraticOptions extends ErraticOptions {
+    /** Clamp the output to the signal's range (default true) */
+    clamp?: boolean;
 }
 
 /** VU meter / mute / solo state shared by both out group kinds */
@@ -499,14 +525,20 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
     }
 
     /**
+     * Apply a wandering random shift of up to ±`amount` (0–5) to all outputs,
+     * where 5 shifts by up to ±5 V.
+     */
+    erratic(amount: PolySignal, options: ErraticOptions = {}): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        return erratic(this.items[0].builder, this.items, amount, options);
+    }
+
+    /**
      * Add scope visualization for all outputs in the collection
      */
-    scope(config?: {
-        msPerFrame?: number;
-        triggerThreshold?: number;
-        triggerWaitToRender?: boolean;
-        range?: [number, number];
-    }): this {
+    scope(config?: ScopeConfig): this {
         if (this.items.length > 0) {
             const loc = captureSourceLocation();
             this.items[0].builder.addScope(this.items, config, loc);
@@ -684,6 +716,34 @@ function playPattern(builder: GraphBuilder, value: PolySignal): PolySignal {
 }
 
 /**
+ * Apply an `_erratic` random shift to `input`. With a `range`, the shift scales
+ * to the range's width, the output clamps to it unless `clamp` is false, and
+ * the result carries it; without one, the shift scales to ±5 V and is unclamped.
+ */
+function erratic(
+    builder: GraphBuilder,
+    input: ModuleOutput | ModuleOutput[],
+    amount: PolySignal,
+    { trigger, speed, bias, clamp = true }: RangedErraticOptions,
+    range?: { min: PolySignal; max: PolySignal },
+): Collection {
+    const factory = builder.getFactory('_erratic');
+    if (!range) {
+        return factory(input, amount, { trigger, speed, bias }) as Collection;
+    }
+    return (
+        factory(input, amount, {
+            trigger,
+            speed,
+            bias,
+            clamp,
+            min: range.min,
+            max: range.max,
+        }) as Collection
+    ).withRange(range.min, range.max);
+}
+
+/**
  * Collection of ModuleOutput instances.
  * Use .range(outMin, outMax, inMin, inMax) to remap with explicit input range.
  */
@@ -748,6 +808,24 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
                 this.items.map((o) => o.maxValue),
             ) as Collection
         ).withRange(outMin, outMax);
+    }
+
+    /**
+     * Apply a wandering random shift to all outputs, scaled to each output's
+     * range: `amount` 5 shifts by up to half the range either way. Clamps to
+     * the range unless `clamp` is false.
+     */
+    erratic(
+        amount: PolySignal,
+        options: RangedErraticOptions = {},
+    ): CollectionWithRange {
+        if (this.items.length === 0) {
+            return new CollectionWithRange();
+        }
+        return erratic(this.items[0].builder, this.items, amount, options, {
+            min: this.items.map((o) => o.minValue),
+            max: this.items.map((o) => o.maxValue),
+        }) as CollectionWithRange;
     }
 }
 
@@ -1221,6 +1299,7 @@ export class GraphBuilder {
         const scaleAndShiftFactory = this.getFactory('$scaleAndShift');
         const curveFactory = this.getFactory('$curve');
         const slewFactory = this.getFactory('$slew');
+        const smoothControlFactory = this.getFactory('_smoothControl');
 
         // VU meter entries, one per out group, collected in compile order and
         // sorted into source order before emission.
@@ -1316,8 +1395,8 @@ export class GraphBuilder {
                     const tapId = `__vuTap_${sk}`;
 
                     // A numeric (or absent) stereo pan is lifted into a
-                    // $signal so the VU panel's knob can drive it live via
-                    // the single-module update path; a signal-valued pan
+                    // _smoothControl so the VU panel's knob can drive it live
+                    // via the single-module update path; a signal-valued pan
                     // stays wired as given and renders as a locked knob that
                     // tracks the signal.
                     const panControllable =
@@ -1331,9 +1410,9 @@ export class GraphBuilder {
                         group.type === 'stereo' && !panControllable;
 
                     // Likewise a numeric (or absent) gain is lifted into a
-                    // $signal so the VU panel's fader triangle can drive it;
-                    // the gain stage always compiles so the fader has a
-                    // target (absent gain seeds unity).
+                    // _smoothControl so the VU panel's fader triangle can
+                    // drive it; the gain stage always compiles so the fader
+                    // has a target (absent gain seeds unity).
                     const gainControllable =
                         group.gain === undefined ||
                         typeof group.gain === 'number';
@@ -1341,7 +1420,9 @@ export class GraphBuilder {
                         ? ((group.gain as number | undefined) ?? UNITY_OUT_GAIN)
                         : null;
                     const gainSource = gainControllable
-                        ? signalFactory(gainValue, { id: `__vuGain_${sk}` })
+                        ? smoothControlFactory(gainValue, {
+                              id: `__vuGain_${sk}`,
+                          })
                         : group.gain!;
 
                     // Group mix, then the gain stage — the tap: the meter
@@ -1351,7 +1432,7 @@ export class GraphBuilder {
                             ? [
                                   ...(stereoMixerFactory(group.outputs, {
                                       pan: panControllable
-                                          ? signalFactory(panValue, {
+                                          ? smoothControlFactory(panValue, {
                                                 id: `__vuPan_${sk}`,
                                             })
                                           : group.pan,
@@ -1441,6 +1522,20 @@ export class GraphBuilder {
                                 spec.idIsExplicit = false;
                             }
                         }
+                        // A structural match can pair a gain or pan control
+                        // with another out's, so they start at this patch's
+                        // value rather than ramp from a stranger's. Live
+                        // fader drags are single-module updates and still
+                        // ramp.
+                        for (const controlId of [
+                            `__vuGain_${sk}`,
+                            `__vuPan_${sk}`,
+                        ]) {
+                            const spec = this.modules.get(controlId);
+                            if (spec) {
+                                spec.skipStateTransfer = true;
+                            }
+                        }
                     }
 
                     const editableLocation =
@@ -1499,17 +1594,17 @@ export class GraphBuilder {
             const finalMix = mixFactory(allChannelCollections) as Collection;
 
             // Apply end of chain processing and global output gain. A
-            // numeric output gain is lifted into a $signal so the master
-            // fader can drive it live; the fader's source edits go through
-            // $setOutputGain. A signal-valued output gain renders as a
-            // locked, live-tracking fader.
+            // numeric output gain is lifted into a _smoothControl so the
+            // master fader can drive it live; the fader's source edits go
+            // through $setOutputGain. A signal-valued output gain renders as
+            // a locked, live-tracking fader.
             this.processingEndOfChain = true;
             const masterGainControllable = typeof this.outputGain === 'number';
             const masterGainValue = masterGainControllable
                 ? (this.outputGain as number)
                 : null;
             const masterGainSignal = masterGainControllable
-                ? (signalFactory(this.outputGain, {
+                ? (smoothControlFactory(this.outputGain, {
                       id: '__vuGain_main',
                   }) as ModuleOutput)
                 : this.outputGain;
@@ -1942,15 +2037,24 @@ export class GraphBuilder {
 
     addScope(
         value: ModuleOutput | ModuleOutput[],
-        config: {
-            msPerFrame?: number;
-            triggerThreshold?: number;
-            triggerWaitToRender?: boolean;
-            range?: [number, number];
-        } = {},
+        config: ScopeConfig = {},
         sourceLocation?: { line: number; column: number },
     ) {
-        const { msPerFrame = 500, triggerThreshold, range = [-5, 5] } = config;
+        const {
+            msPerFrame = 500,
+            triggerThreshold,
+            range = [-5, 5],
+            split,
+        } = config;
+        if (
+            split !== undefined &&
+            split !== 'vertical' &&
+            split !== 'horizontal'
+        ) {
+            throw new Error(
+                `scope split must be 'vertical' or 'horizontal', got ${JSON.stringify(split)}`,
+            );
+        }
         const realTriggerThreshold: number | undefined =
             triggerThreshold !== undefined
                 ? triggerThreshold * 1000
@@ -1976,6 +2080,7 @@ export class GraphBuilder {
             msPerFrame,
             range,
             sourceLocation,
+            split,
             triggerThreshold: thresh,
         });
     }
@@ -2226,12 +2331,15 @@ export class ModuleOutput {
         return factory(this, factor) as Collection;
     }
 
-    scope(config?: {
-        msPerFrame?: number;
-        triggerThreshold?: number;
-        triggerWaitToRender?: boolean;
-        range?: [number, number];
-    }): this {
+    /**
+     * Apply a wandering random shift of up to ±`amount` (0–5), where 5 shifts
+     * by up to ±5 V.
+     */
+    erratic(amount: PolySignal, options: ErraticOptions = {}): Collection {
+        return erratic(this.builder, this, amount, options);
+    }
+
+    scope(config?: Omit<ScopeConfig, 'split'>): this {
         const loc = captureSourceLocation();
         this.builder.addScope(this, config, loc);
         return this;
@@ -2437,6 +2545,21 @@ export class ModuleOutputWithRange extends ModuleOutput {
                 this.maxValue,
             ) as Collection
         ).withRange(outMin, outMax);
+    }
+
+    /**
+     * Apply a wandering random shift scaled to this output's range: `amount` 5
+     * shifts by up to half the range either way. Clamps to the range unless
+     * `clamp` is false.
+     */
+    erratic(
+        amount: PolySignal,
+        options: RangedErraticOptions = {},
+    ): CollectionWithRange {
+        return erratic(this.builder, this, amount, options, {
+            min: this.minValue,
+            max: this.maxValue,
+        }) as CollectionWithRange;
     }
 }
 

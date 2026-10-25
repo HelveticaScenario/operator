@@ -308,10 +308,12 @@ fn scale_and_shift_applies() {
 /// succeeds. Modules with all-optional params can use `{}`.
 fn minimal_params(module_type: &str) -> serde_json::Value {
     match module_type {
-        "$sine" | "$saw" | "$pulse" | "$supersaw" | "$ramp" => json!({ "freq": 0.0 }),
+        "$sine" | "$saw" | "$pulse" | "$supersaw" | "$ramp" | "$swell" => json!({ "freq": 0.0 }),
         "$pSine" | "$pSaw" | "$pPulse" => json!({ "phase": 0.0 }),
         "$macro" => json!({ "freq": 0.0, "engine": "virtualAnalog" }),
-        "$lpf" | "$hpf" | "$jup6f" => json!({ "input": 0.0, "cutoff": 0.0 }),
+        "$lpf" | "$hpf" | "$jup6f" | "$multimode" | "$apf" => {
+            json!({ "input": 0.0, "cutoff": 0.0 })
+        }
         "$unstable.filter.lp"
         | "$unstable.filter.hp"
         | "$unstable.filter.bp"
@@ -347,6 +349,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$bpf" => json!({ "input": 0.0, "center": 0.0 }),
         "$xover" => json!({ "input": 0.0, "lowMidFreq": 0.0, "midHighFreq": 0.0 }),
         "$comp" => json!({ "input": 0.0, "threshold": 0.0 }),
+        "_erratic" => json!({ "input": 0.0, "amount": 1.0 }),
         "$wrap" | "$clamp" => json!({ "input": 0.0, "min": -5.0, "max": 5.0 }),
         "$addHz" => json!({ "input": 0.0, "offset": 0.0 }),
         "$mulHz" => json!({ "input": 0.0, "factor": 1.0 }),
@@ -359,7 +362,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$track" => json!({ "keyframes": [] }),
         "$math" => json!({ "expression": "1+1" }),
         "$spread" => json!({ "min": -1.0, "max": 1.0, "count": 3 }),
-        "$signal" => json!({ "source": 0.0 }),
+        "$signal" => json!({ "value": 0.0 }),
         "$scaleAndShift" => json!({ "input": 0.0 }),
         "$chord" => json!({ "chord": "C[maj]" }),
         "$cheby" | "$fold" | "$segment" => json!({ "input": 0.0, "amount": 0.0 }),
@@ -416,6 +419,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$midiCC" => json!({ "cc": 1 }),
         "_clock" => json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),
         "_videoTap" => json!({ "input": 0.0, "slot": 0 }),
+        "_smoothControl" => json!({ "value": 0.0 }),
         _ => json!({}),
     }
 }
@@ -565,7 +569,7 @@ fn from_graph_creates_patch_with_modules() {
 /// device tap uses reports silence there instead.
 #[test]
 fn reads_cycle_past_port_width_unless_no_cycle() {
-    let module = make_module("$signal", "sig", json!({ "source": [1.0, 2.0] }));
+    let module = make_module("$signal", "sig", json!({ "value": [1.0, 2.0] }));
     module.start_block();
     module.ensure_processed();
 
@@ -638,14 +642,14 @@ fn from_graph_params_are_applied() {
 #[test]
 fn from_graph_cable_routing_sine_to_signal() {
     // Sine oscillator → $signal module via cable.
-    // The $signal module passes its `source` input straight through.
+    // The $signal module passes its `value` input straight through.
     let graph = make_graph(vec![
         ("osc", "$sine", json!({ "freq": 0.0 })),
         (
             "sig",
             "$signal",
             json!({
-                "source": { "type": "cable", "module": "osc", "port": "output", "channel": 0 }
+                "value": { "type": "cable", "module": "osc", "port": "output", "channel": 0 }
             }),
         ),
     ]);
@@ -1012,6 +1016,81 @@ fn buffer_and_delay_read_pipeline() {
 }
 
 #[test]
+fn delay_reads_do_not_depend_on_block_size() {
+    // A fractional, modulated delay reads between buffer frames, so it rounds
+    // alike only if every block size puts each sample at the same absolute
+    // write position.
+    let cable =
+        |module: &str| json!({ "type": "cable", "module": module, "port": "output", "channel": 0 });
+    let graph = make_graph(vec![
+        ("src", "$saw", json!({ "freq": 0.0 })),
+        ("lfo", "$sine", json!({ "freq": -4.0 })),
+        (
+            "time",
+            "$scaleAndShift",
+            json!({ "input": cable("lfo"), "scale": 0.002, "shift": 0.0123456 }),
+        ),
+        (
+            "buf",
+            "$buffer",
+            json!({ "input": cable("src"), "length": 0.05 }),
+        ),
+        (
+            "delay",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": cable("time"),
+            }),
+        ),
+    ]);
+    let render = |block_size: usize| {
+        let patch = from_graph(&graph, SAMPLE_RATE, block_size, &HashMap::new())
+            .expect("from_graph failed");
+        let mut out = Vec::new();
+        for _ in 0..(8192 / block_size) {
+            for module in patch.sampleables.values() {
+                module.start_block();
+            }
+            for id in ["src", "lfo", "time", "buf", "delay"] {
+                patch.sampleables[id].ensure_processed_to(block_size);
+            }
+            let delay = &patch.sampleables["delay"];
+            out.extend((0..block_size).map(|i| delay.get_value_at(DEFAULT_PORT, 0, i).to_bits()));
+        }
+        out
+    };
+    let reference = render(64);
+    assert!(reference.iter().any(|&bits| f32::from_bits(bits) != 0.0));
+    for block_size in [1, 128, 256, 1024] {
+        assert!(
+            render(block_size) == reference,
+            "block size {block_size} renders a different delay"
+        );
+    }
+}
+
+#[test]
+fn buffer_inserted_mid_block_keeps_writing_forward() {
+    // A patch swap can add a `$buffer` partway through a block: it renders
+    // that block's remaining slots without a block start, and the next block
+    // continues after them.
+    let graph = make_graph(vec![(
+        "buf",
+        "$buffer",
+        json!({ "input": 1.0, "length": 0.05 }),
+    )]);
+    let patch = from_graph(&graph, SAMPLE_RATE, 8, &HashMap::new()).expect("from_graph failed");
+    let buf = &patch.sampleables["buf"];
+    let cursor = || buf.get_buffer_output("buffer").unwrap().read_write_index();
+    buf.set_initial_index(5);
+    buf.ensure_processed_to(8);
+    assert_eq!(cursor(), 0);
+    buf.start_block();
+    assert_eq!(cursor(), 8);
+}
+
+#[test]
 fn buffer_feedback_cycle_propagates_through_delay_read() {
     // Verify that a cable cycle routed through a Buffer (delayRead's output
     // fed back into the buffer's input via mix) actually moves data around
@@ -1357,7 +1436,13 @@ fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
             // column, so a stride mismatch would land channel >= 1 cells on
             // the wrong (voice, channel) coordinates.
             "freq": [-2.0, -1.9],
-            "voices": voices
+            "voices": voices,
+            // Constant-high sync: its one rising edge (the trigger's first
+            // sample) resets every voice to phase 0, so the carried voices'
+            // phases at the transfer frame are fixed rather than seeded from
+            // the module's address. The latched trigger state transfers with
+            // the module, so the new patch sees no further edge.
+            "sync": 5.0
         })
     };
 
@@ -1391,13 +1476,20 @@ fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
     process_frame(&new_patch);
     let new_ss = new_patch.sampleables.get("ss").unwrap();
 
-    // The added voices must be silent on the transfer frame: their mute is
-    // armed and releases only at their own first zero crossing.
+    // The added voices must be (near-)silent on the transfer frame: their mute
+    // is armed and releases only at their own first rising zero crossing. A
+    // seeded phase within one step below that crossing releases on this very
+    // frame, contributing at most one ramp step (2 * dt) per input channel, so
+    // the bound is that step summed over both channels at the highest detuned
+    // pitch, times the 5 / sqrt(2) channel-compensated gain (~0.02 V).
+    let max_hz = 261.63 * 2.0f32.powf(-1.9 + 0.09 / 12.0);
+    let max_release_step = 2.0 * max_hz / SAMPLE_RATE;
+    let fresh_bound = 2.0 * max_release_step * 5.0 / 2.0f32.sqrt();
     for voice in 5..7 {
         let v = new_ss.get_value_at(DEFAULT_PORT, voice, 0);
-        assert_eq!(
-            v, 0.0,
-            "fresh voice {voice} must start muted on the transfer frame, got {v}"
+        assert!(
+            v.abs() <= fresh_bound,
+            "fresh voice {voice} must start muted on the transfer frame, got {v} (bound {fresh_bound})"
         );
     }
 

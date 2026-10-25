@@ -19,6 +19,7 @@ const RESERVED_OUTPUT_NAMES: &[&str] = &[
     "amplitude",
     "amp",
     "exp",
+    "erratic",
     "gain",
     "shift",
     "addHz",

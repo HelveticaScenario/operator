@@ -6,7 +6,7 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::dsp::utils::sanitize;
+use crate::dsp::utils::{cached::Cached, sanitize};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
 // Gain voltage scaling: maps [-5, 5] volts to [-24, 24] dB (4.8 dB per volt)
@@ -30,36 +30,6 @@ fn threshold_to_db(threshold: f32) -> f32 {
 #[inline]
 fn follower_coeff(time: f32, sample_rate: f32) -> f32 {
     (-1.0 / (time.max(1e-6) * sample_rate)).exp()
-}
-
-/// A value derived from one input, recomputed only when that input changes.
-/// The comparison is exact, so the cached value is always the one a fresh
-/// computation would return.
-#[derive(Clone, Copy)]
-struct Derived {
-    input: f32,
-    value: f32,
-}
-
-impl Default for Derived {
-    fn default() -> Self {
-        // NaN never compares equal, so the first `get` always computes.
-        Self {
-            input: f32::NAN,
-            value: 0.0,
-        }
-    }
-}
-
-impl Derived {
-    #[inline]
-    fn get(&mut self, input: f32, derive: impl FnOnce(f32) -> f32) -> f32 {
-        if input != self.input {
-            self.input = input;
-            self.value = derive(input);
-        }
-        self.value
-    }
 }
 
 /// Compute compressor gain for a single sample.
@@ -143,13 +113,13 @@ fn compress(
 #[derive(Clone, Copy, Default)]
 struct ChannelState {
     envelope: f32,
-    input_gain: Derived,
-    output_gain: Derived,
-    makeup: Derived,
-    threshold_db: Derived,
-    upward_threshold_db: Derived,
-    attack_coeff: Derived,
-    release_coeff: Derived,
+    input_gain: Cached<f32>,
+    output_gain: Cached<f32>,
+    makeup: Cached<f32>,
+    threshold_db: Cached<f32>,
+    upward_threshold_db: Cached<f32>,
+    attack_coeff: Cached<f32>,
+    release_coeff: Cached<f32>,
 }
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -384,22 +354,6 @@ mod tests {
             );
         }
         last
-    }
-
-    #[test]
-    fn derived_recomputes_only_on_input_change() {
-        let mut derived = Derived::default();
-        let mut calls = 0;
-        let mut get = |derived: &mut Derived, input: f32| {
-            derived.get(input, |x| {
-                calls += 1;
-                x * 2.0
-            })
-        };
-        assert_eq!(get(&mut derived, 1.0), 2.0);
-        assert_eq!(get(&mut derived, 1.0), 2.0);
-        assert_eq!(get(&mut derived, 3.0), 6.0);
-        assert_eq!(calls, 2);
     }
 
     #[test]

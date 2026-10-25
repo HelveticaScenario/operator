@@ -148,6 +148,45 @@ describe('createScopeViewZones', () => {
         handle.dispose();
     });
 
+    test('a split view registers one canvas per channel in a single zone', () => {
+        const { editor, addedZones } = makeEditor();
+        const registered: string[] = [];
+        const view = (key: string, split: ScopeView['split']): ScopeView => ({
+            channelKeys: ['ch0', 'ch1', 'ch2'],
+            decorationIndex: 0,
+            file: 'buf',
+            key,
+            range: [-5, 5],
+            split,
+        });
+
+        const vertical = createScopeViewZones({
+            editor,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            monaco: {} as any,
+            views: [view('v', 'vertical')],
+            scopeDecorations: makeDecorations([new FakeRange(3, 1, 3, 10)]),
+            onRegisterScopeCanvas: (key) => registered.push(key),
+        });
+        expect(addedZones).toHaveLength(1);
+        expect(addedZones[0].heightInPx).toBe(3 * 80 + 2 * 4);
+        expect(registered).toEqual(['v#0', 'v#1', 'v#2']);
+        vertical.dispose();
+
+        const horizontal = createScopeViewZones({
+            editor,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            monaco: {} as any,
+            views: [view('h', 'horizontal')],
+            scopeDecorations: makeDecorations([new FakeRange(3, 1, 3, 10)]),
+            onRegisterScopeCanvas: (key) => registered.push(key),
+        });
+        expect(addedZones).toHaveLength(2);
+        expect(addedZones[1].heightInPx).toBe(80);
+        expect(registered.slice(3)).toEqual(['h#0', 'h#1', 'h#2']);
+        horizontal.dispose();
+    });
+
     test('a null decoration collection creates no zones at all', () => {
         const { editor, addedZones } = makeEditor();
         const registered: string[] = [];

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 const SR: f32 = 48000.0;
 const BLOCK: usize = 64;
-const CHANNELS: [usize; 3] = [1, 8, 16];
+const CHANNELS: [usize; 4] = [1, 4, 8, 16];
 
 fn poly(base: f32, channels: usize) -> Value {
     Value::Array(
@@ -44,6 +44,12 @@ struct BenchPatch {
 
 impl BenchPatch {
     fn new(modules: Vec<(String, &str, Value)>) -> Self {
+        Self::with_mode(modules, ProcessingMode::Block)
+    }
+
+    /// Every module in `mode`; Sample mode is how feedback-cycle members run,
+    /// one slot per call.
+    fn with_mode(modules: Vec<(String, &str, Value)>, mode: ProcessingMode) -> Self {
         let deserializers = get_params_deserializers();
         let order = modules.iter().map(|(id, _, _)| id.clone()).collect();
         let mut patch = Patch::new();
@@ -58,7 +64,7 @@ impl BenchPatch {
                             params: cached.params,
                             channel_count: cached.channel_count,
                         },
-                        ProcessingMode::Block,
+                        mode,
                     )
                 }),
                 SR,
@@ -104,6 +110,144 @@ fn lpf_chain(channels: usize) -> BenchPatch {
         ));
     }
     BenchPatch::new(modules)
+}
+
+/// `$saw` into a 50-stage `$apf` whose cutoff an audio-rate `$sine` sweeps,
+/// so its coefficients are recomputed every sample.
+fn apf_swept_modules(channels: usize) -> Vec<(String, &'static str, Value)> {
+    vec![
+        (
+            "src".to_string(),
+            "$saw",
+            json!({ "freq": poly(0.0, channels) }),
+        ),
+        (
+            "lfo".to_string(),
+            "$sine",
+            json!({ "freq": poly(-2.0, channels) }),
+        ),
+        (
+            "apf".to_string(),
+            "$apf",
+            json!({
+                "input": poly_cable("src", "output", channels),
+                "cutoff": poly_cable("lfo", "output", channels),
+                "stages": 50.0,
+                "resonance": 2.0,
+            }),
+        ),
+    ]
+}
+
+fn apf_swept(channels: usize) -> BenchPatch {
+    BenchPatch::new(apf_swept_modules(channels))
+}
+
+/// [`apf_swept`] in Sample mode, as in a feedback cycle.
+fn apf_swept_sample(channels: usize) -> BenchPatch {
+    BenchPatch::with_mode(apf_swept_modules(channels), ProcessingMode::Sample)
+}
+
+/// `$saw` into a chain of 32 `$scaleAndShift`s with constant scale and
+/// shift: almost no DSP, so this measures per-module engine overhead.
+fn scale_chain(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(0.0, channels) }),
+    )];
+    for i in 0..32 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("s{}", i - 1)
+        };
+        modules.push((
+            format!("s{i}"),
+            "$scaleAndShift",
+            json!({ "input": poly_cable(&prev, "output", channels), "scale": 4.0, "shift": 0.1 }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
+/// [`scale_chain`] with one cable among the constant scale channels: inputs
+/// that cannot be read in place, so block modules copy them out slot by slot.
+fn scale_fallback(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(0.0, channels) }),
+    )];
+    for i in 0..32 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("s{}", i - 1)
+        };
+        let mut scale: Vec<Value> = (0..channels).map(|_| json!(4.0)).collect();
+        scale[0] = json!({ "type": "cable", "module": "src", "port": "output", "channel": 0 });
+        modules.push((
+            format!("s{i}"),
+            "$scaleAndShift",
+            json!({ "input": poly_cable(&prev, "output", channels), "scale": scale, "shift": 0.1 }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
+/// `$saw` into a chain of 32 `$remap`s with constant ranges: a cheap
+/// per-sample module reading several constant inputs.
+fn remap_chain(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(0.0, channels) }),
+    )];
+    for i in 0..32 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("r{}", i - 1)
+        };
+        modules.push((format!("r{i}"), "$remap", json!({ "input": poly_cable(&prev, "output", channels), "inMin": -5.0, "inMax": 5.0, "outMin": -4.0, "outMax": 4.0 })));
+    }
+    BenchPatch::new(modules)
+}
+
+/// 160 cheap modules (`$remap`, `$clamp`, `$signal`, `$scaleAndShift`) all
+/// reading one `$saw`: the shape of a large live patch, where per-module
+/// overhead and cache footprint add up.
+fn wide_mix_modules(channels: usize) -> Vec<(String, &'static str, Value)> {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(0.0, channels) }),
+    )];
+    for i in 0..160 {
+        let ty = ["$remap", "$clamp", "$signal", "$scaleAndShift"][i % 4];
+        let params = match ty {
+            "$remap" => {
+                json!({ "input": poly_cable("src", "output", channels), "inMin": -5.0, "inMax": 5.0, "outMin": -4.0, "outMax": 4.0 })
+            }
+            "$clamp" => {
+                json!({ "input": poly_cable("src", "output", channels), "min": -1.0, "max": 1.0 })
+            }
+            "$signal" => json!({ "value": poly_cable("src", "output", channels) }),
+            _ => json!({ "input": poly_cable("src", "output", channels), "scale": 4.0 }),
+        };
+        modules.push((format!("m{i}"), ty, params));
+    }
+    modules
+}
+
+fn wide_mix(channels: usize) -> BenchPatch {
+    BenchPatch::new(wide_mix_modules(channels))
+}
+
+/// [`wide_mix`] with every module in Sample mode.
+fn wide_mix_sample(channels: usize) -> BenchPatch {
+    BenchPatch::with_mode(wide_mix_modules(channels), ProcessingMode::Sample)
 }
 
 /// 8 copies of gate → `$adsr` → (`$saw` → `$lpf` with envelope cutoff →
@@ -265,13 +409,129 @@ fn wavetables(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
+/// 8 `$eq`s in series, 4 sections each: four at fixed settings, four with an
+/// LFO sweeping a peak.
+fn eqs(channels: usize) -> BenchPatch {
+    let mut modules = vec![
+        (
+            "src".to_string(),
+            "$saw",
+            json!({ "freq": poly(-1.0, channels) }),
+        ),
+        ("lfo".to_string(), "$sine", json!({ "freq": -6.0 })),
+    ];
+    let mut prev = "src".to_string();
+    for i in 0..8 {
+        let id = format!("eq{i}");
+        let sweep = if i % 2 == 0 {
+            json!(1.0)
+        } else {
+            json!([{ "type": "cable", "module": "lfo", "port": "output", "channel": 0 }])
+        };
+        modules.push((
+            id.clone(),
+            "$eq",
+            json!({
+                "input": poly_cable(&prev, "output", channels),
+                "sections": [
+                    { "type": "lowShelf", "freq": -2.0, "gain": 3.0 },
+                    { "type": "peak", "freq": sweep, "gain": -6.0, "q": 2.0 },
+                    { "type": "highShelf", "freq": 3.0, "gain": -4.0 },
+                    { "type": "highpass", "freq": -3.0 },
+                ],
+            }),
+        ));
+        prev = id;
+    }
+    BenchPatch::new(modules)
+}
+
+/// 16 `_videoTap`s, one per slot, each reading a channel of a `$saw`.
+fn video_taps(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(-1.0, channels) }),
+    )];
+    for i in 0..16 {
+        modules.push((
+            format!("tap{i}"),
+            "_videoTap",
+            json!({
+                "input": [{ "type": "cable", "module": "src", "port": "output", "channel": i % channels }],
+                "slot": i,
+            }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
+/// `$saw` into a chain of 32 `_erratic`s. With `modulated`, speed follows an
+/// `$sine` and a `$pulse` triggers the hold; otherwise every setting is a
+/// constant.
+fn erratic_chain(channels: usize, modulated: bool) -> BenchPatch {
+    let mut modules = vec![
+        (
+            "src".to_string(),
+            "$saw",
+            json!({ "freq": poly(0.0, channels) }),
+        ),
+        (
+            "lfo".to_string(),
+            "$sine",
+            json!({ "freq": poly(-4.0, channels) }),
+        ),
+        (
+            "gate".to_string(),
+            "$pulse",
+            json!({ "freq": poly(-3.0, channels) }),
+        ),
+    ];
+    for i in 0..32 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("e{}", i - 1)
+        };
+        let mut params = json!({
+            "input": poly_cable(&prev, "output", channels),
+            "amount": 0.5, "speed": 2.5, "bias": 1.0, "clamp": true,
+        });
+        if modulated {
+            params["speed"] = poly_cable("lfo", "output", channels);
+            params["trigger"] = poly_cable("gate", "output", channels);
+        }
+        modules.push((format!("e{i}"), "_erratic", params));
+    }
+    BenchPatch::new(modules)
+}
+
+fn erratic_constant(channels: usize) -> BenchPatch {
+    erratic_chain(channels, false)
+}
+
+fn erratic_modulated(channels: usize) -> BenchPatch {
+    erratic_chain(channels, true)
+}
+
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 5] = [
+    let cases: [(&str, fn(usize) -> BenchPatch); 14] = [
+        ("wide_mix_sample_160", wide_mix_sample),
+        ("remap_chain_32", remap_chain),
+        ("wide_mix_160", wide_mix),
+        ("scale_fallback_32", scale_fallback),
+        ("scale_chain_32", scale_chain),
         ("lpf_chain_32", lpf_chain),
+        ("apf_swept_50", apf_swept),
+        ("apf_swept_sample_50", apf_swept_sample),
         ("voices_8", voices),
         ("comp_chain_8", comp_chain),
         ("grains_4", grains),
         ("wavetable_8", wavetables),
+        ("eq_8", eqs),
+        ("video_tap_16", video_taps),
+        ("erratic_constant_32", erratic_constant),
+        ("erratic_modulated_32", erratic_modulated),
     ];
     for (name, build) in cases {
         let mut group = c.benchmark_group(name);

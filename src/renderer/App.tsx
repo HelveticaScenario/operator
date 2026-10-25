@@ -32,7 +32,7 @@ import { Sidebar } from './components/Sidebar';
 import { ControlPanel } from './components/ControlPanel';
 import electronAPI from './electronAPI';
 import type { ValidationError } from '@modular/core';
-import type { QueuedTrigger } from '@modular/core';
+import type { QueuedTrigger, ScopeStats } from '@modular/core';
 import type { FileTreeEntry, UpdateAvailableInfo } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../shared/dsl/buttonTypes';
@@ -414,9 +414,18 @@ function App() {
     );
 
     // The performance window shows the playing buffer, from when its patch
-    // starts playing until another buffer's does, stop included. Before any
-    // patch has played it shows the visible buffer.
+    // starts playing until another buffer's does, stop included. It finds the
+    // buffer by id, which survives renames. Once no tab holds that id, it
+    // shows the buffer's file while another tab has it open, and otherwise the
+    // visible buffer; a closed untitled buffer is gone for good, since a new
+    // one reuses its id. Before any patch has played it shows the visible
+    // buffer.
     const [performanceSourceId, setPerformanceSourceId] = useState<
+        string | null
+    >(null);
+    const [performanceSourceClosed, setPerformanceSourceClosed] =
+        useState(false);
+    const [lastPerformanceFile, setLastPerformanceFile] = useState<
         string | null
     >(null);
     if (
@@ -424,14 +433,40 @@ function App() {
         runningControlsSource !== performanceSourceId
     ) {
         setPerformanceSourceId(runningControlsSource);
+        setPerformanceSourceClosed(false);
+        setLastPerformanceFile(null);
     }
     const performanceBuffer =
-        performanceSourceId === null
+        performanceSourceId === null || performanceSourceClosed
             ? undefined
             : buffers.find((b) => b.id === performanceSourceId);
+    if (
+        performanceSourceId !== null &&
+        (runningControlsSource === null ||
+            runningControlsSource === performanceSourceId) &&
+        !performanceSourceClosed &&
+        performanceBuffer === undefined
+    ) {
+        setPerformanceSourceClosed(true);
+    }
+    const performanceFile =
+        performanceBuffer?.kind === 'file'
+            ? formatPath(performanceBuffer.filePath)
+            : null;
+    if (performanceFile !== null && performanceFile !== lastPerformanceFile) {
+        setLastPerformanceFile(performanceFile);
+    }
+    const performanceBufferPath =
+        performanceBuffer === undefined
+            ? lastPerformanceFile !== null &&
+              openBufferIds.some((id) => formatPath(id) === lastPerformanceFile)
+                ? lastPerformanceFile
+                : null
+            : formatPath(getBufferId(performanceBuffer));
     const performanceShowsVisible =
-        performanceBuffer === undefined ||
-        performanceSourceId === visibleCode.bufferId;
+        performanceBufferPath === null ||
+        (!!activeBufferId &&
+            performanceBufferPath === formatPath(activeBufferId));
     const performanceCodeControls = useMemo(() => {
         const views =
             performanceShowsVisible || performanceSourceId === null
@@ -460,9 +495,7 @@ function App() {
     ]);
     const revealInPerformance = usePerformanceCode(
         paletteEditor,
-        performanceBuffer === undefined
-            ? null
-            : formatPath(getBufferId(performanceBuffer)),
+        performanceBufferPath,
         performanceView,
         performanceTheme,
         performanceCodeControls,
@@ -774,7 +807,7 @@ function App() {
                     void electronAPI.synthesizer.setModuleParam(
                         muteModuleId,
                         '$signal',
-                        { source: gateAfter },
+                        { value: gateAfter },
                     );
                 }
             }
@@ -892,8 +925,8 @@ function App() {
 
             void electronAPI.synthesizer.setModuleParam(
                 outputs[idx].panModuleId,
-                '$signal',
-                { source: pan },
+                '_smoothControl',
+                { value: pan },
             );
 
             const next = outputs.map((o, i) => (i === idx ? { ...o, pan } : o));
@@ -1316,8 +1349,8 @@ function App() {
 
             void electronAPI.synthesizer.setModuleParam(
                 outputs[idx].gainModuleId,
-                '$signal',
-                { source: gain },
+                '_smoothControl',
+                { value: gain },
             );
 
             const next = outputs.map((o, i) =>
@@ -1432,8 +1465,8 @@ function App() {
 
             void electronAPI.synthesizer.setModuleParam(
                 outputs[idx].gainModuleId,
-                '$signal',
-                { source: resetGain },
+                '_smoothControl',
+                { value: resetGain },
             );
 
             const next = outputs.map((o, i) =>
@@ -1490,10 +1523,17 @@ function App() {
         patchCodeRef.current = patchCode;
     }, [patchCode]);
 
+    const runningBufferIdRef = useRef(runningBufferId);
+    useEffect(() => {
+        runningBufferIdRef.current = runningBufferId;
+    }, [runningBufferId]);
+
     // Keep runningBufferId pointing at the running buffer's current path
     // identity: saving an untitled buffer or renaming a file changes
     // getBufferId, and comparisons against activeBufferId (slider source
-    // rewriting, running indicators) must keep matching afterwards.
+    // rewriting, running indicators) must keep matching afterwards. An untitled
+    // buffer's path identity is its id, which a new untitled buffer reuses, so
+    // once the running one closes no buffer holds the running patch.
     useEffect(() => {
         const sourceId = runningSourceIdRef.current;
         if (sourceId === null) {
@@ -1502,13 +1542,11 @@ function App() {
         const running = buffers.find((b) => b.id === sourceId);
         if (running) {
             setRunningBufferId(getBufferId(running));
+        } else if (runningBufferIdRef.current === sourceId) {
+            runningSourceIdRef.current = null;
+            setRunningBufferId(null);
         }
     }, [buffers]);
-
-    const runningBufferIdRef = useRef(runningBufferId);
-    useEffect(() => {
-        runningBufferIdRef.current = runningBufferId;
-    }, [runningBufferId]);
 
     const isClockRunningRef = useRef(isClockRunning);
     useEffect(() => {
@@ -1538,12 +1576,7 @@ function App() {
                         string,
                         {
                             data: Float32Array;
-                            stats: {
-                                min: number;
-                                max: number;
-                                peakToPeak: number;
-                                readOffset: number;
-                            };
+                            stats: ScopeStats;
                         }
                     >();
                     for (const [bufferKey, data, stats] of scopeData) {
@@ -1576,6 +1609,7 @@ function App() {
                         ) as string[];
                         const channels: Float32Array[] = [];
                         const readOffsets: number[] = [];
+                        const triggerOffsets: number[] = [];
                         let globalMin = Infinity;
                         let globalMax = -Infinity;
 
@@ -1584,6 +1618,7 @@ function App() {
                             if (entry) {
                                 channels.push(entry.data);
                                 readOffsets.push(entry.stats.readOffset);
+                                triggerOffsets.push(entry.stats.triggerOffset);
                                 if (entry.stats.min < globalMin) {
                                     globalMin = entry.stats.min;
                                 }
@@ -1602,6 +1637,7 @@ function App() {
                                     min: globalMin,
                                     peakToPeak: globalMax - globalMin,
                                     readOffset: readOffsets,
+                                    triggerOffset: triggerOffsets,
                                 },
                             });
                         }
@@ -1979,6 +2015,7 @@ function App() {
                         file: activeBufferId,
                         key: scopeKey,
                         range: scope.range ?? [-5, 5],
+                        split: scope.split ?? null,
                     });
 
                     if (range) {

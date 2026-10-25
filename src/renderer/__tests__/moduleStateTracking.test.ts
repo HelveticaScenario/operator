@@ -20,8 +20,9 @@
  *   offsets, and boundary positions are biased so a span start resolves into
  *   the region that begins there and a span end into the region that ends
  *   there.
- * - The active-highlight collection is created on the current session's
- *   editor, never reused from a previous (possibly disposed) editor.
+ * - Step highlights live on the running buffer's model, whether or not an
+ *   editor shows it: a stopped session leaves none behind, and they move to
+ *   the new model when the running buffer changes.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -47,7 +48,7 @@ class FakeRange {
 }
 
 /**
- * Minimal Monaco editor/model mock. Tracked decorations are registered by id
+ * Minimal Monaco model mock. Decorations are registered by id
  * (via `model.deltaDecorations`) so `getDecorationRange` resolves them,
  * mirroring Monaco's model-owned tracked decorations. Documents are single
  * line, so offset N maps to column N+1.
@@ -62,44 +63,13 @@ class FakeRange {
  */
 function makeHarness(docText?: string) {
     const ranges = new Map<string, FakeRange>();
+    const classNames = new Map<string, string | undefined>();
     let idCounter = 0;
     let collapseThreshold = -1;
-    let collectionsCreated = 0;
     let trackedDecorationWrites = 0;
 
-    function makeCollection(initial?: { range: FakeRange }[]) {
-        let ids: string[] = [];
-        const coll = {
-            decos: [] as {
-                range: FakeRange;
-                options?: { className?: string };
-            }[],
-            set(
-                decos: { range: FakeRange; options?: { className?: string } }[],
-            ) {
-                for (const id of ids) ranges.delete(id);
-                ids = [];
-                coll.decos = decos;
-                const out: string[] = [];
-                for (const d of decos) {
-                    const id = `d${idCounter++}`;
-                    ids.push(id);
-                    ranges.set(id, d.range);
-                    out.push(id);
-                }
-                return out;
-            },
-            clear() {
-                for (const id of ids) ranges.delete(id);
-                ids = [];
-                coll.decos = [];
-            },
-        };
-        if (initial) coll.set(initial);
-        return coll;
-    }
-
     const model = {
+        isDisposed: () => false,
         getPositionAt: (offset: number) => ({
             lineNumber: 1,
             column: offset + 1,
@@ -110,14 +80,20 @@ function makeHarness(docText?: string) {
                 : '"0 2 4"',
         deltaDecorations: (
             oldIds: string[],
-            newDecos: { range: FakeRange }[],
+            newDecos: { range: FakeRange; options?: { className?: string } }[],
         ) => {
-            for (const id of oldIds) ranges.delete(id);
-            if (newDecos.length > 0) trackedDecorationWrites++;
+            for (const id of oldIds) {
+                ranges.delete(id);
+                classNames.delete(id);
+            }
+            if (newDecos.some((d) => d.options?.className !== ACTIVE)) {
+                trackedDecorationWrites++;
+            }
             const out: string[] = [];
             for (const d of newDecos) {
                 const id = `d${idCounter++}`;
                 ranges.set(id, d.range);
+                classNames.set(id, d.options?.className);
                 out.push(id);
             }
             return out;
@@ -142,14 +118,6 @@ function makeHarness(docText?: string) {
         },
     };
 
-    const editor = {
-        getModel: () => model,
-        createDecorationsCollection: (initial?: { range: FakeRange }[]) => {
-            collectionsCreated++;
-            return makeCollection(initial);
-        },
-    };
-
     const monaco = {
         Range: FakeRange,
         editor: { TrackedRangeStickiness: { NeverGrowsWhenTypingAtEdges: 0 } },
@@ -157,9 +125,14 @@ function makeHarness(docText?: string) {
 
     return {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        editor: editor as any,
+        model: model as any,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         monaco: monaco as any,
+        /** The step highlights on the model. */
+        activeDecos: (): { range: FakeRange }[] =>
+            [...ranges]
+                .filter(([id]) => classNames.get(id) === ACTIVE)
+                .map(([, range]) => ({ range })),
         collapseExisting: () => {
             collapseThreshold = idCounter;
         },
@@ -169,27 +142,8 @@ function makeHarness(docText?: string) {
                 r.endColumn += delta;
             }
         },
-        collectionsCreated: () => collectionsCreated,
         trackedDecorationWrites: () => trackedDecorationWrites,
     };
-}
-
-function activeDecos(ref: {
-    current: {
-        decos: { range: FakeRange; options?: { className?: string } }[];
-    } | null;
-}): { range: FakeRange; options?: { className?: string } }[] {
-    return (ref.current?.decos ?? []).filter(
-        (d) => d.options?.className === ACTIVE,
-    );
-}
-
-function activeCount(ref: {
-    current: {
-        decos: { range: FakeRange; options?: { className?: string } }[];
-    } | null;
-}): number {
-    return activeDecos(ref).length;
 }
 
 function seqState(
@@ -226,56 +180,46 @@ describe('startModuleStatePolling step highlighting', () => {
         // only `source` differs. Retyping the middle step collapses its
         // tracked decoration. The edited step must still highlight without a
         // restart.
-        const { editor, monaco, collapseExisting } = makeHarness();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const activeDecorationRef: any = { current: null };
+        const { model, monaco, activeDecos, collapseExisting } = makeHarness();
 
         let state = seqState('0 1 4', [[2, 3]], ALL);
         const getModuleStates = vi.fn(async () => state);
 
         const stop = startModuleStatePolling({
-            editor,
+            getModel: () => model,
             monaco,
-            currentFile: 'buf',
-            runningBufferId: 'buf',
-            activeDecorationRef,
             getModuleStates,
             pollInterval: 50,
         });
 
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
+        expect(activeDecos().length).toBe(1);
 
         // The user retypes the middle step; its existing decoration collapses.
         collapseExisting();
         state = seqState('0 7 4', [[2, 3]], ALL);
 
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
+        expect(activeDecos().length).toBe(1);
 
         stop();
     });
 
     test('width-change edit (new leaf offsets) highlights the edited step', async () => {
-        const { editor, monaco, collapseExisting } = makeHarness();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const activeDecorationRef: any = { current: null };
+        const { model, monaco, activeDecos, collapseExisting } = makeHarness();
 
         let state = seqState('0 1 4', [[0, 1]], ALL);
         const getModuleStates = vi.fn(async () => state);
 
         const stop = startModuleStatePolling({
-            editor,
+            getModel: () => model,
             monaco,
-            currentFile: 'buf',
-            runningBufferId: 'buf',
-            activeDecorationRef,
             getModuleStates,
             pollInterval: 50,
         });
 
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
+        expect(activeDecos().length).toBe(1);
 
         // `0 1 4` -> `0 33 4`: middle step widens; offsets shift, edited step
         // now playing at the new [2,4] span.
@@ -297,7 +241,7 @@ describe('startModuleStatePolling step highlighting', () => {
         );
 
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
+        expect(activeDecos().length).toBe(1);
 
         stop();
     });
@@ -307,76 +251,63 @@ describe('startModuleStatePolling step highlighting', () => {
         // document bounds shift (argSpan.start changes) but `source` is the
         // same. If the tracked decoration drifted/collapsed, only the
         // argSpanChanged re-anchor rebuilds it — `source` alone would not.
-        const { editor, monaco, collapseExisting } = makeHarness();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const activeDecorationRef: any = { current: null };
+        const { model, monaco, activeDecos, collapseExisting } = makeHarness();
 
         let state = seqState('0 1 4', [[2, 3]], ALL, { start: 0, end: 7 });
         const getModuleStates = vi.fn(async () => state);
 
         const stop = startModuleStatePolling({
-            editor,
+            getModel: () => model,
             monaco,
-            currentFile: 'buf',
-            runningBufferId: 'buf',
-            activeDecorationRef,
             getModuleStates,
             pollInterval: 50,
         });
 
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
+        expect(activeDecos().length).toBe(1);
 
         // Literal moved down the document; existing decorations drifted.
         collapseExisting();
         state = seqState('0 1 4', [[2, 3]], ALL, { start: 20, end: 27 });
 
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
+        expect(activeDecos().length).toBe(1);
 
         stop();
     });
 
     test('unchanged source does not rebuild tracked decorations every poll (no churn)', async () => {
-        const { editor, monaco, collectionsCreated, trackedDecorationWrites } =
+        const { model, monaco, activeDecos, trackedDecorationWrites } =
             makeHarness();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const activeDecorationRef: any = { current: null };
 
         // Active span moves across steps while source stays the same.
         let state = seqState('0 1 4', [[0, 1]], ALL);
         const getModuleStates = vi.fn(async () => state);
 
         const stop = startModuleStatePolling({
-            editor,
+            getModel: () => model,
             monaco,
-            currentFile: 'buf',
-            runningBufferId: 'buf',
-            activeDecorationRef,
             getModuleStates,
             pollInterval: 50,
         });
 
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
-        // First poll builds the tracked decorations and the active highlight
-        // collection. Capture that baseline; an unchanged `source` must not
-        // create any further collections or tracked decorations later.
-        const collectionsAfterFirstPoll = collectionsCreated();
+        expect(activeDecos().length).toBe(1);
+        // First poll builds the tracked decorations. Capture that baseline;
+        // an unchanged `source` must not create any further tracked
+        // decorations later.
         const writesAfterFirstPoll = trackedDecorationWrites();
 
         // Playhead advances to the next step; source unchanged -> still
         // highlights, and no rebuild.
         state = seqState('0 1 4', [[2, 3]], ALL);
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
-        expect(collectionsCreated()).toBe(collectionsAfterFirstPoll);
+        expect(activeDecos().length).toBe(1);
         expect(trackedDecorationWrites()).toBe(writesAfterFirstPoll);
 
         state = seqState('0 1 4', [[4, 5]], ALL);
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
-        expect(collectionsCreated()).toBe(collectionsAfterFirstPoll);
+        expect(activeDecos().length).toBe(1);
         expect(trackedDecorationWrites()).toBe(writesAfterFirstPoll);
 
         stop();
@@ -431,25 +362,20 @@ describe('startModuleStatePolling anchor lifetime', () => {
         // active spans are empty while 'pattern.0' plays. Its anchors must
         // still be created on the first poll — an edit made before the
         // section first activates must not misplace its highlights.
-        const { editor, monaco, applyEditShift } = makeHarness(DOC);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const activeDecorationRef: any = { current: null };
+        const { model, monaco, activeDecos, applyEditShift } = makeHarness(DOC);
 
         let state = arrangeState([[0, 1]], []);
         const getModuleStates = vi.fn(async () => state);
 
         const stop = startModuleStatePolling({
-            editor,
+            getModel: () => model,
             monaco,
-            currentFile: 'buf',
-            runningBufferId: 'buf',
-            activeDecorationRef,
             getModuleStates,
             pollInterval: 50,
         });
 
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
+        expect(activeDecos().length).toBe(1);
 
         // The user inserts 5 characters before the patch code; tracked
         // decorations follow, raw evaluation-time offsets do not.
@@ -459,7 +385,7 @@ describe('startModuleStatePolling anchor lifetime', () => {
         state = arrangeState([], [[0, 1]]);
         await vi.advanceTimersByTimeAsync(50);
 
-        const decos = activeDecos(activeDecorationRef);
+        const decos = activeDecos();
         expect(decos).toHaveLength(1);
         // Anchored at evaluate time (content offset 0 of 'c d'), then shifted
         // with the edit — not resolved from the stale offset after the edit.
@@ -469,27 +395,27 @@ describe('startModuleStatePolling anchor lifetime', () => {
     });
 
     test('anchors survive a polling restart and keep following edits', async () => {
-        const { editor, monaco, applyEditShift, trackedDecorationWrites } =
-            makeHarness(DOC);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const activeDecorationRef: any = { current: null };
+        const {
+            model,
+            monaco,
+            activeDecos,
+            applyEditShift,
+            trackedDecorationWrites,
+        } = makeHarness(DOC);
 
         let state = arrangeState([[0, 1]], []);
         const getModuleStates = vi.fn(async () => state);
 
         const params = {
-            editor,
+            getModel: () => model,
             monaco,
-            currentFile: 'buf',
-            runningBufferId: 'buf',
-            activeDecorationRef,
             getModuleStates,
             pollInterval: 50,
         };
 
         const stop = startModuleStatePolling(params);
         await vi.advanceTimersByTimeAsync(50);
-        expect(activeCount(activeDecorationRef)).toBe(1);
+        expect(activeDecos().length).toBe(1);
         const writesAfterFirstSession = trackedDecorationWrites();
         stop();
 
@@ -500,7 +426,7 @@ describe('startModuleStatePolling anchor lifetime', () => {
         state = arrangeState([[0, 1]], []);
         await vi.advanceTimersByTimeAsync(50);
 
-        const decos = activeDecos(activeDecorationRef);
+        const decos = activeDecos();
         expect(decos).toHaveLength(1);
         // The restarted session reuses the live tracked anchors (shifted by
         // the edit) rather than re-anchoring from evaluation-time offsets.
@@ -510,36 +436,55 @@ describe('startModuleStatePolling anchor lifetime', () => {
         stop2();
     });
 
-    test('a collection left by a previous session is replaced with one on the live editor', async () => {
-        // A collection bound to a disposed editor swallows set() calls
-        // silently; a new session must not keep routing highlights to it.
-        const { editor, monaco } = makeHarness(DOC);
-        const dead = {
-            decos: [] as unknown[],
-            set: vi.fn(() => []),
-            clear: vi.fn(),
-        };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const activeDecorationRef: any = { current: dead };
-
+    test('stopping a session clears its highlights, including a poll still in flight', async () => {
+        const { model, monaco, activeDecos } = makeHarness(DOC);
         const state = arrangeState([[0, 1]], []);
+        let release = () => {};
         const getModuleStates = vi.fn(async () => state);
 
         const stop = startModuleStatePolling({
-            editor,
+            getModel: () => model,
             monaco,
-            currentFile: 'buf',
-            runningBufferId: 'buf',
-            activeDecorationRef,
             getModuleStates,
             pollInterval: 50,
         });
-
         await vi.advanceTimersByTimeAsync(50);
+        expect(activeDecos()).toHaveLength(1);
 
-        expect(activeDecorationRef.current).not.toBe(dead);
-        expect(dead.set).not.toHaveBeenCalled();
-        expect(activeCount(activeDecorationRef)).toBe(1);
+        // The next poll waits on module states while the session stops.
+        getModuleStates.mockImplementationOnce(
+            () =>
+                new Promise((resolve) => {
+                    release = () => resolve(state);
+                }),
+        );
+        await vi.advanceTimersByTimeAsync(50);
+        stop();
+        expect(activeDecos()).toHaveLength(0);
+        release();
+        await vi.advanceTimersByTimeAsync(50);
+        expect(activeDecos()).toHaveLength(0);
+    });
+
+    test('highlights move to the new model when the running buffer changes', async () => {
+        const first = makeHarness(DOC);
+        const second = makeHarness(DOC);
+        let running = first.model;
+        const state = arrangeState([[0, 1]], []);
+
+        const stop = startModuleStatePolling({
+            getModel: () => running,
+            monaco: first.monaco,
+            getModuleStates: vi.fn(async () => state),
+            pollInterval: 50,
+        });
+        await vi.advanceTimersByTimeAsync(50);
+        expect(first.activeDecos()).toHaveLength(1);
+
+        running = second.model;
+        await vi.advanceTimersByTimeAsync(50);
+        expect(first.activeDecos()).toHaveLength(0);
+        expect(second.activeDecos()).toHaveLength(1);
 
         stop();
     });
@@ -591,9 +536,7 @@ describe('startModuleStatePolling interpolation resolution', () => {
             ]),
         );
 
-        const { editor, monaco } = makeHarness(DOC);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const activeDecorationRef: any = { current: null };
+        const { model, monaco, activeDecos } = makeHarness(DOC);
 
         // Evaluated pattern: 'c4 e4 g4 b4'. Leaf 'e4' = [3,5] lives in
         // chord's literal tail; leaf 'c4' = [0,2] lives in root's result.
@@ -607,17 +550,14 @@ describe('startModuleStatePolling interpolation resolution', () => {
         const getModuleStates = vi.fn(async () => state);
 
         const stop = startModuleStatePolling({
-            editor,
+            getModel: () => model,
             monaco,
-            currentFile: 'buf',
-            runningBufferId: 'buf',
-            activeDecorationRef,
             getModuleStates,
             pollInterval: 50,
         });
 
         await vi.advanceTimersByTimeAsync(50);
-        let decos = activeDecos(activeDecorationRef);
+        let decos = activeDecos();
         expect(decos).toHaveLength(1);
         let text = DOC.slice(
             decos[0].range.startColumn - 1,
@@ -632,7 +572,7 @@ describe('startModuleStatePolling interpolation resolution', () => {
         // the way to the root const literal.
         state = seqState('c4 e4 g4 b4', [[0, 2]], allSpans, argSpan);
         await vi.advanceTimersByTimeAsync(50);
-        decos = activeDecos(activeDecorationRef);
+        decos = activeDecos();
         expect(decos).toHaveLength(1);
         text = DOC.slice(
             decos[0].range.startColumn - 1,
@@ -677,9 +617,7 @@ describe('startModuleStatePolling interpolation resolution', () => {
             ]),
         );
 
-        const { editor, monaco } = makeHarness(DOC);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const activeDecorationRef: any = { current: null };
+        const { model, monaco, activeDecos } = makeHarness(DOC);
 
         // Evaluated pattern: 'c4 e4'. Leaf 'e4' = [3,5] starts exactly where
         // a's result ends and b's result begins. Its highlight must cover
@@ -696,17 +634,14 @@ describe('startModuleStatePolling interpolation resolution', () => {
         const getModuleStates = vi.fn(async () => state);
 
         const stop = startModuleStatePolling({
-            editor,
+            getModel: () => model,
             monaco,
-            currentFile: 'buf',
-            runningBufferId: 'buf',
-            activeDecorationRef,
             getModuleStates,
             pollInterval: 50,
         });
 
         await vi.advanceTimersByTimeAsync(50);
-        const decos = activeDecos(activeDecorationRef);
+        const decos = activeDecos();
         expect(decos).toHaveLength(1);
         const text = DOC.slice(
             decos[0].range.startColumn - 1,

@@ -1,3 +1,4 @@
+import type { ScopeSplit } from '@modular/core';
 import type { VideoPreviewView } from '../../shared/video/videoGraph';
 export type EditorBuffer =
     | {
@@ -42,6 +43,8 @@ export interface ScopeView {
     file: string;
     range: [number, number];
     channelKeys: string[];
+    /** Draw each channel on its own canvas, arranged this way; null overlays them on one. */
+    split: ScopeSplit | null;
     /**
      * Index of this view's tracked range in the scope decoration collection,
      * or null when the call site could not be resolved — the view then gets

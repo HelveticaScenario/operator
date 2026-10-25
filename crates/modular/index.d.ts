@@ -220,6 +220,16 @@ export interface BufferSizeRange {
   max: number
 }
 
+/**
+ * Whether this CPU has every x86 extension the addon was compiled to assume
+ * (`target-cpu` in `.cargo/config.toml`). Compiled code may use those
+ * instructions anywhere, so the app calls this only from a probe child
+ * process (`src/main/cpuGate.ts`) where an illegal instruction cannot take
+ * down the app. Reads CPUID at runtime, since compile-time feature detection
+ * reports every compiled-in feature as present.
+ */
+export declare function cpuSupportsBuild(): boolean
+
 /** Current audio state information */
 export interface CurrentAudioState {
   hostId: string
@@ -521,6 +531,8 @@ export interface Scope {
   triggerThreshold?: [number, ScopeMode]
   /** Voltage range for display (default [-5.0, 5.0]). The scope displays from range[0] to range[1]. */
   range: [number, number]
+  /** Draw each channel in its own scope instead of overlaying them. */
+  split?: ScopeSplit
 }
 
 export interface ScopeBufferKey {
@@ -540,12 +552,24 @@ export interface ScopeChannel {
 export type ScopeMode =  'Wait'|
 'Roll';
 
+/** How a split scope arranges its per-channel views. */
+export type ScopeSplit = /** Stacked top to bottom at full width. */
+'vertical'|
+/** Side by side in equal shares of the width. */
+'horizontal';
+
 /** Statistics computed from scope buffer data */
 export interface ScopeStats {
   min: number
   max: number
   peakToPeak: number
   readOffset: number
+  /**
+   * How far, in buffer samples, the trigger crossing lies before the first
+   * sample (0 to 1); 0 for an untriggered scope. Drawing each sample this
+   * much later pins the crossing to the same spot every frame.
+   */
+  triggerOffset: number
 }
 
 export interface SignalParamSchema {
@@ -583,7 +607,7 @@ export interface VuMeterSpec {
   /** 1 (mono) or 2 (stereo). */
   channels: number
   /**
-   * `$signal` module driving the mute gate (source 5 = audible, 0 =
+   * `$signal` module driving the mute gate (value 5 = audible, 0 =
    * silenced). None for the end-of-chain master meter, which has no gate.
    */
   muteModuleId?: string

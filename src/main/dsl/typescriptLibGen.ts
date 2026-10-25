@@ -20,6 +20,12 @@ import {
     generateVideoChainMembers,
     generateVideoNamespace,
 } from './videoLibGen';
+import {
+    MONO_OUT_OPTIONS,
+    STEREO_OUT_OPTIONS,
+    renderOutOptionsJsDocList,
+    renderOutOptionsMembers,
+} from '../../shared/dsl/outOptions';
 export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
@@ -791,20 +797,7 @@ type WavHandle = {
  * @see {@link Collection.out}
  */
 interface StereoOutOptions {
-  /** Base output channel (0-62, default 0). Left plays on baseChannel, right on baseChannel+1 */
-  baseChannel?: number;
-  /** Output gain. If set, a $scaleAndShift module is added after the stereo mix */
-  gain?: Poly<Signal>;
-  /** Pan position (-5 = left, 0 = center, +5 = right). Default 0 */
-  pan?: Poly<Signal>;
-  /** Stereo width/spread (0 = no spread, 5 = full spread). Default 0 */
-  width?: Mono<Signal>;
-  /** Label shown on this output's VU meter. Must be unique across outs */
-  label?: string;
-  /** Silence this output. It is still metered; its VU meter greys out */
-  mute?: boolean;
-  /** When any output is soloed, only soloed outputs are audible */
-  solo?: boolean;
+${renderOutOptionsMembers(STEREO_OUT_OPTIONS)}
 }
 
 /**
@@ -813,16 +806,23 @@ interface StereoOutOptions {
  * @see {@link Collection.outMono}
  */
 interface MonoOutOptions {
-  /** Output channel (0-63, default 0). Wins over the positional channel argument */
-  channel?: number;
-  /** Output gain. If set, a $scaleAndShift module is added after the mix */
-  gain?: Poly<Signal>;
-  /** Label shown on this output's VU meter. Must be unique across outs */
-  label?: string;
-  /** Silence this output. It is still metered; its VU meter greys out */
-  mute?: boolean;
-  /** When any output is soloed, only soloed outputs are audible */
-  solo?: boolean;
+${renderOutOptionsMembers(MONO_OUT_OPTIONS)}
+}
+
+/** Options for \`.erratic()\` on a signal without a known range */
+interface ErraticOptions {
+  /** Rising edge samples and holds the current random shift */
+  trigger?: Poly<Signal>;
+  /** How fast the shift wanders: 0 = frozen, 5 = white noise (default 2) */
+  speed?: Poly<Signal>;
+  /** Skews the shift upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
+  bias?: Poly<Signal>;
+}
+
+/** Options for \`.erratic()\` on a ranged signal */
+interface RangedErraticOptions extends ErraticOptions {
+  /** Clamp the output to the signal's range (default true) */
+  clamp?: boolean;
 }
 
 /**
@@ -909,6 +909,16 @@ interface ModuleOutput {
    * @example $sine("1hz").exp(2)  // Quadratic curve
    */
   exp(factor?: Poly<Signal>): Collection;
+
+  /**
+   * Apply a wandering random shift of up to ±\`amount\`, where 5 shifts by up
+   * to ±5 V. Each channel wanders independently.
+   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * @param options Trigger, speed, and bias ({@link ErraticOptions})
+   * @returns The shifted {@link Collection} for chaining
+   * @example $sine($c('a3').erratic(1 / 12, { speed: 1.5 })).out()  // drift up to a semitone either way
+   */
+  erratic(amount: Poly<Signal>, options?: ErraticOptions): Collection;
   
   /**
    * Add scope visualization for this output.
@@ -923,6 +933,9 @@ interface ModuleOutput {
   
   /**
    * Send this output to speakers as stereo.
+   *
+   * Options:
+${renderOutOptionsJsDocList(STEREO_OUT_OPTIONS)}
    * @param options Stereo output options ({@link StereoOutOptions})
    * @example $sine("c4").out({ gain: 2.5, pan: -2 })
    * @example $sine("c4").out({ label: 'lead' })
@@ -931,12 +944,15 @@ interface ModuleOutput {
 
   /**
    * Send this output to speakers as mono.
+   *
+   * Options:
+${renderOutOptionsJsDocList(MONO_OUT_OPTIONS)}
    * @param channelOrOptions Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
-    * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
-    * @example $sine("1hz").outMono(2, 0.3)
-    * @example $sine("c3").outMono({ channel: 2, gain: 2.5, label: 'sub' })
-    */
-   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
+   * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
+   * @example $sine("1hz").outMono(2, 0.3)
+   * @example $sine("c3").outMono({ channel: 2, gain: 2.5, label: 'sub' })
+   */
+  outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
   /**
    * Pipe this output through a transform function.
@@ -1091,6 +1107,18 @@ interface ModuleOutputWithRange extends ModuleOutput {
    * @example $sine("1hz").range("C3", "C5")
    */
   range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
+
+  /**
+   * Apply a wandering random shift scaled to this output's range: \`amount\` 5
+   * shifts by up to half the range either way, so ±5 on a 0–10 signal.
+   * Clamps to the range unless \`clamp\` is false; the result keeps the
+   * range.
+   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * @param options Trigger, speed, bias, and clamp ({@link RangedErraticOptions})
+   * @returns A {@link CollectionWithRange} with the same range
+   * @example $saw('c3').amp($sine('4hz').range(2, 5).erratic(2, { trigger: $clock.beatTrigger })).out()
+   */
+  erratic(amount: Poly<Signal>, options?: RangedErraticOptions): CollectionWithRange;
 }
 
 
@@ -1175,17 +1203,31 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
   exp(factor?: Poly<Signal>): Collection;
 
   /**
-   * Add scope visualization for the first output in the collection.
+   * Apply a wandering random shift of up to ±\`amount\` to all signals, where
+   * 5 shifts by up to ±5 V. Each channel wanders independently.
+   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * @param options Trigger, speed, and bias ({@link ErraticOptions})
+   * @returns The shifted {@link Collection} for chaining
+   * @example $sine($c('c3', 'g3').erratic(1 / 12)).out()  // each voice drifts on its own
+   */
+  erratic(amount: Poly<Signal>, options?: ErraticOptions): Collection;
+
+  /**
+   * Add scope visualization for all outputs in the collection, overlaid on one scope unless \`split\` is set.
    * @param config Scope configuration options
    * @param config.msPerFrame Time window in milliseconds (default 500)
    * @param config.triggerThreshold Trigger threshold in volts (optional)
    * @param config.triggerWaitToRender Whether the scope should wait to render until the buffer fills (default true). Only applicable if triggerThreshold is set.
    * @param config.range Voltage range for display as [min, max] tuple (default [-5, 5])
+   * @param config.split Draw each channel in its own scope instead of overlaying them: 'vertical' stacks them top to bottom, 'horizontal' fits them side by side
    */
-  scope(config?: { msPerFrame?: number; triggerThreshold?: number; triggerWaitToRender?: boolean; range?: [number, number] }): this;
+  scope(config?: { msPerFrame?: number; triggerThreshold?: number; triggerWaitToRender?: boolean; range?: [number, number]; split?: 'vertical' | 'horizontal' }): this;
 
   /**
    * Send all outputs to speakers as stereo, summed together.
+   *
+   * Options:
+${renderOutOptionsJsDocList(STEREO_OUT_OPTIONS)}
    * @param options Stereo output options ({@link StereoOutOptions})
    * @example $saw(['c3', 'e3', 'g3']).out({ label: 'chord' })
    */
@@ -1193,11 +1235,14 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
   /**
    * Send all outputs to speakers as mono, summed together.
+   *
+   * Options:
+${renderOutOptionsJsDocList(MONO_OUT_OPTIONS)}
    * @param channelOrOptions Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
-    * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
-    * @example $saw(['c2', 'c3']).outMono(0, { label: 'bass' })
-    */
-   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
+   * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
+   * @example $saw(['c2', 'c3']).outMono(0, { label: 'bass' })
+   */
+  outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
 
   /**
@@ -1354,6 +1399,17 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
    * @see {@link Collection.range} - for explicit input range
    */
   override range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
+
+  /**
+   * Apply a wandering random shift to all outputs, scaled to each output's
+   * range. Clamps to the range unless \`clamp\` is false; the result keeps
+   * the ranges.
+   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * @param options Trigger, speed, bias, and clamp ({@link RangedErraticOptions})
+   * @returns A {@link CollectionWithRange} with the same ranges
+   * @example $saw($c('c3', 'e3')).amp($sine(['4hz', '5hz']).range(2, 5).erratic(2, { speed: 3 })).out()  // each voice's tremolo wanders on its own
+   */
+  override erratic(amount: Poly<Signal>, options?: RangedErraticOptions): CollectionWithRange;
 }
 
 /**
@@ -1368,7 +1424,7 @@ class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
    * narrower argument across the channels. Bare {@link Signal} literals
    * (numbers, note/Hz strings) are lifted into $signal modules, matching $c —
    * a string is one signal, not spread into characters.
-   * @param polySignal A Poly<Signal> (single signal, array, or iterable) to distribute across outputs
+   * @param polySignal A {@link Poly<Signal>} (single signal, array, or iterable) to distribute across outputs
    */
   set(polySignal: Poly<Signal>): void;
 }
@@ -1456,7 +1512,7 @@ function $setTempo(tempo: number): void;
 
 /**
  * Set the global output gain applied to the final mix.
- * @param gain Gain as a Mono<Signal> (2.5 is default, 5.0 is unity)
+ * @param gain Gain as a {@link Mono<Signal>} (2.5 is default, 5.0 is unity)
  * @example $setOutputGain(2.5) // 50% gain (default)
  * @example $setOutputGain(5.0) // unity
  * @example $setOutputGain($adsr($clock.beatTrigger, {})) // modulate gain from envelope

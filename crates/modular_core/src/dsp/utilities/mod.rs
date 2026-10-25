@@ -12,6 +12,7 @@ pub mod clamp;
 pub mod clock_divider;
 pub mod curve;
 pub mod delay;
+pub mod erratic;
 pub mod hold;
 pub mod lag;
 pub mod logic;
@@ -25,6 +26,7 @@ pub mod sample_and_hold;
 pub mod scale;
 pub mod scale_and_shift;
 pub mod scale_names;
+pub mod smooth_control;
 pub mod spread;
 pub mod unison;
 pub mod video_tap;
@@ -44,6 +46,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     clock_divider::ClockDivider::install_constructor(map);
     curve::Curve::install_constructor(map);
     delay::DelayRead::install_constructor(map);
+    erratic::Erratic::install_constructor(map);
     hold::Hold::install_constructor(map);
     lag::LagProcessor::install_constructor(map);
     logic::RisingEdgeDetector::install_constructor(map);
@@ -57,6 +60,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     percussion_envelope::PercussionEnvelope::install_constructor(map);
     quantizer::Quantizer::install_constructor(map);
     scale_and_shift::ScaleAndShift::install_constructor(map);
+    smooth_control::SmoothControl::install_constructor(map);
     spread::Spread::install_constructor(map);
     unison::Unison::install_constructor(map);
     video_tap::VideoTap::install_constructor(map);
@@ -73,6 +77,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     clock_divider::ClockDivider::install_params_deserializer(map);
     curve::Curve::install_params_deserializer(map);
     delay::DelayRead::install_params_deserializer(map);
+    erratic::Erratic::install_params_deserializer(map);
     hold::Hold::install_params_deserializer(map);
     lag::LagProcessor::install_params_deserializer(map);
     logic::RisingEdgeDetector::install_params_deserializer(map);
@@ -86,6 +91,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     percussion_envelope::PercussionEnvelope::install_params_deserializer(map);
     quantizer::Quantizer::install_params_deserializer(map);
     scale_and_shift::ScaleAndShift::install_params_deserializer(map);
+    smooth_control::SmoothControl::install_params_deserializer(map);
     spread::Spread::install_params_deserializer(map);
     unison::Unison::install_params_deserializer(map);
     video_tap::VideoTap::install_params_deserializer(map);
@@ -103,6 +109,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         clock_divider::ClockDivider::get_schema(),
         curve::Curve::get_schema(),
         delay::DelayRead::get_schema(),
+        erratic::Erratic::get_schema(),
         hold::Hold::get_schema(),
         lag::LagProcessor::get_schema(),
         logic::RisingEdgeDetector::get_schema(),
@@ -116,6 +123,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         percussion_envelope::PercussionEnvelope::get_schema(),
         quantizer::Quantizer::get_schema(),
         scale_and_shift::ScaleAndShift::get_schema(),
+        smooth_control::SmoothControl::get_schema(),
         spread::Spread::get_schema(),
         unison::Unison::get_schema(),
         video_tap::VideoTap::get_schema(),

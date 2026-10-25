@@ -43,8 +43,14 @@ export interface ScopeDrawOptions {
         max: number;
         peakToPeak: number;
         readOffset: number[];
+        /** Per channel, in samples: see `ScopeStats.triggerOffset`. */
+        triggerOffset: number[];
     };
 }
+
+/** Narrower canvases (CSS px) drop the stats column, then the voltage legend, to keep room for the waveform. */
+const MIN_WIDTH_FOR_STATS = 360;
+const MIN_WIDTH_FOR_LEGEND = 160;
 
 export const drawOscilloscope = (
     channels: Float32Array[],
@@ -74,11 +80,16 @@ export const drawOscilloscope = (
     ctx.globalAlpha = 1;
 
     const dpr = window.devicePixelRatio || 1;
-    const legendWidth = 40 * dpr; // Reserve space for legend on left
-    const statsWidth = 140 * dpr; // Reserve space for stats on right
+    const showLegend = w / dpr >= MIN_WIDTH_FOR_LEGEND;
+    const legendWidth = showLegend ? 40 * dpr : 0; // Reserve space for legend on left
+    const showStats = Boolean(stats) && w / dpr >= MIN_WIDTH_FOR_STATS;
+    const statsWidth = showStats ? 140 * dpr : 0; // Reserve space for stats on right
     const waveformLeft = legendWidth;
     const waveformWidth = w - legendWidth - statsWidth;
     const waveformRight = waveformLeft + waveformWidth;
+    if (waveformWidth <= 0) {
+        return;
+    }
 
     const voltageRange = maxVoltage - minVoltage;
     const pixelsPerVolt = h / voltageRange;
@@ -117,27 +128,29 @@ export const drawOscilloscope = (
     // Draw legend on left
     ctx.fillStyle = mutedColor;
     ctx.font = `${10 * dpr}px "Fira Code", monospace`;
-    ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
 
-    const legendX = legendWidth - 4 * dpr;
-    const textVerticalOffset = 10 * dpr;
-    ctx.fillText(
-        `${maxVoltage.toFixed(1)}v`,
-        legendX,
-        topY + textVerticalOffset,
-    );
-    if (minVoltage <= 0 && maxVoltage >= 0) {
-        ctx.fillText('0v', legendX, zeroY);
+    if (showLegend) {
+        ctx.textAlign = 'right';
+        const legendX = legendWidth - 4 * dpr;
+        const textVerticalOffset = 10 * dpr;
+        ctx.fillText(
+            `${maxVoltage.toFixed(1)}v`,
+            legendX,
+            topY + textVerticalOffset,
+        );
+        if (minVoltage <= 0 && maxVoltage >= 0) {
+            ctx.fillText('0v', legendX, zeroY);
+        }
+        ctx.fillText(
+            `${minVoltage.toFixed(1)}v`,
+            legendX,
+            bottomY - textVerticalOffset,
+        );
     }
-    ctx.fillText(
-        `${minVoltage.toFixed(1)}v`,
-        legendX,
-        bottomY - textVerticalOffset,
-    );
 
     // Draw stats on right
-    if (stats) {
+    if (showStats) {
         ctx.textAlign = 'left';
         const statsX = waveformRight + 8 * dpr;
         const lineHeight = 14 * dpr;
@@ -175,6 +188,13 @@ export const drawOscilloscope = (
     ctx.strokeStyle = accentColor;
     ctx.lineWidth = 1.5 * dpr;
 
+    // A trigger offset shifts the trace right by under one sample; clip so the
+    // last point never draws into the stats column.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(waveformLeft, 0, waveformWidth, h);
+    ctx.clip();
+
     for (const [ch, data] of channels.entries()) {
         if (!data || data.length < 2) {
             continue;
@@ -182,12 +202,13 @@ export const drawOscilloscope = (
 
         const sampleCount = Math.min(windowSize, data.length);
         const stepX = waveformWidth / (windowSize - 1);
+        const offsetX = (stats.triggerOffset[ch] ?? 0) * stepX;
 
         ctx.beginPath();
 
         for (let i = 0; i < sampleCount; i++) {
             const dataIndex = (i + stats.readOffset[ch]) % data.length;
-            const x = waveformLeft + stepX * i;
+            const x = waveformLeft + offsetX + stepX * i;
             const rawSample = data[dataIndex];
             const clampedSample = Math.max(
                 minVoltage,
@@ -204,4 +225,6 @@ export const drawOscilloscope = (
 
         ctx.stroke();
     }
+
+    ctx.restore();
 };
