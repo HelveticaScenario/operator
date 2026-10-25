@@ -1,3 +1,4 @@
+import type { ReleaseNotes } from '../../shared/releaseNotes';
 import './UpdateNotification.css';
 
 export type UpdateNotificationState =
@@ -7,6 +8,9 @@ export type UpdateNotificationState =
           version: string;
           releaseUrl: string;
           supportsInAppUpdate: boolean;
+          currentVersion: string;
+          releaseNotes: ReleaseNotes[];
+          hasBreakingChanges: boolean;
       }
     | { status: 'downloading'; version: string }
     | { status: 'preparing'; version: string }
@@ -19,6 +23,7 @@ interface Props {
     onInstall: () => void;
     onSkip: () => void;
     onDismiss: () => void;
+    onShowReleaseNotes: () => void;
 }
 
 export function UpdateNotification({
@@ -27,6 +32,7 @@ export function UpdateNotification({
     onInstall,
     onSkip,
     onDismiss,
+    onShowReleaseNotes,
 }: Props) {
     if (state.status === 'idle') {
         return null;
@@ -46,6 +52,9 @@ export function UpdateNotification({
                 onClick: onDownload,
             };
             secondaryActions = [
+                ...(state.releaseNotes.length > 0
+                    ? [{ label: "What's New", onClick: onShowReleaseNotes }]
+                    : []),
                 { label: 'Skip This Version', onClick: onSkip },
                 { label: 'Dismiss', onClick: onDismiss },
             ];
@@ -70,7 +79,14 @@ export function UpdateNotification({
 
     return (
         <div className="update-notification" role="status" aria-live="polite">
-            <span className="update-notification__message">{message}</span>
+            <span className="update-notification__message">
+                {message}
+                {state.status === 'available' && state.hasBreakingChanges && (
+                    <span className="update-notification__breaking">
+                        Includes breaking changes
+                    </span>
+                )}
+            </span>
             <div className="update-notification__actions">
                 {primaryAction && (
                     <button

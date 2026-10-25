@@ -1,0 +1,3 @@
+kind: New
+body: Operator now shows release notes. Before you update, you can read everything that changed since your version, with any changes that might affect your patches listed first. After an update, a "What's new" window shows what changed, and Help → Release Notes shows the full history at any time.
+time: 2026-10-24T22:13:05.483777-04:00

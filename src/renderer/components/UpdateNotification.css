@@ -25,6 +25,15 @@
     text-overflow: ellipsis;
 }
 
+.update-notification__breaking {
+    margin-left: 10px;
+    padding: 1px 6px;
+    border: 1px solid var(--color-warning, #d4a855);
+    border-radius: 3px;
+    font-size: calc(var(--font-size, 18px) * 0.6);
+    color: var(--color-warning, #d4a855);
+}
+
 .update-notification__actions {
     display: flex;
     gap: 8px;

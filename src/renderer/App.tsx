@@ -23,6 +23,8 @@ import { migrateCycleCalls } from './dsl/migrateCycleCalls';
 import { migrateWavetableArgs } from './dsl/migrateWavetableArgs';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
+import { ReleaseNotesDialog } from './components/ReleaseNotesDialog';
+import type { ReleaseNotes } from '../shared/releaseNotes';
 import { CommandPalette } from './components/CommandPalette';
 import './App.css';
 import { editor } from 'monaco-editor';
@@ -107,6 +109,11 @@ import {
     useTransportLinkEnabled,
 } from './app/transportStore';
 import { useTheme } from './themes/ThemeContext';
+
+type ReleaseNotesView =
+    | { kind: 'update' }
+    | { kind: 'whatsNew'; currentVersion: string; releases: ReleaseNotes[] }
+    | { kind: 'changelog'; releases: ReleaseNotes[] };
 
 function App() {
     const {
@@ -228,6 +235,8 @@ function App() {
     });
     // Store the version currently being offered so we can reference it later
     const pendingUpdateVersion = useRef('');
+    const [releaseNotesView, setReleaseNotesView] =
+        useState<ReleaseNotesView | null>(null);
 
     const editorRef = useRef<editor.IStandaloneCodeEditor>(null);
     // Mirror of editorRef as state so children that need to react when the
@@ -1143,6 +1152,9 @@ function App() {
             (info: UpdateAvailableInfo) => {
                 pendingUpdateVersion.current = info.version;
                 setUpdateState({
+                    currentVersion: info.currentVersion,
+                    hasBreakingChanges: info.hasBreakingChanges,
+                    releaseNotes: info.releaseNotes,
                     releaseUrl: info.releaseUrl,
                     status: 'available',
                     supportsInAppUpdate: info.supportsInAppUpdate,
@@ -1176,6 +1188,39 @@ function App() {
             unsubDownloaded();
             unsubError();
         };
+    }, []);
+
+    // The main process records the running version as seen on the first call,
+    // so the result is applied even if this effect is torn down meanwhile.
+    useEffect(() => {
+        electronAPI.releaseNotes
+            .whatsNew()
+            .then((info) => {
+                if (info.releaseNotes.length > 0) {
+                    setReleaseNotesView({
+                        currentVersion: info.currentVersion,
+                        kind: 'whatsNew',
+                        releases: info.releaseNotes,
+                    });
+                }
+            })
+            .catch((err) => {
+                console.warn("[release-notes] What's new failed:", err);
+            });
+        return electronAPI.releaseNotes.onMenuShow(() => {
+            electronAPI.releaseNotes
+                .getAll()
+                .then((releases) => {
+                    setReleaseNotesView({ kind: 'changelog', releases });
+                })
+                .catch((err) => {
+                    console.warn('[release-notes] Changelog failed:', err);
+                });
+        });
+    }, []);
+
+    const closeReleaseNotes = useCallback(() => {
+        setReleaseNotesView(null);
     }, []);
 
     const handleUpdateDownload = useCallback(() => {
@@ -2986,7 +3031,53 @@ function App() {
                 onInstall={handleUpdateInstall}
                 onSkip={handleUpdateSkip}
                 onDismiss={handleUpdateDismiss}
+                onShowReleaseNotes={() =>
+                    setReleaseNotesView({ kind: 'update' })
+                }
             />
+            {releaseNotesView?.kind === 'update' &&
+                updateState.status === 'available' && (
+                    <ReleaseNotesDialog
+                        title={`Version ${updateState.version} is available`}
+                        summary={`You have version ${updateState.currentVersion}. Here is everything that changed since then.`}
+                        releases={updateState.releaseNotes}
+                        actions={[
+                            {
+                                label: updateState.supportsInAppUpdate
+                                    ? 'Download & Install'
+                                    : 'View Release',
+                                onClick: () => {
+                                    closeReleaseNotes();
+                                    handleUpdateDownload();
+                                },
+                                primary: true,
+                            },
+                            {
+                                label: 'Skip This Version',
+                                onClick: () => {
+                                    closeReleaseNotes();
+                                    handleUpdateSkip();
+                                },
+                            },
+                            { label: 'Not Now', onClick: closeReleaseNotes },
+                        ]}
+                        onClose={closeReleaseNotes}
+                    />
+                )}
+            {releaseNotesView?.kind === 'whatsNew' && (
+                <ReleaseNotesDialog
+                    title={`What's new in version ${releaseNotesView.currentVersion}`}
+                    releases={releaseNotesView.releases}
+                    onClose={closeReleaseNotes}
+                />
+            )}
+            {releaseNotesView?.kind === 'changelog' && (
+                <ReleaseNotesDialog
+                    title="Release Notes"
+                    releases={releaseNotesView.releases}
+                    onClose={closeReleaseNotes}
+                />
+            )}
         </div>
     );
 }

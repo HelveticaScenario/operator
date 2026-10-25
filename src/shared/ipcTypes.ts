@@ -6,6 +6,7 @@
  */
 
 import type { MonospaceFont } from './fonts';
+import type { ReleaseNotes } from './releaseNotes';
 import type {
     ApplyPatchError,
     AudioConfigOptions,
@@ -99,6 +100,8 @@ export interface AppConfig {
     lastOpenedFolder?: string;
     audioConfig?: AudioConfig;
     skippedUpdateVersion?: string;
+    /** App version whose release notes were last shown; absent until the first launch records it. */
+    lastSeenVersion?: string;
     /** Opacity (0..1) of the dark backing behind each line of code while video shows behind the code. Default 0.6. */
     codeBackdropOpacity?: number;
     /** Shape of the performance window: a fixed aspect ratio, or free. Default 'free'. */
@@ -163,6 +166,18 @@ export interface UpdateAvailableInfo {
      * primary action opens the release page in the browser instead.
      */
     supportsInAppUpdate: boolean;
+    /** The running app's version. */
+    currentVersion: string;
+    /** Notes for every release after `currentVersion` up to `version`, newest first. */
+    releaseNotes: ReleaseNotes[];
+    /** Whether installing this update may require changes to the user's patches. */
+    hasBreakingChanges: boolean;
+}
+
+export interface WhatsNewInfo {
+    currentVersion: string;
+    /** Releases the user has not seen notes for yet, newest first; empty when there is nothing to show. */
+    releaseNotes: ReleaseNotes[];
 }
 
 export interface UpdatePatchResult {
@@ -437,6 +452,10 @@ export const IPC_CHANNELS = {
     UPDATE_PREPARING: 'modular:update:preparing',
     UPDATE_DOWNLOADED: 'modular:update:downloaded',
     UPDATE_ERROR: 'modular:update:error',
+
+    // Release notes
+    RELEASE_NOTES_WHATS_NEW: 'modular:release-notes:whats-new',
+    RELEASE_NOTES_GET_ALL: 'modular:release-notes:get-all',
 } as const;
 
 export const MENU_CHANNELS = {
@@ -450,6 +469,7 @@ export const MENU_CHANNELS = {
     OPEN_SETTINGS: 'modular:menu:open-settings',
     OPEN_WORKSPACE: 'modular:menu:open-workspace',
     SAVE: 'modular:menu:save',
+    SHOW_RELEASE_NOTES: 'modular:menu:show-release-notes',
     STOP: 'modular:menu:stop',
     CANCEL_QUEUED_UPDATE: 'modular:menu:cancel-queued-update',
     TOGGLE_RECORDING: 'modular:menu:toggle-recording',
@@ -649,6 +669,14 @@ export interface IPCHandlers {
     [IPC_CHANNELS.UPDATE_PREPARING]: () => void;
     [IPC_CHANNELS.UPDATE_DOWNLOADED]: () => void;
     [IPC_CHANNELS.UPDATE_ERROR]: (message: string) => void;
+
+    /**
+     * Notes for releases since the last launch, from the bundled changelog.
+     * Records the running version as seen, so a second call returns nothing.
+     */
+    [IPC_CHANNELS.RELEASE_NOTES_WHATS_NEW]: () => WhatsNewInfo;
+    /** Every release in the bundled changelog that has notes, newest first. */
+    [IPC_CHANNELS.RELEASE_NOTES_GET_ALL]: () => ReleaseNotes[];
 }
 
 /**
