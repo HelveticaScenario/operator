@@ -27,6 +27,7 @@
         "lint": "oxlint src --config .oxlintrc.json -A tsconfig-error",
         "lint:fix": "oxlint src --fix --config .oxlintrc.json -A tsconfig-error",
         "knip": "knip",
+        "experimental:report": "node scripts/release/experimental-report.mjs",
         "rebuild": "yarn build-native && electron-rebuild -f -w modular-core",
         "watch-native": "node scripts/watch-native.mjs",
         "watch-native-alloc": "node scripts/watch-native.mjs --features=alloc-detector",

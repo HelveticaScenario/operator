@@ -173,7 +173,8 @@
         "maxValue": 5.0
       }
     ],
-    "positionalArgs": []
+    "positionalArgs": [],
+    "experimental": false
   },
   {
     "name": "$swell",
@@ -364,7 +365,8 @@
       {
         "name": "freq"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$signal",
@@ -465,7 +467,8 @@
       {
         "name": "value"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$mix",
@@ -609,7 +612,8 @@
       {
         "name": "inputs"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$mixDown",
@@ -750,7 +754,8 @@
         "name": "channels"
       }
     ],
-    "channelsParam": "channels"
+    "channelsParam": "channels",
+    "experimental": false
   },
   {
     "name": "$stereoMix",
@@ -903,7 +908,8 @@
         "name": "input"
       }
     ],
-    "channels": 2
+    "channels": 2,
+    "experimental": false
   },
   {
     "name": "_clock",
@@ -1087,11 +1093,12 @@
         "name": "denominator"
       }
     ],
-    "channels": 2
+    "channels": 2,
+    "experimental": false
   },
   {
     "name": "$comp",
-    "documentation": "EXPERIMENTAL\n\nSingle-band feed-forward dynamics processor with peak envelope follower.\n\nTwo stages run in parallel:\n\n- **downward stage** acts on signal above `threshold`. `ratio > 1` =\n  compression, `ratio < 1` = upward expansion (boost loud), `ratio = 1` =\n  passthrough.\n- **upward stage** acts on signal below `upwardThreshold`. `upwardRatio > 1`\n  = upward compression (boost quiet), `upwardRatio < 1` = downward\n  expansion / gate-like attenuation of quiet signal, `upwardRatio = 1` =\n  passthrough.\n\nBoth ratios use textbook `X:1` notation (X = Δinput dB / Δoutput dB) and\nare lower-bounded at 1e-3 (≈ Ableton's 1:1000 display). The detected\nlevel is clamped to ±60 dB so expansion stays bounded at signal extremes.\n\nAn optional **side-chain** input lets the envelope follower track an\nexternal signal while the gain is applied to `input` — useful for\nducking, kick-triggered pumping, or building multiband effects like OTT.\n\n**Signal flow:** input → input gain → (detector: side-chain or input)\n  → up + down compression → output gain → dry/wet mix → output\n\n- **threshold** — downward stage threshold in volts (0–5, default 2.5).\n- **ratio** — downward stage ratio in textbook X:1 form. > 1 compresses,\n  < 1 expands (boosts loud signal), 1 = passthrough. Lower-bounded at\n  1e-3 (≈ 1:1000 expansion); upper bound is `f32::INFINITY` =\n  brick-wall limiter. Default 4.0 (= Ableton display 1:0.25).\n- **upwardThreshold** — upward stage threshold in volts (0–5, default 0).\n- **upwardRatio** — upward stage ratio in textbook X:1 form. > 1 boosts\n  quiet signal, < 1 gates quiet signal, 1 = passthrough. Same bounds as\n  `ratio`. Default 1 (passthrough).\n- **sidechain** — optional external detector signal.\n- **attack** / **release** — envelope follower time constants in seconds.\n- **makeup** — post-compression makeup gain as a dB-domain voltage\n  (-5V = -24dB, 0V = unity, +5V = +24dB, default 0).\n- **inputGain** — gain before the compressor (-5V = -24dB, 0V = unity,\n  5V = +24dB). Raising input gain drives more signal into the compressor.\n- **outputGain** — gain after compression (-5V = -24dB, 0V = unity,\n  5V = +24dB). Trims the final output level.\n- **mix** — dry/wet blend (0 = fully dry, 5 = fully wet, default 5.0).\n  The dry signal is the original input before any gain staging.\n\n```js\n// simple bus compressor\n$comp($saw('c2'), { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })\n```\n\n```js\n// side-chain ducking — a kick envelope ducks a sustained pad\n$comp($saw('c3'), {\n  sidechain: $perc($clock.beatTrigger, { decay: 0.2 }),\n  threshold: 1.0, ratio: 8, attack: 0.005, release: 0.2,\n})\n```\n\n```js\n// multiband compression using $xover + $comp\nlet bands = $xover($saw('c2'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix([low, mid, high]).out()\n```",
+    "documentation": "Single-band feed-forward dynamics processor with peak envelope follower.\n\nTwo stages run in parallel:\n\n- **downward stage** acts on signal above `threshold`. `ratio > 1` =\n  compression, `ratio < 1` = upward expansion (boost loud), `ratio = 1` =\n  passthrough.\n- **upward stage** acts on signal below `upwardThreshold`. `upwardRatio > 1`\n  = upward compression (boost quiet), `upwardRatio < 1` = downward\n  expansion / gate-like attenuation of quiet signal, `upwardRatio = 1` =\n  passthrough.\n\nBoth ratios use textbook `X:1` notation (X = Δinput dB / Δoutput dB) and\nare lower-bounded at 1e-3 (≈ Ableton's 1:1000 display). The detected\nlevel is clamped to ±60 dB so expansion stays bounded at signal extremes.\n\nAn optional **side-chain** input lets the envelope follower track an\nexternal signal while the gain is applied to `input` — useful for\nducking, kick-triggered pumping, or building multiband effects like OTT.\n\n**Signal flow:** input → input gain → (detector: side-chain or input)\n  → up + down compression → output gain → dry/wet mix → output\n\n- **threshold** — downward stage threshold in volts (0–5, default 2.5).\n- **ratio** — downward stage ratio in textbook X:1 form. > 1 compresses,\n  < 1 expands (boosts loud signal), 1 = passthrough. Lower-bounded at\n  1e-3 (≈ 1:1000 expansion); upper bound is `f32::INFINITY` =\n  brick-wall limiter. Default 4.0 (= Ableton display 1:0.25).\n- **upwardThreshold** — upward stage threshold in volts (0–5, default 0).\n- **upwardRatio** — upward stage ratio in textbook X:1 form. > 1 boosts\n  quiet signal, < 1 gates quiet signal, 1 = passthrough. Same bounds as\n  `ratio`. Default 1 (passthrough).\n- **sidechain** — optional external detector signal.\n- **attack** / **release** — envelope follower time constants in seconds.\n- **makeup** — post-compression makeup gain as a dB-domain voltage\n  (-5V = -24dB, 0V = unity, +5V = +24dB, default 0).\n- **inputGain** — gain before the compressor (-5V = -24dB, 0V = unity,\n  5V = +24dB). Raising input gain drives more signal into the compressor.\n- **outputGain** — gain after compression (-5V = -24dB, 0V = unity,\n  5V = +24dB). Trims the final output level.\n- **mix** — dry/wet blend (0 = fully dry, 5 = fully wet, default 5.0).\n  The dry signal is the original input before any gain staging.\n\n```js\n// simple bus compressor\n$comp($saw('c2'), { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })\n```\n\n```js\n// side-chain ducking — a kick envelope ducks a sustained pad\n$comp($saw('c3'), {\n  sidechain: $perc($clock.beatTrigger, { decay: 0.2 }),\n  threshold: 1.0, ratio: 8, attack: 0.005, release: 0.2,\n})\n```\n\n```js\n// multiband compression using $xover + $comp\nlet bands = $xover($saw('c2'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix([low, mid, high]).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "CompressorParams",
@@ -1397,11 +1404,12 @@
       {
         "name": "input"
       }
-    ]
+    ],
+    "experimental": true
   },
   {
     "name": "$xover",
-    "documentation": "EXPERIMENTAL\n\nThree-band crossover / band splitter.\n\nSplits an input signal into three frequency bands (low, mid, high).\nThe default `sample` output passes the input through unchanged,\nso the module is a no-op unless you explicitly tap the\n`.low`, `.mid`, or `.high` outputs.\n\nTwo crossover frequencies define the band boundaries:\n- **lowMidFreq** — boundary between the low and mid bands (V/Oct, default ~200 Hz).\n- **midHighFreq** — boundary between the mid and high bands (V/Oct, default ~2000 Hz).\n\n```js\n// Split into 3 bands and process each independently\nlet bands = $xover($saw('c2'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix([low, mid, high]).out()\n```",
+    "documentation": "Three-band crossover / band splitter.\n\nSplits an input signal into three frequency bands (low, mid, high).\nThe default `sample` output passes the input through unchanged,\nso the module is a no-op unless you explicitly tap the\n`.low`, `.mid`, or `.high` outputs.\n\nTwo crossover frequencies define the band boundaries:\n- **lowMidFreq** — boundary between the low and mid bands (V/Oct, default ~200 Hz).\n- **midHighFreq** — boundary between the mid and high bands (V/Oct, default ~2000 Hz).\n\n```js\n// Split into 3 bands and process each independently\nlet bands = $xover($saw('c2'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix([low, mid, high]).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "CrossoverParams",
@@ -1554,7 +1562,8 @@
       {
         "name": "input"
       }
-    ]
+    ],
+    "experimental": true
   },
   {
     "name": "$fold",
@@ -1692,7 +1701,8 @@
       {
         "name": "amount"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$cheby",
@@ -1835,7 +1845,8 @@
       {
         "name": "amount"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$dattorro",
@@ -2064,7 +2075,8 @@
         "name": "input"
       }
     ],
-    "channels": 2
+    "channels": 2,
+    "experimental": false
   },
   {
     "name": "$overdrive",
@@ -2231,7 +2243,8 @@
       {
         "name": "drive"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$filterDC",
@@ -2332,7 +2345,8 @@
       {
         "name": "input"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$plate",
@@ -2523,7 +2537,8 @@
         "name": "input"
       }
     ],
-    "channels": 2
+    "channels": 2,
+    "experimental": false
   },
   {
     "name": "$quantNoise",
@@ -2678,7 +2693,8 @@
       {
         "name": "amount"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.reverb",
@@ -2907,7 +2923,8 @@
         "name": "input"
       }
     ],
-    "channels": 2
+    "channels": 2,
+    "experimental": false
   },
   {
     "name": "$unstable.reverb2",
@@ -3136,7 +3153,8 @@
         "name": "input"
       }
     ],
-    "channels": 2
+    "channels": 2,
+    "experimental": false
   },
   {
     "name": "$segment",
@@ -3274,7 +3292,8 @@
       {
         "name": "amount"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$sine",
@@ -3459,7 +3478,8 @@
       {
         "name": "freq"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$saw",
@@ -3668,7 +3688,8 @@
       {
         "name": "freq"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$pulse",
@@ -3891,7 +3912,8 @@
       {
         "name": "freq"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$pSine",
@@ -3994,7 +4016,8 @@
       {
         "name": "phase"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$pSaw",
@@ -4116,7 +4139,8 @@
       {
         "name": "phase"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$pPulse",
@@ -4257,7 +4281,8 @@
       {
         "name": "phase"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$noise",
@@ -4462,7 +4487,8 @@
       {
         "name": "color"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$macro",
@@ -4942,7 +4968,8 @@
       {
         "name": "engine"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$supersaw",
@@ -5139,7 +5166,8 @@
       {
         "name": "freq"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$wavetable",
@@ -5505,7 +5533,8 @@
       {
         "name": "position"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$lpf",
@@ -5644,7 +5673,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$apf",
@@ -5825,7 +5855,8 @@
       {
         "name": "cutoff"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$hpf",
@@ -5964,7 +5995,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$bpf",
@@ -6103,7 +6135,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$jup6f",
@@ -6268,7 +6301,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$lpg",
@@ -6448,7 +6482,8 @@
       {
         "name": "trigger"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$multimode",
@@ -6678,7 +6713,8 @@
       {
         "name": "mode"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$eq",
@@ -6899,7 +6935,8 @@
       {
         "name": "input"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.lp",
@@ -7083,7 +7120,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.hp",
@@ -7267,7 +7305,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.bp",
@@ -7461,7 +7500,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.notch",
@@ -7640,7 +7680,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.ap",
@@ -7781,7 +7822,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.legacyLadder",
@@ -7951,7 +7993,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.diodeLadder",
@@ -8121,7 +8164,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.vintageLadder",
@@ -8291,7 +8335,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.k35Lp",
@@ -8466,7 +8511,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.k35Hp",
@@ -8641,7 +8687,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.obxd2Lp",
@@ -8801,7 +8848,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.obxd2Bp",
@@ -8961,7 +9009,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.obxd2Hp",
@@ -9121,7 +9170,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.obxd2Notch",
@@ -9281,7 +9331,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.obxd4",
@@ -9456,7 +9507,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.xpander",
@@ -9681,7 +9733,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.cutoffWarpLp",
@@ -9856,7 +9909,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.cutoffWarpHp",
@@ -10031,7 +10085,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.cutoffWarpBp",
@@ -10206,7 +10261,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.cutoffWarpNotch",
@@ -10381,7 +10437,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.cutoffWarpAp",
@@ -10556,7 +10613,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.resWarpLp",
@@ -10726,7 +10784,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.resWarpHp",
@@ -10896,7 +10955,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.resWarpBp",
@@ -11066,7 +11126,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.resWarpNotch",
@@ -11236,7 +11297,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.resWarpAp",
@@ -11406,7 +11468,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.tripole",
@@ -11586,7 +11649,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.fastSvf",
@@ -11766,7 +11830,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.sah",
@@ -11907,7 +11972,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.filter.comb",
@@ -12086,7 +12152,8 @@
       {
         "name": "resonance"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$crush",
@@ -12211,7 +12278,8 @@
       {
         "name": "amount"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$feedback",
@@ -12355,7 +12423,8 @@
       {
         "name": "amount"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$pulsar",
@@ -12499,7 +12568,8 @@
       {
         "name": "amount"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$ramp",
@@ -12602,7 +12672,8 @@
       {
         "name": "freq"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$addHz",
@@ -12719,7 +12790,8 @@
       {
         "name": "offset"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$adsr",
@@ -12941,7 +13013,8 @@
       {
         "name": "gate"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$bufRead",
@@ -13075,7 +13148,8 @@
       {
         "name": "frame"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$buffer",
@@ -13180,7 +13254,8 @@
       {
         "name": "length"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$chord",
@@ -13218,7 +13293,8 @@
       {
         "name": "chord"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$clamp",
@@ -13357,7 +13433,8 @@
       {
         "name": "input"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$clockDivider",
@@ -13487,7 +13564,8 @@
       {
         "name": "division"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$curve",
@@ -13604,7 +13682,8 @@
       {
         "name": "exp"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$delayRead",
@@ -13738,7 +13817,8 @@
       {
         "name": "time"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "_erratic",
@@ -13955,7 +14035,8 @@
       {
         "name": "amount"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$hold",
@@ -14080,7 +14161,8 @@
       {
         "name": "time"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$slew",
@@ -14219,7 +14301,8 @@
       {
         "name": "input"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$rising",
@@ -14320,7 +14403,8 @@
       {
         "name": "input"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$falling",
@@ -14421,7 +14505,8 @@
       {
         "name": "input"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$math",
@@ -14571,7 +14656,8 @@
       {
         "name": "expression"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$motionFollower",
@@ -14785,7 +14871,8 @@
       {
         "name": "input"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$mulHz",
@@ -14902,7 +14989,8 @@
       {
         "name": "factor"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$remap",
@@ -15067,7 +15155,8 @@
       {
         "name": "inMax"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$sah",
@@ -15184,7 +15273,8 @@
       {
         "name": "trigger"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$tah",
@@ -15301,7 +15391,8 @@
       {
         "name": "gate"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$perc",
@@ -15423,7 +15514,8 @@
       {
         "name": "trigger"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$quantizer",
@@ -15597,7 +15689,8 @@
       {
         "name": "scale"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$scaleAndShift",
@@ -15742,7 +15835,8 @@
       {
         "name": "shift"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "_smoothControl",
@@ -15776,7 +15870,8 @@
       {
         "name": "value"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$spread",
@@ -15923,7 +16018,8 @@
         "name": "count"
       }
     ],
-    "channelsParam": "count"
+    "channelsParam": "count",
+    "experimental": false
   },
   {
     "name": "$unison",
@@ -16056,7 +16152,8 @@
       {
         "name": "spread"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "_videoTap",
@@ -16167,7 +16264,8 @@
       {
         "name": "slot"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$wrap",
@@ -16305,7 +16403,8 @@
       {
         "name": "max"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$cycle",
@@ -18529,7 +18628,8 @@
       {
         "name": "pattern"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$track",
@@ -18704,7 +18804,8 @@
       {
         "name": "keyframes"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$step",
@@ -18848,7 +18949,8 @@
       {
         "name": "next"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$drumMap",
@@ -19172,7 +19274,8 @@
         "maxValue": 5.0
       }
     ],
-    "positionalArgs": []
+    "positionalArgs": [],
+    "experimental": false
   },
   {
     "name": "$groove",
@@ -19357,7 +19460,8 @@
       {
         "name": "template"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$midiCV",
@@ -19522,7 +19626,8 @@
     "bufferOutputs": [],
     "signalParams": [],
     "positionalArgs": [],
-    "channelsParam": "channels"
+    "channelsParam": "channels",
+    "experimental": false
   },
   {
     "name": "$midiCC",
@@ -19584,7 +19689,8 @@
     ],
     "bufferOutputs": [],
     "signalParams": [],
-    "positionalArgs": []
+    "positionalArgs": [],
+    "experimental": false
   },
   {
     "name": "$grains",
@@ -19863,7 +19969,8 @@
       {
         "name": "gate"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "_mediaAudio",
@@ -19942,7 +20049,8 @@
       {
         "name": "wav"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$sampler",
@@ -20131,7 +20239,8 @@
       {
         "name": "gate"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.shape.saturate",
@@ -20294,7 +20403,8 @@
       {
         "name": "drive"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.shape.harmonic",
@@ -20487,7 +20597,8 @@
       {
         "name": "drive"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.shape.rectify",
@@ -20645,7 +20756,8 @@
       {
         "name": "drive"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.shape.fold",
@@ -20813,7 +20925,8 @@
       {
         "name": "drive"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.shape.fuzz",
@@ -20976,7 +21089,8 @@
       {
         "name": "drive"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.shape.trigonometric",
@@ -21169,7 +21283,8 @@
       {
         "name": "drive"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.shape.digital",
@@ -21294,7 +21409,8 @@
       {
         "name": "drive"
       }
-    ]
+    ],
+    "experimental": false
   },
   {
     "name": "$unstable.shape.sine",
@@ -21419,6 +21535,7 @@
       {
         "name": "drive"
       }
-    ]
+    ],
+    "experimental": false
   }
 ]

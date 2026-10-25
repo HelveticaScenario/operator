@@ -171,8 +171,6 @@ struct ChannelState {
 
 // ── Module ───────────────────────────────────────────────────────────────────
 
-/// EXPERIMENTAL
-///
 /// Three-band crossover / band splitter.
 ///
 /// Splits an input signal into three frequency bands (low, mid, high).
@@ -192,7 +190,7 @@ struct ChannelState {
 /// let high = $comp(bands.high, { threshold: 2,   ratio: 6 })
 /// $mix([low, mid, high]).out()
 /// ```
-#[module(name = "$xover", args(input))]
+#[module(name = "$xover", args(input), experimental)]
 pub struct Crossover {
     outputs: CrossoverOutputs,
     channel_state: Box<[ChannelState]>,

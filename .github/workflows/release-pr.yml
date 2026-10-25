@@ -27,8 +27,12 @@ jobs:
                   app-id: ${{ vars.RELEASE_APP_ID }}
                   private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
+            # Full history: the experimental-modules report dates each module
+            # by the last commit touching its source.
             - name: Checkout code
               uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
 
             - name: Setup Node.js
               uses: actions/setup-node@v4
@@ -52,6 +56,8 @@ jobs:
                     echo "Merging this PR publishes **v$VERSION**. Review the release notes below — they are what users see before updating."
                     echo
                     tail -n +2 ".changes/v$VERSION.md"
+                    echo
+                    node scripts/release/experimental-report.mjs
                   } > "$RUNNER_TEMP/release-pr-body.md"
 
             - name: Open or update release PR

@@ -136,6 +136,16 @@ Use it to verify the "no heap allocation on the audio thread" rule above. Notes:
 3. Rebuild N-API (`yarn build-native`) to refresh `crates/modular/index.d.ts`.
 4. Adjust DSL factories in `src/main/dsl/factories.ts` if needed.
 
+### Experimental Modules
+
+`#[module(name = "$comp", args(input), experimental)]` marks a module experimental; the editor's hover, completion and signature help, and the help window tell users its sound and params may still change.
+
+- **Mark a module experimental** when any of these hold: its API (name, params, ranges, outputs) isn't settled; its sound hasn't been validated against a reference or by listening; a planned feature would change its param shape; it is one of several competing candidates.
+- **Not a reason:** failing the alloc audit or another engine rule. A module that breaks those never merges.
+- **Graduate** by deleting the flag (the name stays, so patches keep working) once param conventions are followed (0–5 knob ranges, V/Oct), docs and runnable examples exist, tests exist, the API has been stable for a while, and the user signs off explicitly.
+- Changes to an experimental module's API or sound are still breaking changes: changelog kind `Breaking`.
+- `yarn experimental:report` lists experimental modules and flags those unchanged for over 60 days as overdue; every release PR includes it.
+
 ### Reserved Output Names
 
 When adding methods to `ModuleOutput`, `ModuleOutputWithRange`, `BaseCollection`, `Collection`, or `CollectionWithRange`, add the method name to `RESERVED_OUTPUT_NAMES` in `crates/reserved_output_names.rs`. This is the single source of truth shared by the Rust proc-macro and TypeScript DSL via NAPI.

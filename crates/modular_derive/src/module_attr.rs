@@ -43,6 +43,7 @@ impl syn::parse::Parse for ArgAttr {
 ///     stateful,
 ///     patch_update,
 ///     has_init,
+///     experimental,
 /// )]
 /// ```
 pub struct ModuleAttrArgs {
@@ -54,6 +55,7 @@ pub struct ModuleAttrArgs {
     has_prepare_resources: bool,
     clock_sync: bool,
     block: bool,
+    experimental: bool,
 }
 
 impl syn::parse::Parse for ModuleAttrArgs {
@@ -70,6 +72,7 @@ impl syn::parse::Parse for ModuleAttrArgs {
         let mut has_prepare_resources = false;
         let mut clock_sync = false;
         let mut block = false;
+        let mut experimental = false;
 
         while !input.is_empty() {
             let ident: Ident = input.parse()?;
@@ -130,6 +133,9 @@ impl syn::parse::Parse for ModuleAttrArgs {
                 "block" => {
                     block = true;
                 }
+                "experimental" => {
+                    experimental = true;
+                }
                 other => {
                     return Err(syn::Error::new(
                         ident.span(),
@@ -137,7 +143,8 @@ impl syn::parse::Parse for ModuleAttrArgs {
                             "Unknown module attribute '{other}'. Expected one of: \
                              name, channels, channels_param, \
                              channels_param_default, channels_derive, args, \
-                             stateful, patch_update, has_init, has_prepare_resources, clock_sync, block"
+                             stateful, patch_update, has_init, has_prepare_resources, clock_sync, block, \
+                             experimental"
                         ),
                     ));
                 }
@@ -169,6 +176,7 @@ impl syn::parse::Parse for ModuleAttrArgs {
             has_prepare_resources,
             clock_sync,
             block,
+            experimental,
         })
     }
 }
@@ -197,6 +205,8 @@ impl syn::parse::Parse for ModuleAttrArgs {
 ///     // block,         // also has fn process_block(&mut self, outputs, range,
 ///     //                // sample_rate: f32) -> Option<()>, run in Block mode
 ///     //                // (see crate::block_input)
+///     // experimental,  // API and sound may still change; shown to users
+///     //                // in editor docs
 /// )]
 /// pub struct MyModule { ... }
 /// ```
@@ -480,6 +490,7 @@ fn impl_module_macro_attr(
     };
 
     let is_stateful = attr_args.stateful;
+    let experimental = attr_args.experimental;
 
     // Editor-state publishing. Only stateful modules opt in; they write their
     // live state into a pre-allocated, type-erased slot on the audio thread
@@ -1086,6 +1097,7 @@ fn impl_module_macro_attr(
                     channels: #module_channels,
                     channels_param: #module_channels_param,
                     channels_param_default: #module_channels_param_default,
+                    experimental: #experimental,
                 }
             }
         }

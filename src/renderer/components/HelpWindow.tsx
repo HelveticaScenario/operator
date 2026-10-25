@@ -23,6 +23,7 @@ import {
     schemaToTypeExpr,
     getEnumVariants,
 } from '../../shared/dsl/schemaTypeResolver';
+import { EXPERIMENTAL_NOTICE } from '../../shared/dsl/experimental';
 import './HelpWindow.css';
 
 type Page =
@@ -487,6 +488,11 @@ export const HelpWindow: React.FC = () => {
                                         <code>{getSignature(module)}</code>
                                     </h3>
                                     <div className="module-documentation">
+                                        {module.experimental && (
+                                            <Markdown>
+                                                {EXPERIMENTAL_NOTICE}
+                                            </Markdown>
+                                        )}
                                         <Markdown>
                                             {module.documentation}
                                         </Markdown>
