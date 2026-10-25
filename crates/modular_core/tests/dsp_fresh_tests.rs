@@ -355,7 +355,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$mulHz" => json!({ "input": 0.0, "factor": 1.0 }),
         "$curve" => json!({ "input": 0.0, "exp": 1.0 }),
         "$cycle" => json!({ "pattern": mini_payload("0") }),
-        "$slew" | "$hold" | "$motionFollower" | "$quantizer" | "$unison" | "$crush"
+        "$lpg" | "$slew" | "$hold" | "$motionFollower" | "$quantizer" | "$unison" | "$crush"
         | "$feedback" | "$pulsar" | "$rising" | "$falling" | "$stereoMix" | "$mixDown" => {
             json!({ "input": 0.0 })
         }
@@ -3287,5 +3287,436 @@ fn late_first_step_waits_after_transport_start() {
     assert!(
         drums_first.abs_diff(90) <= 2,
         "$drumMap first hit at {drums_first}"
+    );
+}
+
+/// Drive a zero-time `$delayRead` inside a `$buffer` feedback loop (feedback
+/// gain 0), entering the cycle at `entry` each frame. Returns the largest
+/// difference between the reader's output and the input `lag` frames earlier.
+fn zero_delay_cycle_error(entry: &str, lag: usize) -> f32 {
+    let graph = make_graph(vec![
+        ("src", "$saw", json!({ "freq": 0.0 })),
+        (
+            "feedback",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "reader", "port": "output", "channel": 0 },
+                "scale": 0.0,
+                "shift": 0.0,
+            }),
+        ),
+        (
+            "mix",
+            "$mix",
+            json!({
+                "inputs": [
+                    { "type": "cable", "module": "src", "port": "output", "channel": 0 },
+                    { "type": "cable", "module": "feedback", "port": "output", "channel": 0 },
+                ],
+            }),
+        ),
+        (
+            "buf",
+            "$buffer",
+            json!({
+                "input": { "type": "cable", "module": "mix", "port": "output", "channel": 0 },
+                "length": 0.01,
+            }),
+        ),
+        (
+            "reader",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": 0.0,
+            }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let src = patch.sampleables.get("src").unwrap();
+    let reader = patch.sampleables.get("reader").unwrap();
+
+    // Run past one full buffer (480 frames) so a stale read would show.
+    let mut history = Vec::new();
+    let mut max_err = 0.0f32;
+    for _ in 0..2_000 {
+        for module in patch.sampleables.values() {
+            module.start_block();
+        }
+        patch.sampleables.get(entry).unwrap().ensure_processed();
+        for module in patch.sampleables.values() {
+            module.ensure_processed();
+        }
+        history.push(src.get_value_at(DEFAULT_PORT, 0, 0));
+        if history.len() > lag {
+            let expected = history[history.len() - 1 - lag];
+            max_err = max_err.max((reader.get_value_at(DEFAULT_PORT, 0, 0) - expected).abs());
+        }
+    }
+    max_err
+}
+
+#[test]
+fn zero_delay_in_feedback_cycle_passes_input_through_when_reader_enters() {
+    let err = zero_delay_cycle_error("reader", 0);
+    assert!(
+        err < 1e-6,
+        "reader should pass the input through, max error {err}"
+    );
+}
+
+#[test]
+fn zero_delay_in_feedback_cycle_lags_one_sample_when_buffer_enters() {
+    // The buffer is mid-update on the current slot when the reader runs, so
+    // the newest frame it can read is the previous one.
+    let err = zero_delay_cycle_error("buf", 1);
+    assert!(
+        err < 1e-6,
+        "reader should lag the input by one sample, max error {err}"
+    );
+}
+
+/// Run a `$ramp` at `freq` V/Oct through a `$buffer` of `length` seconds into
+/// a `$delayRead` of `time` seconds, `blocks` internal blocks of `block_size`.
+/// Returns each frame's (input, delayed) pair.
+fn ramp_delay_frames(
+    freq: f64,
+    length: f64,
+    time: f64,
+    block_size: usize,
+    blocks: usize,
+) -> Vec<(f32, f32)> {
+    let graph = make_graph(vec![
+        ("src", "$ramp", json!({ "freq": freq })),
+        (
+            "buf",
+            "$buffer",
+            json!({
+                "input": { "type": "cable", "module": "src", "port": "output", "channel": 0 },
+                "length": length,
+            }),
+        ),
+        (
+            "reader",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": time,
+            }),
+        ),
+    ]);
+    let patch =
+        from_graph(&graph, SAMPLE_RATE, block_size, &HashMap::new()).expect("from_graph failed");
+    let src = patch.sampleables.get("src").unwrap();
+    let reader = patch.sampleables.get("reader").unwrap();
+    let mut frames = Vec::with_capacity(blocks * block_size);
+    for _ in 0..blocks {
+        process_frame(&patch);
+        for slot in 0..block_size {
+            frames.push((
+                src.get_value_at(DEFAULT_PORT, 0, slot),
+                reader.get_value_at(DEFAULT_PORT, 0, slot),
+            ));
+        }
+    }
+    frames
+}
+
+#[test]
+fn sub_sample_delay_interpolates_only_written_frames() {
+    // Half a sample back lies between the two newest frames; the frame after
+    // the newest still holds data from a full buffer ago and must not leak in.
+    // The newer neighbour of the newest frame does not exist yet; on a linear
+    // input its linear extrapolation makes the read exact.
+    let frames = ramp_delay_frames(0.0, 1.0 / 64.0, 0.5 / SAMPLE_RATE as f64, 1, 4_000);
+    let mut checked = 0;
+    for t in 3..frames.len() {
+        let [a, b, c] = [frames[t - 2].0, frames[t - 1].0, frames[t].0];
+        // Skip the ramp's wrap, where the input is not locally linear.
+        if b < a || c < b {
+            continue;
+        }
+        let expected = (b + c) / 2.0;
+        let got = frames[t].1;
+        assert!(
+            (got - expected).abs() < 1e-5,
+            "frame {t}: expected ~{expected}, got {got}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 3_500);
+}
+
+#[test]
+fn delay_time_at_buffer_length_reads_the_oldest_frame() {
+    // A 1/64 s buffer holds 750 frames, so the longest delay it can serve is
+    // 749 frames; a longer `time` must not wrap around onto newer audio.
+    let frames = ramp_delay_frames(-5.0, 1.0 / 64.0, 1.0 / 64.0, 1, 4_000);
+    for t in 1_000..frames.len() {
+        let expected = frames[t - 749].0;
+        let got = frames[t].1;
+        assert!(
+            (got - expected).abs() < 1e-6,
+            "frame {t}: expected {expected}, got {got}"
+        );
+    }
+}
+
+#[test]
+fn delay_read_matches_across_block_sizes() {
+    // Each slot of a block reads relative to its own write position, so a
+    // 64-sample block reproduces per-sample processing exactly.
+    let time = 10.5 / SAMPLE_RATE as f64;
+    let per_sample = ramp_delay_frames(0.0, 1.0 / 64.0, time, 1, 64 * 40);
+    let per_block = ramp_delay_frames(0.0, 1.0 / 64.0, time, 64, 40);
+    assert_eq!(per_sample, per_block);
+}
+
+#[test]
+fn feedback_loop_length_equals_delay_time() {
+    // `$delay` generates ids that put the buffer first in its cycle. The
+    // recirculated signal must re-enter the buffer exactly `time` frames
+    // after it was written, so comb and Karplus-Strong loops stay in tune.
+    let graph = make_graph(vec![
+        ("src", "$ramp", json!({ "freq": 0.0 })),
+        (
+            "feedback",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "reader", "port": "output", "channel": 0 },
+                "scale": 2.5,
+                "shift": 0.0,
+            }),
+        ),
+        (
+            "mix",
+            "$mix",
+            json!({
+                "inputs": [
+                    { "type": "cable", "module": "src", "port": "output", "channel": 0 },
+                    { "type": "cable", "module": "feedback", "port": "output", "channel": 0 },
+                ],
+            }),
+        ),
+        (
+            "buf",
+            "$buffer",
+            json!({
+                "input": { "type": "cable", "module": "mix", "port": "output", "channel": 0 },
+                "length": 0.01,
+            }),
+        ),
+        (
+            "reader",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": 10.0 / SAMPLE_RATE as f64,
+            }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let value = |id: &str| {
+        patch
+            .sampleables
+            .get(id)
+            .unwrap()
+            .get_value_at(DEFAULT_PORT, 0, 0)
+    };
+
+    let mut written = Vec::new();
+    for t in 0..2_000 {
+        for module in patch.sampleables.values() {
+            module.start_block();
+        }
+        patch.sampleables.get("buf").unwrap().ensure_processed();
+        for module in patch.sampleables.values() {
+            module.ensure_processed();
+        }
+        written.push(value("buf"));
+        let (src, read, buf) = (value("src"), value("reader"), written[t]);
+        assert!(
+            (buf - (src + 0.5 * read)).abs() < 1e-5,
+            "frame {t}: buffer wrote {buf}, expected input {src} + half of {read}"
+        );
+        if t >= 10 {
+            assert!(
+                (read - written[t - 10]).abs() < 1e-6,
+                "frame {t}: read {read}, written 10 frames earlier {}",
+                written[t - 10]
+            );
+        }
+    }
+}
+
+// ─── $lpg ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn lpg_passes_input_through_when_unpatched() {
+    let m = make_module("$lpg", "lpg", json!({ "input": 3.0 }));
+    assert!(approx_eq(settle_and_read(m.as_ref(), 10), 3.0, 1e-6));
+}
+
+#[test]
+fn lpg_level_opens_and_closes_the_gate() {
+    let open = make_module("$lpg", "lpg", json!({ "input": 1.0, "level": 5.0 }));
+    let sample = settle_and_read(open.as_ref(), 48000);
+    assert!(
+        approx_eq(sample, 1.0, 0.01),
+        "open gate: expected ~1.0, got {sample}"
+    );
+
+    let closed = make_module("$lpg", "lpg", json!({ "input": 1.0, "level": 0.0 }));
+    let sample = settle_and_read(closed.as_ref(), 48000);
+    assert!(
+        sample.abs() < 1e-3,
+        "closed gate: expected ~0, got {sample}"
+    );
+}
+
+#[test]
+fn lpg_ping_swings_from_level_to_fully_open_and_back() {
+    // 0.3 V compresses to a vactrol floor of 1.3 * 0.06 / 0.36.
+    let floor = 1.3 * 0.06 / 0.36;
+    let m = make_module(
+        "$lpg",
+        "lpg",
+        json!({ "input": 1.0, "trigger": 5.0, "level": 0.3, "decay": 0.0 }),
+    );
+    let out = collect_samples(m.as_ref(), 48000);
+    let (_, peak) = min_max(&out);
+    let (min, _) = min_max(&out[4800..]);
+    assert!(peak > 0.99, "ping should open the gate fully, peak {peak}");
+    assert!(
+        approx_eq(out[47999], floor, 1e-3),
+        "gate should settle back to the level floor {floor}, got {}",
+        out[47999]
+    );
+    assert!(min >= floor - 1e-3, "gate fell below the floor: {min}");
+}
+
+#[test]
+fn lpg_trigger_pings_and_decay_sets_the_tail() {
+    let ping = |decay: f32| {
+        let m = make_module(
+            "$lpg",
+            "lpg",
+            json!({ "input": 1.0, "trigger": 5.0, "decay": decay }),
+        );
+        collect_samples(m.as_ref(), 48000)
+    };
+    let short = ping(0.0);
+    let long = ping(5.0);
+
+    let (_, peak) = min_max(&short);
+    assert!(peak > 0.5, "ping should open the gate, peak {peak}");
+    assert!(
+        short[47999].abs() < 1e-3,
+        "short decay should close within 1s"
+    );
+    assert!(
+        long[24000] > short[24000] + 0.1,
+        "long decay should ring longer: {} vs {}",
+        long[24000],
+        short[24000]
+    );
+}
+
+#[test]
+fn lpg_color_brightens_a_half_open_gate() {
+    // A 5 kHz sine through a half-open gate: low color filters it away,
+    // high color bleeds it through.
+    let peak = |color: f32| {
+        let graph = make_graph(vec![
+            ("osc", "$sine", json!({ "freq": 4.25 })),
+            (
+                "lpg",
+                "$lpg",
+                json!({
+                    "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                    "level": 1.0,
+                    "color": color,
+                }),
+            ),
+        ]);
+        let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+            .expect("from_graph failed");
+        let lpg = patch.sampleables.get("lpg").unwrap();
+        let mut out = Vec::new();
+        for _ in 0..9600 {
+            process_frame(&patch);
+            out.push(lpg.get_value_at(DEFAULT_PORT, 0, 0));
+        }
+        let (mn, mx) = min_max(&out[4800..]);
+        mx.max(-mn)
+    };
+    let dark = peak(0.0);
+    let bright = peak(5.0);
+    assert!(
+        bright > dark * 4.0,
+        "high color should pass far more highs: bright {bright}, dark {dark}"
+    );
+}
+
+/// Largest sample-to-sample step over `n` samples of `channel`.
+fn max_step(module: &dyn Sampleable, channel: usize, n: usize, mut prev: f32) -> f32 {
+    let mut s = Stepper::new();
+    let mut step: f32 = 0.0;
+    for _ in 0..n {
+        let slot = s.tick(module);
+        let v = module.get_value_at(DEFAULT_PORT, channel, slot);
+        step = step.max((v - prev).abs());
+        prev = v;
+    }
+    step
+}
+
+#[test]
+fn lpg_crossfades_into_and_out_of_bypass() {
+    let bypassed = make_module("$lpg", "lpg", json!({ "input": 1.0 }));
+    assert!(approx_eq(
+        settle_and_read(bypassed.as_ref(), 480),
+        1.0,
+        1e-6
+    ));
+
+    let gated = make_module("$lpg", "lpg", json!({ "input": 1.0, "level": 0.0 }));
+    gated.transfer_state_from(bypassed.as_ref());
+    let step = max_step(gated.as_ref(), 0, 480, 1.0);
+    assert!(step < 0.01, "entering the gate jumped by {step}");
+    assert!(settle_and_read(gated.as_ref(), 480).abs() < 1e-3);
+
+    let reopened = make_module("$lpg", "lpg", json!({ "input": 1.0 }));
+    reopened.transfer_state_from(gated.as_ref());
+    let step = max_step(reopened.as_ref(), 0, 480, 0.0);
+    assert!(step < 0.01, "leaving the gate jumped by {step}");
+    assert!(approx_eq(
+        settle_and_read(reopened.as_ref(), 480),
+        1.0,
+        1e-6
+    ));
+}
+
+#[test]
+fn lpg_added_channels_do_not_ping_on_a_held_trigger() {
+    let old = make_module(
+        "$lpg",
+        "lpg",
+        json!({ "input": [1.0, 1.0], "trigger": 5.0, "decay": 0.0 }),
+    );
+    let _ = collect_samples(old.as_ref(), 48000);
+
+    let new = make_module(
+        "$lpg",
+        "lpg",
+        json!({ "input": [1.0, 1.0, 1.0], "trigger": 5.0, "decay": 0.0 }),
+    );
+    new.transfer_state_from(old.as_ref());
+    let (_, peak) = min_max(&collect_channel(new.as_ref(), 2, 4800));
+    assert!(
+        peak < 1e-3,
+        "added channel pinged on a held trigger, peak {peak}"
     );
 }

@@ -876,6 +876,10 @@ fn impl_module_macro_attr(
                 self.ensure_processed_to(self.block_size);
             }
 
+            fn processed_to(&self) -> usize {
+                self.index.get()
+            }
+
             fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32 {
                 let port_idx = match <#block_outputs_ty>::port_index(port) {
                     Some(i) => i,
