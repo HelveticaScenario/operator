@@ -689,47 +689,55 @@ fn impl_module_macro_attr(
             self.index.set(i + 1);
         }
     };
+    // The sample loop appears once, so `update` and the output copy have a
+    // single call site to inline into.
     let process_loop = if attr_args.block {
         quote! {
-            if self.mode == crate::types::ProcessingMode::Block {
-                // SAFETY: Audio thread has exclusive access. See crate::types
-                // module documentation. Each call's borrows end with the call.
-                let process = |range: std::ops::Range<usize>| unsafe {
-                    (*self.module.get()).process_block(
-                        &mut *self.block_outputs.get(),
-                        range,
-                        self.sample_rate,
-                    )
-                };
-                if process(start_index..target).is_none() {
-                    // Retry in sub-ranges short enough for every input to
-                    // resolve (see crate::block_input), halving the length
-                    // while a sub-range is declined; a single slot that is
-                    // still declined runs `update`.
-                    let channels = unsafe { (*self.module.get())._channel_count.max(1) };
-                    let mut step = (crate::block_input::SCRATCH_LEN / channels).max(1);
-                    let mut start = start_index;
-                    while start < target {
-                        let end = (start + step).min(target);
-                        self.index.set(start);
-                        if process(start..end).is_none() {
-                            if end - start > 1 {
-                                step = (end - start) / 2;
-                                continue;
-                            }
-                            self.index.set(start);
-                            let target = end;
-                            #sample_loop
-                        }
-                        start = end;
-                    }
-                }
-                self.index.set(target);
-            } else {
-                // Feedback cycles (Sample mode) run `update` one slot at a time,
-                // so each read sees the cycle's previous slot.
-                #sample_loop
+            let block = self.mode == crate::types::ProcessingMode::Block;
+            // SAFETY: Audio thread has exclusive access. See crate::types
+            // module documentation. Each call's borrows end with the call.
+            let process = |range: std::ops::Range<usize>| unsafe {
+                (*self.module.get()).process_block(
+                    &mut *self.block_outputs.get(),
+                    range,
+                    self.sample_rate,
+                )
+            };
+            let mut start = start_index;
+            if block && process(start_index..target).is_some() {
+                start = target;
             }
+            // Block mode retries in sub-ranges short enough for every input
+            // to resolve (see crate::block_input), halving the length while a
+            // sub-range is declined; a single slot that is still declined runs
+            // `update`. Feedback cycles (Sample mode) run `update` one slot at
+            // a time, so each read sees the cycle's previous slot.
+            let mut step = if block {
+                let channels = unsafe { (*self.module.get())._channel_count.max(1) };
+                (crate::block_input::SCRATCH_LEN / channels).max(1)
+            } else {
+                0
+            };
+            while start < target {
+                let mut end = target;
+                if block {
+                    end = (start + step).min(target);
+                    self.index.set(start);
+                    if process(start..end).is_some() {
+                        start = end;
+                        continue;
+                    }
+                    if end - start > 1 {
+                        step = (end - start) / 2;
+                        continue;
+                    }
+                    self.index.set(start);
+                }
+                let target = end;
+                #sample_loop
+                start = end;
+            }
+            self.index.set(target);
         }
     } else {
         sample_loop

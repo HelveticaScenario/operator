@@ -176,6 +176,197 @@
     "positionalArgs": []
   },
   {
+    "name": "$swell",
+    "documentation": "Ocean swell as CV: the surface of a simulated sea, read at a fixed point.\n\nThe sea sums `waves` Gerstner waves. Each moves the water in circles rather\nthan just up and down, which bunches the surface into sharp crests between\nwide, flat troughs — the shape of real swell, set by `steepness`. The first\nwave rolls at `freq`; `chop` spreads the others above it, so their crests\ndrift in and out of line and the sea arrives in sets, with the occasional\nwave far bigger than the rest. `spread` scatters their directions.\n\n- **height** (default) — surface height, ±5V. It reaches ±5V only when\n  every wave lines up, so a sea with `chop` above 0 usually stays inside it.\n- **tilt** — how the surface leans along the swell, the way a moored boat\n  pitches: positive while the water rises, negative while it falls. A sine\n  at `steepness` 0; when steep, a sawtooth that snaps down at each crest.\n- **roll** — the sideways lean from waves arriving off-axis. Silent at\n  `spread` 0, and busier as `spread` and `chop` rise.\n\nEvery input can be modulated live: the waves bend to the new values without\nrestarting. Each channel is its own sea.\n\n## Example\n\n```js\n// A slow, steep swell sweeping a filter\n$lpf($saw('a1'), $swell('0.1hz', { steepness: 4 }).range('200hz', '2000hz')).out()\n\n// A choppy, confused sea: the swell's lean swaying a sine's level\nconst sea = $swell('0.2hz', { chop: 4, spread: 5, waves: 12 })\n$sine('c3').amp(sea.tilt.range(0, 5)).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SwellParams",
+      "type": "object",
+      "properties": {
+        "chop": {
+          "description": "spectral width: the other waves sit up to `chop / 2` octaves above `freq`.\n0 is one clean, periodic swell; higher values roll in sets and add chop",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "dominant swell frequency in V/Oct (use `$hz()` or a value like `'0.1hz'`)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "seed": {
+          "description": "picks the sea: each seed, and each channel, places the waves at\ndifferent frequencies and directions",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "spread": {
+          "description": "directional spread: 0 sends every wave the same way, 5 brings them from\nevery direction (a confused sea)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "steepness": {
+          "description": "crest sharpness: 0 rolls as a sine, 5 peaks into sharp crests over wide, flat troughs",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "waves": {
+          "description": "number of wave components (1–16); waves added or removed by a patch\nupdate fade over one swell period",
+          "type": "integer",
+          "format": "uint",
+          "default": 6,
+          "maximum": 16,
+          "minimum": 1
+        }
+      },
+      "required": [
+        "freq"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "height",
+        "description": "surface height at a fixed point, ±5V",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tilt",
+        "description": "lean along the swell: positive while the water rises, ±5V",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "roll",
+        "description": "lean across the swell from waves arriving off-axis, ±5V",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "freq",
+        "description": "dominant swell frequency in V/Oct (use `$hz()` or a value like `'0.1hz'`)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "steepness",
+        "description": "crest sharpness: 0 rolls as a sine, 5 peaks into sharp crests over wide, flat troughs",
+        "signalType": "control",
+        "defaultValue": 3.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "chop",
+        "description": "spectral width: the other waves sit up to `chop / 2` octaves above `freq`.\n0 is one clean, periodic swell; higher values roll in sets and add chop",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "spread",
+        "description": "directional spread: 0 sends every wave the same way, 5 brings them from\nevery direction (a confused sea)",
+        "signalType": "control",
+        "defaultValue": 1.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "freq"
+      }
+    ]
+  },
+  {
     "name": "$signal",
     "documentation": "Utility module for routing, naming, and exposing signals in a patch.",
     "paramsSchema": {
@@ -5456,6 +5647,187 @@
     ]
   },
   {
+    "name": "$apf",
+    "documentation": "Stacked allpass filter: 1 to 50 two-pole stages, with resonance and\nfeedback. Smears transients into chirps around the cutoff; mixed with the\ndry signal, it notches like a phaser.\n\n- **cutoff** — V/Oct, the frequency delayed most.\n- **stages** — 1–50. More stages, longer smear. A fractional count fades\n  the next stage in smoothly.\n- **resonance** — 0–5. Makes the smear ring at the cutoff's pitch.\n- **feedback** — −5 to 5. Repeats the smear; rings get longer toward ±5,\n  where they never fade. Up to ±6 the filter self-oscillates. Negative\n  values flip the sign of every other repeat.\n- **fadeStep** — 0–49. Above 0, `stages` crossfades between chains this\n  many stages apart instead, giving notches.\n\n```js\n// smear a click on every beat into a chirp around C3\n$pPulse($clock[0]).$.apf('c3', { stages: 50 }).out()\n// ringing, pitched smear with repeats\n$pPulse($clock[0]).$.apf('g3', { stages: 32, resonance: 3, feedback: 3 }).out()\n// self-oscillating: no input, just the loop\n$apf(0, 'c3', { stages: 20, resonance: 2, feedback: 5.5 }).out()\n// notches: crossfading between chains 8 stages apart\n$noise('white').$.apf('c4', { stages: $sine('0.05hz').range(9, 25), resonance: 2, fadeStep: 8 }).out()\n// four-stage phaser: swept allpass mixed equally with the dry saw\n$saw('c2').$m.apf(2.5, $sine('0.2hz').range(-1, 3), { stages: 4, resonance: 2, feedback: 3 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AllpassParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "frequency in V/Oct (0V = C4) the stages delay most",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "fadeStep": {
+          "description": "stages between crossfaded chains (0-49); 0 glides instead",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "feedback": {
+          "description": "output fed back into the input (-5 to 5, up to ±6 to self-oscillate)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "signal input",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "how sharply the stages ring at the cutoff (0-5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of two-pole stages (1-50): how much smear",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "phase-shifted signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "frequency in V/Oct (0V = C4) the stages delay most",
+        "signalType": "frequency",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "stages",
+        "description": "number of two-pole stages (1-50): how much smear",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 1.0,
+        "maxValue": 50.0
+      },
+      {
+        "name": "resonance",
+        "description": "how sharply the stages ring at the cutoff (0-5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "feedback",
+        "description": "output fed back into the input (-5 to 5, up to ±6 to self-oscillate)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      }
+    ]
+  },
+  {
     "name": "$hpf",
     "documentation": "Highpass filter that attenuates frequencies below the cutoff point.\n\nUse it to remove low-end rumble, thin out a sound, or create rising\nfilter effects. Pairs well with lowpass filters for isolating a\nfrequency band.\n\n- **cutoff** — set in V/Oct (0 V = C4). Accepts modulation for filter sweeps.\n- **resonance** — boosts frequencies near the cutoff (0–5). High values\n  produce a ringing peak.\n\n```js\n// remove low end from a noise source\n$hpf($noise(\"white\"), 'a3', 1)\n```",
     "paramsSchema": {
@@ -5895,6 +6267,236 @@
       },
       {
         "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$multimode",
+    "documentation": "Mutable Instruments Blades–style multimode filter with drive and wavefolder.\n\nA circuit model of one channel of Blades: a 2164 VCA state-variable filter\nthat morphs continuously from lowpass through bandpass to highpass, preceded\nby a drive VCA into a zener soft clipper and a two-stage diode wavefolder.\nThe signal path is DC-coupled, so it can process CVs too.\n\n- **cutoff** — V/Oct. Tracks exactly at low cutoffs and runs progressively\n  flat in the top octaves (−15 cents at 1 kHz, about half a semitone at\n  5 kHz), topping out near 21 kHz, as the circuit does. Responds at audio\n  rate, so an oscillator patched in gives exponential FM.\n- **resonance** — 0–5. Self-oscillates above ~4.3; the bandpass is then\n  held near ±4 V by the soft knee of the integrator's zeners. With no input,\n  `mode` shifts the phase of the sine.\n- **mode** — 0 lowpass, 2.5 bandpass, 5 highpass; values between crossfade.\n- **drive** — input gain ahead of everything else: 0 is unity, 5 is about\n  +18 dB. The zeners' soft knee already rounds a ±5 V input at 0.\n- **fold** — 0 soft clipping only, 5 the two-stage wavefolder.\n- **highRes** — on by default. Off runs the circuit at the engine rate for\n  less CPU, with more aliasing from hot drive, folding and self-oscillation,\n  and a highpass that attenuates more below the cutoff once the cutoff is\n  above ~8 kHz (about 2 dB more at 15 kHz).\n\nPassband gain in lowpass mode is about +2.8 dB at unity drive, rolling off\nabove ~20 kHz at the output amp, whose zeners compress the output softly\nabove about 6 V.\n\n```js\n// resonant sweep that morphs from lowpass to highpass\n$multimode($saw('c2'), $sine('0.1hz').range(-1, 2), 3.8, $sine('0.07hz').range(0, 5)).out()\n// wavefolded sine through a gentle lowpass\n$multimode($sine('c3'), 'c6', 1, 0, { drive: 3, fold: 3 }).out()\n// no input: a self-oscillating sine at A3\n$multimode(0, 'a3', 5).out()\n// without oversampling, for less CPU\n$multimode($saw('c2'), 'c5', 2, 0, { highRes: false }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MultimodeParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4), capped at ~21 kHz",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "input drive (0 = unity, 5 = +18 dB), cubic response",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fold": {
+          "description": "drive response (0 = soft clipping, 5 = two-stage wavefolder)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "highRes": {
+          "description": "when true (default), the circuit runs at twice the engine rate, which\nreduces aliasing from the clipper, wavefolder and self-oscillation and\nkeeps the highpass accurate at high cutoffs; false costs less CPU",
+          "type": "boolean",
+          "default": true
+        },
+        "input": {
+          "description": "signal input (DC-coupled)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "response: 0 = lowpass, 2.5 = bandpass, 5 = highpass, crossfading between",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resonance": {
+          "description": "resonance (0-5). Self-oscillates from ~4.3.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "response selected by mode",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "lp",
+        "description": "lowpass (the output at mode 0)",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "bp",
+        "description": "bandpass (the output near mode 2.5)",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "hp",
+        "description": "highpass (the output at mode 5)",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (DC-coupled)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4), capped at ~21 kHz",
+        "signalType": "frequency",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "resonance (0-5). Self-oscillates from ~4.3.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "mode",
+        "description": "response: 0 = lowpass, 2.5 = bandpass, 5 = highpass, crossfading between",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "input drive (0 = unity, 5 = +18 dB), cubic response",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "fold",
+        "description": "drive response (0 = soft clipping, 5 = two-stage wavefolder)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      },
+      {
+        "name": "mode"
       }
     ]
   },
@@ -12955,6 +13557,223 @@
       },
       {
         "name": "time"
+      }
+    ]
+  },
+  {
+    "name": "_erratic",
+    "documentation": "Applies a wandering random shift to a signal.\n\nThe shift spans ±**amount** scaled to the width of [**min**, **max**]: an\namount of 5 moves the signal by up to half the range either way. **bias**\nshrinks one side of that span — at +5 the shift is only upward, at -5 only\ndownward. **speed** sets how quickly the shift changes, from frozen at 0\nthrough smooth drift to white noise at 5. A **trigger** samples and holds\nthe shift on each rising edge.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ErraticParams",
+      "type": "object",
+      "properties": {
+        "amount": {
+          "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "bias": {
+          "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clamp": {
+          "description": "clamp the output to [min, max]",
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "description": "signal to shift",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "max": {
+          "description": "maximum of the input's range",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min": {
+          "description": "minimum of the input's range",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edge samples and holds the current random shift",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "amount"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "randomly shifted signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal to shift",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "amount",
+        "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "rising edge samples and holds the current random shift",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "speed",
+        "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+        "signalType": "control",
+        "defaultValue": 2.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "bias",
+        "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "min",
+        "description": "minimum of the input's range",
+        "signalType": "control",
+        "defaultValue": -5.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "max",
+        "description": "maximum of the input's range",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "amount"
       }
     ]
   },

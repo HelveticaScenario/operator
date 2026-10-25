@@ -2,7 +2,7 @@
 //!
 //! Two parallel branches, each a cascade of two first-order allpass sections.
 //! Coefficients from Olli Niemitalo, "Polyphase IIR Filters" (4-coef halfband,
-//! ~75 dB stopband attenuation, ~0.05·fs transition band).
+//! ~24 dB stopband attenuation, ~0.05·fs transition band).
 //!
 //! Operating at the lower (base) rate, each branch is a first-order allpass:
 //!   y[n] = a·(x[n] − y[n−1]) + x[n−1]
@@ -11,10 +11,10 @@
 use super::sanitize;
 
 /// Coefficients for the cascade in branch A. Cascaded as stage1 → stage2.
-const BRANCH_A: [f32; 2] = [0.07471, 0.42943];
+pub(crate) const BRANCH_A: [f32; 2] = [0.07471, 0.42943];
 
 /// Coefficients for the cascade in branch B.
-const BRANCH_B: [f32; 2] = [0.24847, 0.79847];
+pub(crate) const BRANCH_B: [f32; 2] = [0.24847, 0.79847];
 
 #[derive(Clone, Copy, Default)]
 struct Allpass1 {
@@ -106,11 +106,13 @@ impl Default for Halfband2xDown {
 }
 
 impl Halfband2xDown {
-    /// Consume an even/odd pair at the upper rate, return one sample at the lower rate.
+    /// Consume an even/odd pair at the upper rate (even first in time), return
+    /// one sample at the lower rate. Branch A takes the newer sample and branch
+    /// B the older one, the polyphase counterpart of the upsampler's phases.
     #[inline]
     pub fn process(&mut self, x_even: f32, x_odd: f32) -> f32 {
-        let a = self.a2.process(self.a1.process(x_even));
-        let b = self.b2.process(self.b1.process(x_odd));
+        let a = self.a2.process(self.a1.process(x_odd));
+        let b = self.b2.process(self.b1.process(x_even));
         (a + b) * 0.5
     }
 
@@ -199,6 +201,55 @@ mod tests {
             (last - 1.0).abs() < 1e-3,
             "DC should pass at unit gain after recovery, got {last}"
         );
+    }
+
+    /// Steady-state gain (RMS ratio) for a sine at `f_norm` of the base rate
+    /// after an up/down round trip.
+    fn round_trip_gain(f_norm: f32) -> f32 {
+        let mut up = Halfband2xUp::default();
+        let mut down = Halfband2xDown::default();
+        let (mut sum_x, mut sum_y) = (0.0f32, 0.0f32);
+        for n in 0..8000 {
+            let x = (2.0 * PI * f_norm * n as f32).sin();
+            let (e, o) = up.process(x);
+            let y = down.process(e, o);
+            if n >= 4000 {
+                sum_x += x * x;
+                sum_y += y * y;
+            }
+        }
+        (sum_y / sum_x).sqrt()
+    }
+
+    /// Gain the decimator applies to a sine at `f_norm` of the base rate, which
+    /// lies above base Nyquist when `f_norm > 0.5`.
+    fn decimated_gain(f_norm: f32) -> f32 {
+        let mut down = Halfband2xDown::default();
+        let x = |k: usize| (PI * f_norm * k as f32).sin();
+        let mut sum_y = 0.0f32;
+        for n in 0..4000 {
+            let y = down.process(x(2 * n), x(2 * n + 1));
+            if n >= 2000 {
+                sum_y += y * y;
+            }
+        }
+        (sum_y / 2000.0 * 2.0).sqrt()
+    }
+
+    #[test]
+    fn round_trip_is_flat_across_the_passband() {
+        for f_norm in [0.1, 0.2, 0.3, 0.4, 0.45] {
+            let gain = round_trip_gain(f_norm);
+            assert!((gain - 1.0).abs() < 0.01, "f={f_norm}: gain {gain}");
+        }
+    }
+
+    #[test]
+    fn downsampler_rejects_content_above_base_nyquist() {
+        for f_norm in [0.6, 0.7, 0.8, 0.9] {
+            let gain = decimated_gain(f_norm);
+            assert!(gain < 0.07, "f={f_norm}: alias gain {gain}");
+        }
     }
 
     #[test]

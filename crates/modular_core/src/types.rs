@@ -231,12 +231,17 @@ pub trait Sampleable: MessageHandler + Send {
     /// from zero while staying locked to the peer timeline.
     fn reset_loop_index(&self) {}
 
-    /// Inject one block's worth of host audio input frames. Only
-    /// `HiddenAudioIn` overrides this; everyone else is a no-op. The audio
-    /// callback pulls one CPAL frame per slot into `block` and hands the
-    /// whole thing in once per internal block, so the inner module can
-    /// serve per-slot reads via `get_value_at(_, ch, slot)`.
-    fn inject_audio_in_block(&self, _block: &[[f32; crate::poly::PORT_MAX_CHANNELS]]) {}
+    /// Inject host audio input frames for the current block's slots from
+    /// `first_slot` on. Only `HiddenAudioIn` overrides this; everyone else is
+    /// a no-op. The audio callback pulls one CPAL frame per slot just before
+    /// rendering those slots, so the inner module can serve per-slot reads
+    /// via `get_value_at(_, ch, slot)`.
+    fn inject_audio_in(
+        &self,
+        _first_slot: usize,
+        _frames: &[[f32; crate::poly::PORT_MAX_CHANNELS]],
+    ) {
+    }
 
     /// Reset the per-block sample cursor to 0 at the start of an internal
     /// `block_size` block. Cache slots in `block_outputs` keep their
@@ -2916,6 +2921,10 @@ pub struct ScopeStats {
     pub max: f64,
     pub peak_to_peak: f64,
     pub read_offset: u32,
+    /// How far, in buffer samples, the trigger crossing lies before the first
+    /// sample (0 to 1); 0 for an untriggered scope. Drawing each sample this
+    /// much later pins the crossing to the same spot every frame.
+    pub trigger_offset: f64,
 }
 
 /// One VU meter's loudness snapshot, joined to its `VuMeterSpec` by `module_id`.
@@ -2943,6 +2952,19 @@ pub struct Scope {
     /// Voltage range for display (default [-5.0, 5.0]). The scope displays from range[0] to range[1].
     #[serde(default = "default_scope_range")]
     pub range: (f64, f64),
+    /// Draw each channel in its own scope instead of overlaying them.
+    pub split: Option<ScopeSplit>,
+}
+
+/// How a split scope arranges its per-channel views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[napi(string_enum = "lowercase")]
+pub enum ScopeSplit {
+    /// Stacked top to bottom at full width.
+    Vertical,
+    /// Side by side in equal shares of the width.
+    Horizontal,
 }
 
 fn default_scope_range() -> (f64, f64) {

@@ -308,10 +308,12 @@ fn scale_and_shift_applies() {
 /// succeeds. Modules with all-optional params can use `{}`.
 fn minimal_params(module_type: &str) -> serde_json::Value {
     match module_type {
-        "$sine" | "$saw" | "$pulse" | "$supersaw" | "$ramp" => json!({ "freq": 0.0 }),
+        "$sine" | "$saw" | "$pulse" | "$supersaw" | "$ramp" | "$swell" => json!({ "freq": 0.0 }),
         "$pSine" | "$pSaw" | "$pPulse" => json!({ "phase": 0.0 }),
         "$macro" => json!({ "freq": 0.0, "engine": "virtualAnalog" }),
-        "$lpf" | "$hpf" | "$jup6f" => json!({ "input": 0.0, "cutoff": 0.0 }),
+        "$lpf" | "$hpf" | "$jup6f" | "$multimode" | "$apf" => {
+            json!({ "input": 0.0, "cutoff": 0.0 })
+        }
         "$unstable.filter.lp"
         | "$unstable.filter.hp"
         | "$unstable.filter.bp"
@@ -347,6 +349,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$bpf" => json!({ "input": 0.0, "center": 0.0 }),
         "$xover" => json!({ "input": 0.0, "lowMidFreq": 0.0, "midHighFreq": 0.0 }),
         "$comp" => json!({ "input": 0.0, "threshold": 0.0 }),
+        "_erratic" => json!({ "input": 0.0, "amount": 1.0 }),
         "$wrap" | "$clamp" => json!({ "input": 0.0, "min": -5.0, "max": 5.0 }),
         "$addHz" => json!({ "input": 0.0, "offset": 0.0 }),
         "$mulHz" => json!({ "input": 0.0, "factor": 1.0 }),
@@ -1010,6 +1013,81 @@ fn buffer_and_delay_read_pipeline() {
         (sample - 2.0).abs() < 0.1,
         "delay read should output ~2.0 (constant input after filling), got {sample}"
     );
+}
+
+#[test]
+fn delay_reads_do_not_depend_on_block_size() {
+    // A fractional, modulated delay reads between buffer frames, so it rounds
+    // alike only if every block size puts each sample at the same absolute
+    // write position.
+    let cable =
+        |module: &str| json!({ "type": "cable", "module": module, "port": "output", "channel": 0 });
+    let graph = make_graph(vec![
+        ("src", "$saw", json!({ "freq": 0.0 })),
+        ("lfo", "$sine", json!({ "freq": -4.0 })),
+        (
+            "time",
+            "$scaleAndShift",
+            json!({ "input": cable("lfo"), "scale": 0.002, "shift": 0.0123456 }),
+        ),
+        (
+            "buf",
+            "$buffer",
+            json!({ "input": cable("src"), "length": 0.05 }),
+        ),
+        (
+            "delay",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": cable("time"),
+            }),
+        ),
+    ]);
+    let render = |block_size: usize| {
+        let patch = from_graph(&graph, SAMPLE_RATE, block_size, &HashMap::new())
+            .expect("from_graph failed");
+        let mut out = Vec::new();
+        for _ in 0..(8192 / block_size) {
+            for module in patch.sampleables.values() {
+                module.start_block();
+            }
+            for id in ["src", "lfo", "time", "buf", "delay"] {
+                patch.sampleables[id].ensure_processed_to(block_size);
+            }
+            let delay = &patch.sampleables["delay"];
+            out.extend((0..block_size).map(|i| delay.get_value_at(DEFAULT_PORT, 0, i).to_bits()));
+        }
+        out
+    };
+    let reference = render(64);
+    assert!(reference.iter().any(|&bits| f32::from_bits(bits) != 0.0));
+    for block_size in [1, 128, 256, 1024] {
+        assert!(
+            render(block_size) == reference,
+            "block size {block_size} renders a different delay"
+        );
+    }
+}
+
+#[test]
+fn buffer_inserted_mid_block_keeps_writing_forward() {
+    // A patch swap can add a `$buffer` partway through a block: it renders
+    // that block's remaining slots without a block start, and the next block
+    // continues after them.
+    let graph = make_graph(vec![(
+        "buf",
+        "$buffer",
+        json!({ "input": 1.0, "length": 0.05 }),
+    )]);
+    let patch = from_graph(&graph, SAMPLE_RATE, 8, &HashMap::new()).expect("from_graph failed");
+    let buf = &patch.sampleables["buf"];
+    let cursor = || buf.get_buffer_output("buffer").unwrap().read_write_index();
+    buf.set_initial_index(5);
+    buf.ensure_processed_to(8);
+    assert_eq!(cursor(), 0);
+    buf.start_block();
+    assert_eq!(cursor(), 8);
 }
 
 #[test]

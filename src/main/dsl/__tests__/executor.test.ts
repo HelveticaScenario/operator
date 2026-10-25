@@ -361,6 +361,21 @@ describe('chaining methods', () => {
         expect(patch.scopes[0].channels[1].channel).toBe(1);
     });
 
+    test('.scope() split mode is carried on the scope entry', () => {
+        const patch = execPatch(
+            '$sine(["C4", "E4"]).scope({ split: "horizontal" }).out()',
+        );
+        expect(patch.scopes).toHaveLength(1);
+        expect(patch.scopes[0].split).toBe('horizontal');
+        expect(patch.scopes[0].channels).toHaveLength(2);
+        expect(execPatch('$sine("C4").scope().out()').scopes[0].split).toBe(
+            undefined,
+        );
+        expect(() =>
+            execPatch('$sine("C4").scope({ split: "diagonal" }).out()'),
+        ).toThrow(/split/);
+    });
+
     test('.scope() on indexed output captures single channel', () => {
         const patch = execPatch('$sine(["C4", "E4"])[1].scope().out()');
         expect(patch.scopes.length).toBe(1);
