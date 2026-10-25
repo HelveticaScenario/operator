@@ -50,7 +50,7 @@ if (shipped.length === 0) {
 } else {
     console.error(
         'This PR changes shipped code but adds no changelog entry.\n' +
-            'Add one with `npx changie new` (see CLAUDE.md, "Changelog"), or\n' +
+            'Add one with `yarn changelog:new` (see CLAUDE.md, "Changelog"), or\n' +
             'label the PR `no-changelog` if users will not notice the change.',
     );
     process.exit(1);

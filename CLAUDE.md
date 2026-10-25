@@ -165,7 +165,7 @@ Models to emulate: `crates/modular_core/src/types.rs` (safety invariants), `src/
 
 ### Changelog
 
-Every PR that changes something a user can notice adds a release-note entry: `npx changie new -k <Kind> -b "<text>"`, which writes `.changes/unreleased/*.yaml`. CI fails a PR that changes `src/` or `crates/` without one unless it is labelled `no-changelog` (refactors, internal tooling, test-only work). Users read these in the app before deciding to update, so write for musicians, not developers:
+Every PR that changes something a user can notice adds a release-note entry: `yarn changelog:new -k <Kind> -b "<text>"`, which writes `.changes/unreleased/*.yaml`. CI fails a PR that changes `src/` or `crates/` without one unless it is labelled `no-changelog` (refactors, internal tooling, test-only work). Users read these in the app before deciding to update, so write for musicians, not developers:
 
 - **Kinds:** `Breaking` (an existing patch can sound or behave differently, or stop running — includes any change to an experimental module's API or sound), `New`, `Improved`, `Fixed`. `Breaking` bumps the minor version (pre-1.0); the rest bump the patch.
 - **Say what the user can now do or what changes in their patch.** Name modules and params as they appear in the DSL (`$comp`, `attack`). No internals: no crate, file, struct, thread, or refactor names.
