@@ -10,3 +10,10 @@ rustflags = ["-C", "target-cpu=x86-64-v2"]
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-cpu=x86-64-v2", "-C", "target-feature=+crt-static"]
+
+# sccache client-side mode runs each rustc inside its own build, under that
+# build's jobserver, so killing a build (Ctrl-C, a watch-native restart) cannot
+# leak tokens from the shared sccache server and stall every build on the
+# machine. No effect without sccache.
+[env]
+SCCACHE_CLIENT_SIDE = "1"

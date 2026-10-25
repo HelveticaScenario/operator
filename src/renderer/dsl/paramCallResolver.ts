@@ -10,6 +10,7 @@
 import { Node, SyntaxKind, ts } from 'ts-morph';
 import type { CallExpression, Expression, SourceFile } from 'ts-morph';
 
+import { dottedCalleeName } from '../../shared/dsl/calleeName';
 import type { Schemas } from '../../shared/dsl/schemaTypeResolver';
 import type { ParamLiteral, ParamSpec } from './paramControls';
 
@@ -105,10 +106,10 @@ export function createCallResolver(
     return (call) => {
         const expr = call.getExpression();
 
-        // Direct factory: the callee's dotted name is the schema name
-        // ($saw, $unstable.filter.lp).
-        const path = dottedName(expr);
-        const direct = path === null ? undefined : byName.get(path);
+        // Direct factory: the callee names the schema ($saw,
+        // $unstable.filter.lp), however it is spread across lines.
+        const calleeName = dottedCalleeName(expr);
+        const direct = calleeName === null ? undefined : byName.get(calleeName);
         if (direct) {
             const count = direct.positionalArgs?.length ?? 0;
             return {
@@ -186,22 +187,6 @@ export function createCallResolver(
             },
         };
     };
-}
-
-/**
- * The dotted name of an identifier or property-access chain, independent of
- * the whitespace and comments between its segments (`$tr808\n  .lowConga` is
- * `$tr808.lowConga`), or null for any other expression.
- */
-function dottedName(expr: Node): string | null {
-    if (Node.isIdentifier(expr)) {
-        return expr.getText();
-    }
-    if (!Node.isPropertyAccessExpression(expr)) {
-        return null;
-    }
-    const object = dottedName(expr.getExpression());
-    return object === null ? null : `${object}.${expr.getName()}`;
 }
 
 /** Every name a variable, parameter, or function declaration binds. */

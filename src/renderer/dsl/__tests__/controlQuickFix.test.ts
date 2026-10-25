@@ -185,7 +185,16 @@ describe('computeControlQuickFixes — namespaced modules', () => {
         expect(apply(source, fix)).toContain(`$slider('resonance', 2.5, `);
     });
 
-    test('a dotted factory call broken across lines resolves', () => {
+    test('a dotted factory split across lines resolves', () => {
+        const { source, fixes } = fixesAt(
+            `$unstable.filter\n  // comment\n  .lp($sine(0), '100hz', 2.|5).out();`,
+        );
+        const fix = wrapFix(fixes);
+        expect(fix.title).toBe(`Wrap 'resonance' in $slider`);
+        expect(apply(source, fix)).toContain(`$slider('resonance', 2.5, `);
+    });
+
+    test('a namespaced drum call broken across lines resolves', () => {
         const { fixes } = fixesAt(
             `$tr808\n  .lowConga($pulse('2hz'), {\n    |\n    restart: false,\n  })\n  .out();`,
         );
