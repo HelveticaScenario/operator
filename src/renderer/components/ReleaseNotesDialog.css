@@ -99,6 +99,10 @@
     color: var(--text-secondary, #888888);
 }
 
+.release-notes-kind--breaking h4 {
+    color: var(--color-warning, #d4a855);
+}
+
 .release-notes-kind--new h4 {
     color: var(--accent-primary, #4ec9b0);
 }
@@ -241,6 +245,30 @@
     font-size: calc(var(--font-size, 18px) * 0.6);
     color: var(--color-warning, #d4a855);
     white-space: nowrap;
+}
+
+.release-notes-install-tag {
+    padding: 0 6px;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    font-size: calc(var(--font-size, 18px) * 0.6);
+    font-weight: 400;
+    white-space: nowrap;
+}
+
+.release-notes-install-tag--pending {
+    color: var(--color-info, #61afef);
+}
+
+.release-notes-install-tag--current {
+    color: var(--accent-primary, #4ec9b0);
+}
+
+.release-notes-link {
+    margin-right: auto;
+    align-self: center;
+    font-size: calc(var(--font-size, 18px) * 0.67);
+    color: var(--accent-primary, #4ec9b0);
 }
 
 .release-notes-actions {

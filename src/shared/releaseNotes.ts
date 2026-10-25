@@ -208,6 +208,26 @@ export function releasesInRange(
 }
 
 /**
+ * Every release with notes from both sources, one per version, newest first.
+ * A published release's notes win over the bundled changelog's, since a
+ * release body can be edited after the build that bundled the changelog.
+ */
+export function mergeReleaseNotes(
+    published: ReleaseNotes[],
+    bundled: ReleaseNotes[],
+): ReleaseNotes[] {
+    const byVersion = new Map<string, ReleaseNotes>();
+    for (const release of [...bundled, ...published]) {
+        if (parseVersion(release.version) && hasNotes(release)) {
+            byVersion.set(release.version, release);
+        }
+    }
+    return [...byVersion.values()].sort((a, b) =>
+        compareVersions(b.version, a.version),
+    );
+}
+
+/**
  * Notes to show on launch: every release after the last version the user saw,
  * up to the running one. Nothing when no version was recorded (a fresh install).
  */

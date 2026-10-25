@@ -5,6 +5,7 @@ import {
     hasNotes,
     isBreakingVersionBump,
     isNewerVersion,
+    mergeReleaseNotes,
     parseChangelog,
     parseReleaseBody,
     parseVersion,
@@ -238,5 +239,52 @@ describe('combineReleaseNotes / updateHasBreakingChanges', () => {
     it('falls back to the version bump when there are no notes', () => {
         expect(updateHasBreakingChanges([], '0.0.130', '0.1.0')).toBe(true);
         expect(updateHasBreakingChanges([], '0.0.129', '0.0.130')).toBe(false);
+    });
+});
+
+describe('mergeReleaseNotes', () => {
+    const bundled = [
+        release('0.1.1', { Fixed: ['bundled 0.1.1'] }),
+        release('0.1.0', { New: ['bundled 0.1.0'] }),
+        release('0.0.130', {}),
+    ];
+
+    it('adds published releases newer than the bundled changelog', () => {
+        const merged = mergeReleaseNotes(
+            [
+                release('0.2.0', { New: ['published 0.2.0'] }),
+                release('0.1.1', { Fixed: ['published 0.1.1'] }),
+            ],
+            bundled,
+        );
+        expect(merged.map((r) => r.version)).toEqual([
+            '0.2.0',
+            '0.1.1',
+            '0.1.0',
+        ]);
+    });
+
+    it('keeps one entry per version, preferring the published notes', () => {
+        const merged = mergeReleaseNotes(
+            [release('0.1.1', { Fixed: ['published 0.1.1'] })],
+            bundled,
+        );
+        expect(merged.find((r) => r.version === '0.1.1')?.sections).toEqual({
+            Fixed: ['published 0.1.1'],
+        });
+    });
+
+    it('keeps bundled notes when the published release has none', () => {
+        const merged = mergeReleaseNotes([release('0.1.0', {})], bundled);
+        expect(merged.find((r) => r.version === '0.1.0')?.sections).toEqual({
+            New: ['bundled 0.1.0'],
+        });
+    });
+
+    it('falls back to the bundled changelog alone', () => {
+        expect(mergeReleaseNotes([], bundled).map((r) => r.version)).toEqual([
+            '0.1.1',
+            '0.1.0',
+        ]);
     });
 });

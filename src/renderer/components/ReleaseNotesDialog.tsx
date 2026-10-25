@@ -2,6 +2,8 @@ import { useEffect, useMemo, type ReactNode } from 'react';
 import Markdown, { type Components } from 'react-markdown';
 import {
     combineReleaseNotes,
+    compareVersions,
+    RELEASE_NOTE_KINDS,
     type ReleaseNotes,
 } from '../../shared/releaseNotes';
 import './ReleaseNotesDialog.css';
@@ -18,12 +20,44 @@ interface Props {
     summary?: ReactNode;
     /** Newest first. */
     releases: ReleaseNotes[];
+    /**
+     * Collect every breaking change into one box at the top. Off, they stay
+     * in their own release, which suits a full history.
+     */
+    liftBreaking?: boolean;
+    /** Marks each release as installed or not yet installed relative to this version. */
+    installedVersion?: string;
+    /** A link shown in the footer, opened in the system browser. */
+    link?: { label: string; href: string };
     /** Footer buttons; a lone Close button when omitted. */
     actions?: ReleaseNotesAction[];
     onClose: () => void;
 }
 
-const KIND_ORDER = ['New', 'Improved', 'Fixed'] as const;
+function InstallTag({
+    version,
+    installedVersion,
+}: {
+    version: string;
+    installedVersion: string;
+}) {
+    const order = compareVersions(version, installedVersion);
+    if (order > 0) {
+        return (
+            <span className="release-notes-install-tag release-notes-install-tag--pending">
+                Not installed
+            </span>
+        );
+    }
+    if (order === 0) {
+        return (
+            <span className="release-notes-install-tag release-notes-install-tag--current">
+                Installed
+            </span>
+        );
+    }
+    return null;
+}
 
 /**
  * Release bodies come from the network, so raw HTML is dropped, and links
@@ -50,10 +84,19 @@ export function ReleaseNotesDialog({
     title,
     summary,
     releases,
+    liftBreaking = true,
+    installedVersion,
+    link,
     actions,
     onClose,
 }: Props) {
-    const combined = useMemo(() => combineReleaseNotes(releases), [releases]);
+    const combined = useMemo(
+        () =>
+            liftBreaking
+                ? combineReleaseNotes(releases)
+                : { breaking: [], releases },
+        [releases, liftBreaking],
+    );
     const footer = actions ?? [
         { label: 'Close', onClick: onClose, primary: true },
     ];
@@ -138,13 +181,19 @@ export function ReleaseNotesDialog({
                         >
                             <h3>
                                 Version {release.version}
+                                {installedVersion && (
+                                    <InstallTag
+                                        version={release.version}
+                                        installedVersion={installedVersion}
+                                    />
+                                )}
                                 {release.date && (
                                     <span className="release-notes-date">
                                         {release.date}
                                     </span>
                                 )}
                             </h3>
-                            {KIND_ORDER.map((kind) => {
+                            {RELEASE_NOTE_KINDS.map((kind) => {
                                 const entries = release.sections[kind];
                                 if (!entries?.length) return null;
                                 return (
@@ -172,6 +221,16 @@ export function ReleaseNotesDialog({
                 </div>
 
                 <footer className="release-notes-actions">
+                    {link && (
+                        <a
+                            className="release-notes-link"
+                            href={link.href}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                        >
+                            {link.label}
+                        </a>
+                    )}
                     {footer.map((action) => (
                         <button
                             key={action.label}

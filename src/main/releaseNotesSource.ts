@@ -13,6 +13,9 @@ export interface PublishedRelease {
     url: string;
 }
 
+/** Bounds how long a slow or captive network keeps the release notes waiting. */
+const FETCH_TIMEOUT_MS = 10_000;
+
 const GitHubReleaseSchema = z.object({
     body: z.string().nullish(),
     draft: z.boolean(),
@@ -41,15 +44,19 @@ function formatReleaseDate(isoDate: string | null | undefined): string | null {
 
 /**
  * Published releases of `repo` with plain `X.Y.Z` tags, newest first. Drafts
- * and prereleases are excluded. Returns null when the request or the response
- * shape fails. Release bodies are untrusted network content.
+ * and prereleases are excluded. Returns null when GitHub answers with an error
+ * or an unexpected shape; throws when the network is unreachable or the
+ * request times out. Release bodies are untrusted network content.
  */
 export async function fetchPublishedReleases(
     repo: string,
 ): Promise<PublishedRelease[] | null> {
     const response = await fetch(
         `https://api.github.com/repos/${repo}/releases?per_page=100`,
-        { headers: { 'User-Agent': repo } },
+        {
+            headers: { 'User-Agent': repo },
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        },
     );
     if (!response.ok) {
         console.warn('[update] GitHub API returned', response.status);

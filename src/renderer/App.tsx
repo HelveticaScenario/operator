@@ -35,7 +35,11 @@ import { ControlPanel } from './components/ControlPanel';
 import electronAPI from './electronAPI';
 import type { ValidationError } from '@modular/core';
 import type { QueuedTrigger, ScopeStats } from '@modular/core';
-import type { FileTreeEntry, UpdateAvailableInfo } from '../shared/ipcTypes';
+import type {
+    ChangelogInfo,
+    FileTreeEntry,
+    UpdateAvailableInfo,
+} from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../shared/dsl/buttonTypes';
 import type { VuMeterDef, VuMeterGhost } from '../shared/dsl/vuMeterTypes';
@@ -113,7 +117,7 @@ import { useTheme } from './themes/ThemeContext';
 type ReleaseNotesView =
     | { kind: 'update' }
     | { kind: 'whatsNew'; currentVersion: string; releases: ReleaseNotes[] }
-    | { kind: 'changelog'; releases: ReleaseNotes[] };
+    | { kind: 'changelog'; info: ChangelogInfo };
 
 function App() {
     const {
@@ -1210,8 +1214,8 @@ function App() {
         return electronAPI.releaseNotes.onMenuShow(() => {
             electronAPI.releaseNotes
                 .getAll()
-                .then((releases) => {
-                    setReleaseNotesView({ kind: 'changelog', releases });
+                .then((info) => {
+                    setReleaseNotesView({ info, kind: 'changelog' });
                 })
                 .catch((err) => {
                     console.warn('[release-notes] Changelog failed:', err);
@@ -3074,7 +3078,13 @@ function App() {
             {releaseNotesView?.kind === 'changelog' && (
                 <ReleaseNotesDialog
                     title="Release Notes"
-                    releases={releaseNotesView.releases}
+                    releases={releaseNotesView.info.releaseNotes}
+                    liftBreaking={false}
+                    installedVersion={releaseNotesView.info.currentVersion}
+                    link={{
+                        href: releaseNotesView.info.fullChangelogUrl,
+                        label: 'Full changelog on GitHub',
+                    }}
                     onClose={closeReleaseNotes}
                 />
             )}

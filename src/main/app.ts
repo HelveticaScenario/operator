@@ -46,12 +46,12 @@ import { createFallbackWarningChannel } from './fallbackWarning';
 import { sendNavigateToSymbol } from './helpNavigation';
 import { bundledChangelog, fetchPublishedReleases } from './releaseNotesSource';
 import {
-    compareVersions,
-    hasNotes,
     isNewerVersion,
+    mergeReleaseNotes,
     releasesInRange,
     updateHasBreakingChanges,
     whatsNewSince,
+    type ReleaseNotes,
 } from '../shared/releaseNotes';
 import {
     handleMediaProtocol,
@@ -355,6 +355,7 @@ console.debug = createLogInterceptor('debug');
 // ========================================================================
 
 const GITHUB_REPO = 'HelveticaScenario/operator';
+const FULL_CHANGELOG_URL = `https://github.com/${GITHUB_REPO}/blob/master/CHANGELOG.md`;
 const UPDATE_FEED_URL = `https://update.electronjs.org/${GITHUB_REPO}`;
 
 /** True on platforms where autoUpdater (Squirrel) is supported */
@@ -2079,11 +2080,20 @@ registerIPCHandler('RELEASE_NOTES_WHATS_NEW', () => {
     return { currentVersion, releaseNotes };
 });
 
-registerIPCHandler('RELEASE_NOTES_GET_ALL', () =>
-    bundledChangelog()
-        .filter(hasNotes)
-        .sort((a, b) => compareVersions(b.version, a.version)),
-);
+registerIPCHandler('RELEASE_NOTES_GET_ALL', async () => {
+    let published: ReleaseNotes[] = [];
+    try {
+        const releases = await fetchPublishedReleases(GITHUB_REPO);
+        published = releases?.map((release) => release.notes) ?? [];
+    } catch (err) {
+        console.warn('[release-notes] Fetching releases failed:', err);
+    }
+    return {
+        currentVersion: app.getVersion(),
+        fullChangelogUrl: FULL_CHANGELOG_URL,
+        releaseNotes: mergeReleaseNotes(published, bundledChangelog()),
+    };
+});
 
 ipcMain.handle(IPC_CHANNELS.UPDATE_INSTALL, () => {
     if (!supportsAutoUpdater) {
@@ -2570,6 +2580,12 @@ const createMenu = (): void => {
                         }
                     },
                     label: 'Release Notes',
+                },
+                {
+                    click: () => {
+                        void shell.openExternal(FULL_CHANGELOG_URL);
+                    },
+                    label: 'Full Changelog on GitHub',
                 },
                 { type: 'separator' },
                 {

@@ -174,6 +174,14 @@ export interface UpdateAvailableInfo {
     hasBreakingChanges: boolean;
 }
 
+export interface ChangelogInfo {
+    currentVersion: string;
+    /** Newest first; may include releases newer than `currentVersion`. */
+    releaseNotes: ReleaseNotes[];
+    /** The complete changelog on GitHub. */
+    fullChangelogUrl: string;
+}
+
 export interface WhatsNewInfo {
     currentVersion: string;
     /** Releases the user has not seen notes for yet, newest first; empty when there is nothing to show. */
@@ -675,8 +683,11 @@ export interface IPCHandlers {
      * Records the running version as seen, so a second call returns nothing.
      */
     [IPC_CHANNELS.RELEASE_NOTES_WHATS_NEW]: () => WhatsNewInfo;
-    /** Every release in the bundled changelog that has notes, newest first. */
-    [IPC_CHANNELS.RELEASE_NOTES_GET_ALL]: () => ReleaseNotes[];
+    /**
+     * Every release with notes, published and bundled, newest first. Falls
+     * back to the bundled changelog alone when the releases cannot be fetched.
+     */
+    [IPC_CHANNELS.RELEASE_NOTES_GET_ALL]: () => Promise<ChangelogInfo>;
 }
 
 /**
