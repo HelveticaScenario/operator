@@ -811,15 +811,15 @@ ${renderOutOptionsMembers(MONO_OUT_OPTIONS)}
 
 /** Options for \`.erratic()\` on a signal without a known range */
 interface ErraticOptions {
-  /** Rising edge samples and holds the current random shift */
+  /** Rising edge samples and holds the current random value */
   trigger?: Poly<Signal>;
-  /** How fast the shift wanders: 0 = frozen, 5 = white noise (default 2) */
+  /** How fast the variation wanders: 0 = frozen, 5 = a fresh value every sample (default 2) */
   speed?: Poly<Signal>;
-  /** Skews the shift upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
+  /** Leans the variation upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
   bias?: Poly<Signal>;
-  /** \`'shift'\` adds a random offset; \`'blend'\` moves toward a random value in the range, so it never leaves the range (default \`'shift'\`) */
+  /** \`'shift'\` adds a random offset; \`'blend'\` moves toward a random value in the range, staying in range when the input is (default \`'shift'\`) */
   mode?: 'shift' | 'blend';
-  /** Mostly stay close to the input, with occasional big jumps (default false) */
+  /** Draw a random depth per value: low amounts mostly stay near the input with rare big jumps, high amounts mostly jump (default false) */
   sparse?: boolean;
 }
 
@@ -915,11 +915,12 @@ interface ModuleOutput {
   exp(factor?: Poly<Signal>): Collection;
 
   /**
-   * Apply a wandering random shift of up to ±\`amount\`, where 5 shifts by up
-   * to ±5 V. Each channel wanders independently.
-   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * Randomly vary this signal. By default it's a wandering shift of up to
+   * ±\`amount\` V; see \`mode\` for blending instead. Each channel wanders
+   * independently.
+   * @param amount Depth (0–5) as {@link Poly<Signal>}
    * @param options Trigger, speed, bias, mode, and sparse ({@link ErraticOptions})
-   * @returns The shifted {@link Collection} for chaining
+   * @returns The varied {@link Collection} for chaining
    * @example $sine($c('a3').erratic(1 / 12, { speed: 1.5 })).out()  // drift up to a semitone either way
    */
   erratic(amount: Poly<Signal>, options?: ErraticOptions): Collection;
@@ -1113,15 +1114,16 @@ interface ModuleOutputWithRange extends ModuleOutput {
   range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
 
   /**
-   * Apply a wandering random shift scaled to this output's range: \`amount\` 5
-   * shifts by up to half the range either way, so ±5 on a 0–10 signal.
+   * Randomly vary this output within its range. By default it's a wandering
+   * shift where \`amount\` 5 moves up to half the range either way (±5 on a
+   * 0–10 signal); \`mode: 'blend'\` moves toward a random value in the range.
    * Clamps to the range unless \`clamp\` is false; the result keeps the
    * range.
-   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * @param amount Depth (0–5) as {@link Poly<Signal>}
    * @param options Trigger, speed, bias, mode, sparse, and clamp ({@link RangedErraticOptions})
    * @returns A {@link CollectionWithRange} with the same range
    * @example $saw('c3').amp($sine('4hz').range(2, 5).erratic(2, { trigger: $clock.beatTrigger })).out()
-   * @example $saw('c3').amp($sine('4hz').range(0, 5).erratic(5, { mode: 'blend', sparse: true, speed: 5, trigger: $clock.beatTrigger })).out()  // mostly near the sine, sometimes anywhere in 0–5
+   * @example $saw('c3').amp($sine('4hz').range(0, 5).erratic(5, { mode: 'blend', sparse: true, speed: 5, trigger: $clock.beatTrigger })).out()  // usually a new level each beat, sometimes close to the sine
    */
   erratic(amount: Poly<Signal>, options?: RangedErraticOptions): CollectionWithRange;
 }
@@ -1208,11 +1210,12 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
   exp(factor?: Poly<Signal>): Collection;
 
   /**
-   * Apply a wandering random shift of up to ±\`amount\` to all signals, where
-   * 5 shifts by up to ±5 V. Each channel wanders independently.
-   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * Randomly vary all signals. By default it's a wandering shift of up to
+   * ±\`amount\` V; see \`mode\` for blending instead. Each channel wanders
+   * independently.
+   * @param amount Depth (0–5) as {@link Poly<Signal>}
    * @param options Trigger, speed, bias, mode, and sparse ({@link ErraticOptions})
-   * @returns The shifted {@link Collection} for chaining
+   * @returns The varied {@link Collection} for chaining
    * @example $sine($c('c3', 'g3').erratic(1 / 12)).out()  // each voice drifts on its own
    */
   erratic(amount: Poly<Signal>, options?: ErraticOptions): Collection;
@@ -1406,10 +1409,10 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
   override range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
 
   /**
-   * Apply a wandering random shift to all outputs, scaled to each output's
-   * range. Clamps to the range unless \`clamp\` is false; the result keeps
-   * the ranges.
-   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * Randomly vary all outputs, scaled to each output's range (see \`mode\`
+   * for shift or blend). Clamps to the range unless \`clamp\` is false; the
+   * result keeps the ranges.
+   * @param amount Depth (0–5) as {@link Poly<Signal>}
    * @param options Trigger, speed, bias, mode, sparse, and clamp ({@link RangedErraticOptions})
    * @returns A {@link CollectionWithRange} with the same ranges
    * @example $saw($c('c3', 'e3')).amp($sine(['4hz', '5hz']).range(2, 5).erratic(2, { speed: 3 })).out()  // each voice's tremolo wanders on its own

@@ -7,9 +7,8 @@ use crate::dsp::utils::rng::{LcgRng, seed_base};
 use crate::dsp::utils::{CatmullRom, SchmittState, SchmittTrigger};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
-/// Rate of new random points at `speed = 5`, in Hz, unless the engine rate is
-/// higher. At `speed = 5` every sample draws a fresh point, so the output is
-/// white noise and held values are uniform.
+/// Top of the speed curve, in Hz. `speed = 5` itself draws a fresh point every
+/// sample at any engine rate, so held values are uniform.
 const MAX_RATE_HZ: f32 = 48_000.0;
 
 /// Octaves spanned by the speed curve: `speed` 0–5 sweeps the point rate
@@ -20,13 +19,16 @@ const SPEED_OCTAVES: f32 = 24.0;
 /// Width of the default ±5 V range. `amount = 5` spans this full width.
 const NOMINAL_WIDTH: f32 = 10.0;
 
+/// Mixed into the seed base for the sparse-depth stream.
+const SPARSE_SEED_SALT: u64 = 0x5EED_5BA2_5E00_0001;
+
 /// In sparse mode, the depth drawn for a point is `min(1, SPARSE_SCALE · a · u)`
 /// with `a = amount / 5` and `u` uniform in [0, 1), so past `a = 1/3` a share
 /// `1 − 1/(3a)` of the draws reach full depth.
 const SPARSE_SCALE: f32 = 3.0;
 
-/// Points per sample for a `speed` in 0–5. Reaches exactly 1 at `speed = 5`
-/// whatever the sample rate.
+/// Points per sample for a `speed` in 0–5. Below 5 the rate in Hz is the same
+/// at every engine rate; 5 is exactly one point per sample.
 #[inline]
 fn speed_to_increment(speed: f32, sample_rate: f32) -> f32 {
     let s = speed.clamp(0.0, 5.0) / 5.0;
@@ -34,7 +36,7 @@ fn speed_to_increment(speed: f32, sample_rate: f32) -> f32 {
         return 1.0;
     }
     let curve = ((SPEED_OCTAVES * s).exp2() - 1.0) / (SPEED_OCTAVES.exp2() - 1.0);
-    (curve * MAX_RATE_HZ.max(sample_rate) / sample_rate).min(1.0)
+    (curve * MAX_RATE_HZ / sample_rate).min(1.0)
 }
 
 /// How the random value moves the input.
@@ -53,22 +55,22 @@ enum ErraticMode {
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct ErraticParams {
-    /// signal to shift
+    /// signal to vary
     input: PolySignal,
     /// depth (0–5); at 5, shift moves up to half the range either way and
     /// blend jumps all the way to the random value
     #[signal(range = (0.0, 5.0))]
     amount: PolySignal,
-    /// rising edge samples and holds the current random shift
+    /// rising edge samples and holds the current random value
     #[signal(type = trig, range = (0.0, 5.0))]
     #[block_input(optional)]
     #[deserr(default)]
     trigger: Option<PolySignal>,
-    /// how fast the shift wanders: 0 = frozen, 5 = white noise
+    /// how fast the variation wanders: 0 = frozen, 5 = a fresh value every sample
     #[signal(default = 2.0, range = (0.0, 5.0))]
     #[deserr(default)]
     speed: Option<PolySignal>,
-    /// skews the shift upward (positive) or downward (negative); ±5 makes it one-sided
+    /// leans the variation upward (positive) or downward (negative); ±5 makes it one-sided
     #[signal(default = 0.0, range = (-5.0, 5.0))]
     #[deserr(default)]
     bias: Option<PolySignal>,
@@ -84,11 +86,13 @@ struct ErraticParams {
     #[serde(default)]
     #[deserr(default)]
     clamp: bool,
-    /// shift adds a random offset; blend moves toward a random value in the range
+    /// shift adds a random offset; blend moves toward a random value in the
+    /// range, staying in range when the input is
     #[serde(default)]
     #[deserr(default)]
     mode: ErraticMode,
-    /// mostly stay close to the input, with occasional big jumps
+    /// draw a random depth per value: low amounts mostly stay near the input
+    /// with rare big jumps, high amounts mostly jump
     #[serde(default)]
     #[deserr(default)]
     sparse: bool,
@@ -104,6 +108,9 @@ struct ErraticOutputs {
 #[derive(Default, Clone, Copy)]
 struct ErraticChannelState {
     rng: LcgRng,
+    /// Drives `sparse_points` only, so `rng`'s sequence is the same with
+    /// sparse on or off.
+    sparse_rng: LcgRng,
     seeded: bool,
     /// Position between `points[1]` and `points[2]`, in [0, 1). f64, so the
     /// tiny increments of low speeds still advance it near 1.
@@ -112,7 +119,8 @@ struct ErraticChannelState {
     points: [f32; 4],
     /// The curve through `points`, from the second toward the third.
     curve: CatmullRom,
-    /// The last four sparse-depth draws in [0, 1], drawn alongside `points`.
+    /// The last four sparse-depth draws in [0, 1], advanced alongside
+    /// `points` while sparse is on.
     sparse_points: [f32; 4],
     sparse_curve: CatmullRom,
     trigger: SchmittTrigger,
@@ -137,10 +145,9 @@ impl ErraticChannelState {
     /// draw its first four points.
     fn seed(&mut self, base: u64, channel: usize) {
         self.rng.seed(base, channel);
-        for i in 0..4 {
-            self.points[i] = self.rng.next_bipolar();
-            self.sparse_points[i] = self.rng.next_unit();
-        }
+        self.sparse_rng.seed(base ^ SPARSE_SEED_SALT, channel);
+        self.points = std::array::from_fn(|_| self.rng.next_bipolar());
+        self.sparse_points = std::array::from_fn(|_| self.sparse_rng.next_unit());
         self.curve = CatmullRom::new(self.points);
         self.sparse_curve = CatmullRom::new(self.sparse_points);
         self.seeded = true;
@@ -152,21 +159,25 @@ impl ErraticChannelState {
         let inc = speed_to_increment(f.speed, sample_rate);
         self.phase += f64::from(inc);
         if self.phase >= 1.0 {
-            // A point per sample stays on the fresh point itself, so the
-            // output is the uniform draws rather than a curve between them.
+            // At a point per sample the phase stays at 0, so the output steps
+            // through the points themselves rather than a curve between them.
             self.phase = if inc >= 1.0 { 0.0 } else { self.phase - 1.0 };
             let [_, a, b, c] = self.points;
             self.points = [a, b, c, self.rng.next_bipolar()];
             self.curve = CatmullRom::new(self.points);
-            let [_, a, b, c] = self.sparse_points;
-            self.sparse_points = [a, b, c, self.rng.next_unit()];
-            self.sparse_curve = CatmullRom::new(self.sparse_points);
+            if p.sparse {
+                let [_, a, b, c] = self.sparse_points;
+                self.sparse_points = [a, b, c, self.sparse_rng.next_unit()];
+                self.sparse_curve = CatmullRom::new(self.sparse_points);
+            }
         }
         let t = self.phase as f32;
-        let wander = (
-            self.curve.at(t).clamp(-1.0, 1.0),
-            self.sparse_curve.at(t).clamp(0.0, 1.0),
-        );
+        let u = if p.sparse {
+            self.sparse_curve.at(t).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let wander = (self.curve.at(t).clamp(-1.0, 1.0), u);
 
         let (r, u) = match f.trigger {
             Some(trig) => {
@@ -222,10 +233,11 @@ impl ErraticChannelState {
 ///
 /// **shift** mode adds an offset of up to ±**amount**, scaled to the width of
 /// [**min**, **max**]: 5 moves up to half the range either way. **blend** mode
-/// moves toward a random value in [**min**, **max**] by **amount** / 5, so it
-/// never leaves the range. **bias** makes the variation lean upward (+) or
-/// downward (−); ±5 makes it one-sided. **sparse** keeps most values close to
-/// the input, with occasional big jumps. **speed** runs from frozen at 0 to a
+/// moves toward a random value in [**min**, **max**] by **amount** / 5, so an
+/// input in range stays in range. **bias** makes the variation lean upward (+)
+/// or downward (−); ±5 makes it one-sided. **sparse** draws a random depth per
+/// value: low amounts mostly stay near the input with rare big jumps, high
+/// amounts mostly jump. **speed** runs from frozen at 0 to a
 /// fresh random value every sample at 5. A **trigger** holds the variation
 /// between rising edges.
 ///
@@ -540,6 +552,38 @@ mod tests {
         }
         let near_top = speed_to_increment(4.9, SR) * SR;
         assert!(near_top < MAX_RATE_HZ && near_top > MAX_RATE_HZ / 2.0);
+    }
+
+    #[test]
+    fn point_rate_is_independent_of_sample_rate() {
+        for speed in [1.0, 2.0, 4.0, 4.9] {
+            let hz = speed_to_increment(speed, SR) * SR;
+            let hz_96k = speed_to_increment(speed, 96_000.0) * 96_000.0;
+            assert!(
+                (hz - hz_96k).abs() <= hz * 1e-5,
+                "speed {speed}: {hz} vs {hz_96k}"
+            );
+        }
+    }
+
+    /// The main point sequence is the same whether sparse is on or off.
+    #[test]
+    fn sparse_leaves_the_point_sequence_alone() {
+        let mut p = params(0.0, 5.0, 5.0, 0.0);
+        let mut dense = make(p.clone());
+        p.sparse = true;
+        let mut sparse = make(p);
+        sparse.channel_state[0].rng = dense.channel_state[0].rng;
+        sparse.channel_state[0].points = dense.channel_state[0].points;
+        sparse.channel_state[0].curve = dense.channel_state[0].curve;
+        for _ in 0..256 {
+            dense.update(SR);
+            sparse.update(SR);
+            assert_eq!(
+                dense.channel_state[0].points,
+                sparse.channel_state[0].points
+            );
+        }
     }
 
     /// At an engine rate above [`MAX_RATE_HZ`], speed 5 still draws a fresh

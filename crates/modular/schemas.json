@@ -18581,7 +18581,7 @@
   },
   {
     "name": "_erratic",
-    "documentation": "Applies a wandering random variation to a signal.\n\n**shift** mode adds an offset of up to ±**amount**, scaled to the width of\n[**min**, **max**]: 5 moves up to half the range either way. **blend** mode\nmoves toward a random value in [**min**, **max**] by **amount** / 5, so it\nnever leaves the range. **bias** makes the variation lean upward (+) or\ndownward (−); ±5 makes it one-sided. **sparse** keeps most values close to\nthe input, with occasional big jumps. **speed** runs from frozen at 0 to a\nfresh random value every sample at 5. A **trigger** holds the variation\nbetween rising edges.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
+    "documentation": "Applies a wandering random variation to a signal.\n\n**shift** mode adds an offset of up to ±**amount**, scaled to the width of\n[**min**, **max**]: 5 moves up to half the range either way. **blend** mode\nmoves toward a random value in [**min**, **max**] by **amount** / 5, so an\ninput in range stays in range. **bias** makes the variation lean upward (+)\nor downward (−); ±5 makes it one-sided. **sparse** draws a random depth per\nvalue: low amounts mostly stay near the input with rare big jumps, high\namounts mostly jump. **speed** runs from frozen at 0 to a\nfresh random value every sample at 5. A **trigger** holds the variation\nbetween rising edges.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "ErraticParams",
@@ -18592,7 +18592,7 @@
           "$ref": "#/$defs/PolySignal"
         },
         "bias": {
-          "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+          "description": "leans the variation upward (positive) or downward (negative); ±5 makes it one-sided",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -18608,7 +18608,7 @@
           "default": false
         },
         "input": {
-          "description": "signal to shift",
+          "description": "signal to vary",
           "$ref": "#/$defs/PolySignal"
         },
         "max": {
@@ -18634,16 +18634,16 @@
           ]
         },
         "mode": {
-          "description": "shift adds a random offset; blend moves toward a random value in the range",
+          "description": "shift adds a random offset; blend moves toward a random value in the\nrange, staying in range when the input is",
           "$ref": "#/$defs/ErraticMode"
         },
         "sparse": {
-          "description": "mostly stay close to the input, with occasional big jumps",
+          "description": "draw a random depth per value: low amounts mostly stay near the input\nwith rare big jumps, high amounts mostly jump",
           "type": "boolean",
           "default": false
         },
         "speed": {
-          "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+          "description": "how fast the variation wanders: 0 = frozen, 5 = a fresh value every sample",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -18654,7 +18654,7 @@
           ]
         },
         "trigger": {
-          "description": "rising edge samples and holds the current random shift",
+          "description": "rising edge samples and holds the current random value",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -18756,7 +18756,7 @@
     "signalParams": [
       {
         "name": "input",
-        "description": "signal to shift",
+        "description": "signal to vary",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,
@@ -18772,7 +18772,7 @@
       },
       {
         "name": "trigger",
-        "description": "rising edge samples and holds the current random shift",
+        "description": "rising edge samples and holds the current random value",
         "signalType": "trig",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -18780,7 +18780,7 @@
       },
       {
         "name": "speed",
-        "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+        "description": "how fast the variation wanders: 0 = frozen, 5 = a fresh value every sample",
         "signalType": "control",
         "defaultValue": 2.0,
         "minValue": 0.0,
@@ -18788,7 +18788,7 @@
       },
       {
         "name": "bias",
-        "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+        "description": "leans the variation upward (positive) or downward (negative); ±5 makes it one-sided",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,

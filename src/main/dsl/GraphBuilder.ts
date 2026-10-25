@@ -187,15 +187,15 @@ export interface MonoOutOptions {
 
 /** Options for `.erratic()` on a signal without a known range */
 export interface ErraticOptions {
-    /** Rising edge samples and holds the current random shift */
+    /** Rising edge samples and holds the current random value */
     trigger?: PolySignal;
-    /** How fast the shift wanders: 0 = frozen, 5 = white noise (default 2) */
+    /** How fast the variation wanders: 0 = frozen, 5 = a fresh value every sample (default 2) */
     speed?: PolySignal;
-    /** Skews the shift upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
+    /** Leans the variation upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
     bias?: PolySignal;
-    /** `'shift'` adds a random offset; `'blend'` moves toward a random value in the range, so it never leaves the range (default `'shift'`) */
+    /** `'shift'` adds a random offset; `'blend'` moves toward a random value in the range, staying in range when the input is (default `'shift'`) */
     mode?: 'shift' | 'blend';
-    /** Mostly stay close to the input, with occasional big jumps (default false) */
+    /** Draw a random depth per value: low amounts mostly stay near the input with rare big jumps, high amounts mostly jump (default false) */
     sparse?: boolean;
 }
 
