@@ -45,7 +45,7 @@ fn patch_with_vu_meter(spec: modular_core::types::VuMeterSpec) -> PatchGraph {
                 module_type: "$signal".to_string(),
                 id_is_explicit: Some(true),
                 skip_state_transfer: None,
-                params: json!({ "source": 5.0 }),
+                params: json!({ "value": 5.0 }),
             },
             ModuleSpec {
                 id: "not-signal".to_string(),
@@ -207,7 +207,7 @@ fn test_cable_to_nonexistent_module() {
             id_is_explicit: None,
             skip_state_transfer: None,
             params: json!({
-                "source": {"type": "cable", "module": "nonexistent", "port": "output"}
+                "value": {"type": "cable", "module": "nonexistent", "port": "output"}
             }),
         }],
         module_id_remaps: None,
@@ -295,7 +295,7 @@ fn test_cable_to_invalid_port() {
                 id_is_explicit: None,
                 skip_state_transfer: None,
                 params: json!({
-                    "source": {"type": "cable", "module": "sine-1", "port": "invalid_port"}
+                    "value": {"type": "cable", "module": "sine-1", "port": "invalid_port"}
                 }),
             },
         ],
@@ -403,7 +403,7 @@ fn test_valid_cable_connection() {
                 id_is_explicit: None,
                 skip_state_transfer: None,
                 params: json!({
-                    "source": {"type": "cable", "module": "sine-1", "port": "output"}
+                    "value": {"type": "cable", "module": "sine-1", "port": "output"}
                 }),
             },
         ],

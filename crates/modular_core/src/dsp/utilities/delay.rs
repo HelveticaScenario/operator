@@ -42,32 +42,32 @@ impl DelayRead {
         let slot = self.current_block_index();
         self.params.buffer.ensure_source_updated_to(slot + 1);
 
-        // Effective write position for this slot = base (set by the
-        // source's `tick_buffers` at block start) + `current_block_index`.
-        // Without the per-slot offset every slot in the block would read
-        // the same delay position — 64× sample-and-hold artefact at
-        // `block_size = 64`.
-        let write_index = (self.params.buffer.read_write_index() as f64) + (slot as f64);
         let frame_count = self.params.buffer.frame_count();
         let channels = self.channel_count();
+        // This slot's write position is the base the source's `tick_buffers`
+        // set at block start plus `slot`. Inside a feedback cycle the source
+        // may still be computing this slot, so that frame holds data from a
+        // full buffer ago and the newest written frame is the one before it.
+        let unwritten = usize::from(!self.params.buffer.source_wrote_slot(slot));
+        let newest = (self.params.buffer.read_write_index() + slot + frame_count)
+            .wrapping_sub(unwritten)
+            % frame_count.max(1);
 
         for channel in 0..channels {
             let delay_time_secs = (self.params.time.get_value(channel) as f64).max(0.0);
-            let delay_frames = delay_time_secs * (sample_rate as f64);
-            let read_frame = write_index - delay_frames;
-
-            let wrapped_frame = if frame_count > 0 {
-                read_frame.rem_euclid(frame_count as f64) as f32
-            } else {
-                0.0
-            };
+            // The longest delay is `frame_count - 1` frames whichever cycle
+            // member runs first; with `unwritten`, `back` counts from the
+            // frame before the write position.
+            let delay_frames =
+                (delay_time_secs * (sample_rate as f64)).min(frame_count.saturating_sub(1) as f64);
+            let back = (delay_frames - unwritten as f64).max(0.0);
 
             let buf_channels = self.params.buffer.channel_count().max(1);
             let buf_channel = channel % buf_channels;
             let value = self
                 .params
                 .buffer
-                .read_hermite_wrapped(buf_channel, wrapped_frame);
+                .read_hermite_behind(buf_channel, newest, back as f32);
             self.outputs.sample.set(channel, value);
         }
     }

@@ -231,12 +231,17 @@ pub trait Sampleable: MessageHandler + Send {
     /// from zero while staying locked to the peer timeline.
     fn reset_loop_index(&self) {}
 
-    /// Inject one block's worth of host audio input frames. Only
-    /// `HiddenAudioIn` overrides this; everyone else is a no-op. The audio
-    /// callback pulls one CPAL frame per slot into `block` and hands the
-    /// whole thing in once per internal block, so the inner module can
-    /// serve per-slot reads via `get_value_at(_, ch, slot)`.
-    fn inject_audio_in_block(&self, _block: &[[f32; crate::poly::PORT_MAX_CHANNELS]]) {}
+    /// Inject host audio input frames for the current block's slots from
+    /// `first_slot` on. Only `HiddenAudioIn` overrides this; everyone else is
+    /// a no-op. The audio callback pulls one CPAL frame per slot just before
+    /// rendering those slots, so the inner module can serve per-slot reads
+    /// via `get_value_at(_, ch, slot)`.
+    fn inject_audio_in(
+        &self,
+        _first_slot: usize,
+        _frames: &[[f32; crate::poly::PORT_MAX_CHANNELS]],
+    ) {
+    }
 
     /// Reset the per-block sample cursor to 0 at the start of an internal
     /// `block_size` block. Cache slots in `block_outputs` keep their
@@ -258,6 +263,17 @@ pub trait Sampleable: MessageHandler + Send {
     /// stopping at min(target, block_size). Cursor persists across calls and
     /// across audio callbacks; only `start_block()` resets it.
     fn ensure_processed_to(&self, target: usize);
+
+    /// Number of slots of the current internal block whose `update` has
+    /// finished. A Sample-mode module mid-update on slot `i` reports `i`, so a
+    /// reader reached re-entrantly through a feedback cycle can tell its source
+    /// has not yet produced that slot. A Block-mode wrapper reports only the
+    /// start of a range until the whole range is done; it is never re-entered,
+    /// so readers always see the finished count. Implementors without a
+    /// per-block cursor report `usize::MAX` (always complete).
+    fn processed_to(&self) -> usize {
+        usize::MAX
+    }
 
     /// Complete any remaining block computation. Equivalent to
     /// `ensure_processed_to(block_size)`. Used by composite modules to fully
@@ -965,33 +981,42 @@ impl SampleBuffer {
         self.samples.get(channel).map_or(&[], Vec::as_slice)
     }
 
-    /// Hermite (4-point cubic) interpolation at a fractional frame position
-    /// with wrapping — suitable for circular buffers and looped playback.
-    /// Allocation-free; safe for the audio thread.
+    /// Hermite (4-point cubic) read of a circular buffer `back` frames before
+    /// frame `newest`, treating the buffer as a history running from `newest`
+    /// back to the frame after it. `back` clamps to `[0, frame_count - 1]`, and
+    /// interpolation neighbours past either end of that history are
+    /// extrapolated linearly, so a read never wraps from the newest frame onto
+    /// the oldest. Allocation-free; safe for the audio thread.
     #[inline]
-    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
-        if !frame.is_finite() || self.frame_count == 0 {
+    pub fn read_hermite_behind(&self, channel: usize, newest: usize, back: f32) -> f32 {
+        let n = self.frame_count;
+        if !back.is_finite() || n == 0 {
             return 0.0;
         }
 
-        let wrapped = frame.rem_euclid(self.frame_count as f32);
-        let left = wrapped.floor() as usize;
-        let frac = wrapped - left as f32;
+        let back = back.clamp(0.0, (n - 1) as f32);
+        let whole = back.floor() as usize;
+        let frac = back - whole as f32;
+        let at = |k: usize| self.read(channel, (newest % n + n - k) % n);
         if frac <= f32::EPSILON {
-            return self.read(channel, left);
+            return at(whole);
         }
 
-        let n = self.frame_count;
-        let i0 = (left + n - 1) % n;
-        let i1 = left;
-        let i2 = (left + 1) % n;
-        let i3 = (left + 2) % n;
-
-        let y0 = self.read(channel, i0);
-        let y1 = self.read(channel, i1);
-        let y2 = self.read(channel, i2);
-        let y3 = self.read(channel, i3);
-
+        // A fractional `back` is below `n - 1`, so `whole + 1` is in range.
+        let y1 = at(whole);
+        let y2 = at(whole + 1);
+        let y0 = if whole == 0 {
+            2.0 * y1 - y2
+        } else {
+            at(whole - 1)
+        };
+        let y3 = if whole + 2 < n {
+            at(whole + 2)
+        } else {
+            2.0 * y2 - y1
+        };
+        // Catmull-Rom is symmetric, so interpolating from newer toward older
+        // matches the forward read of the same frames.
         hermite4(y0, y1, y2, y3, frac)
     }
 }
@@ -1388,11 +1413,11 @@ impl BufferData {
         self.with_buffer_mut(|b| b.write(channel, frame, value));
     }
 
-    /// Hermite interpolation with wrapping, delegated to the inner `SampleBuffer`.
+    /// [`SampleBuffer::read_hermite_behind`] on the inner buffer.
     /// Audio-thread safe.
     #[inline]
-    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
-        self.with_buffer(|b| b.read_hermite_wrapped(channel, frame))
+    pub fn read_hermite_behind(&self, channel: usize, newest: usize, back: f32) -> f32 {
+        self.with_buffer(|b| b.read_hermite_behind(channel, newest, back))
     }
 
     /// Copy the most recent `min(old_size, new_size)` frames from `other` into `self`,
@@ -1487,7 +1512,7 @@ impl BufferData {
     }
 
     /// Access the raw `Vec<Vec<f32>>` for reading. Prefer `read()` or
-    /// `read_hermite_wrapped()` for normal use; this is for bulk operations
+    /// `read_hermite_behind()` for normal use; this is for bulk operations
     /// like `copy_overlap_from`.
     pub fn with_data<R>(&self, f: impl FnOnce(&Vec<Vec<f32>>) -> R) -> R {
         self.with_buffer(|b| b.with_data(f))
@@ -1605,6 +1630,14 @@ impl Buffer {
         }
     }
 
+    /// Whether the source has written slot `slot` of the current block. False
+    /// only inside a feedback cycle, when this read happens re-entrantly
+    /// during the source's own update of that slot.
+    pub fn source_wrote_slot(&self, slot: usize) -> bool {
+        self.cached_source_ptr
+            .is_none_or(|module_ptr| unsafe { module_ptr.as_ref().processed_to() } > slot)
+    }
+
     pub fn read_write_index(&self) -> usize {
         self.buffer_ref().map(|b| b.read_write_index()).unwrap_or(0)
     }
@@ -1639,9 +1672,9 @@ impl Buffer {
         self.buffer_ref().map(|buffer| buffer.with_data_mut(f))
     }
 
-    pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
+    pub fn read_hermite_behind(&self, channel: usize, newest: usize, back: f32) -> f32 {
         self.buffer_ref()
-            .map(|buffer| buffer.read_hermite_wrapped(channel, frame))
+            .map(|buffer| buffer.read_hermite_behind(channel, newest, back))
             .unwrap_or(0.0)
     }
 }
@@ -2206,6 +2239,70 @@ impl CableView {
             } else {
                 None
             }
+        }
+    }
+}
+
+/// A polyphonic input whose channel `i` is a cable to channel `first + i` of a
+/// single upstream port, resolved to that port's block buffer so a block
+/// module can read whole rows in place.
+///
+/// Shares [`CableView`]'s lifetime invariant.
+#[derive(Clone, Copy, Debug)]
+pub struct PolyCableView {
+    data: *const f32,
+    stride: usize,
+    processed: *const std::cell::Cell<usize>,
+    source: SampleablePtr,
+}
+
+// SAFETY: built during `connect()` on the audio thread and only read there;
+// it crosses threads only as part of params, like `Signal`.
+unsafe impl Send for PolyCableView {}
+
+impl PolyCableView {
+    /// `None` unless every signal is a viewed cable onto the same port, signal
+    /// `i` reading the port channel just after signal `i - 1`'s.
+    pub(crate) fn resolve(signals: &[Signal]) -> Option<Self> {
+        let mut port: Option<(CableView, SampleablePtr)> = None;
+        for (i, signal) in signals.iter().enumerate() {
+            let Signal::Cable {
+                view: Some(view),
+                resolved: Some(source),
+                ..
+            } = signal
+            else {
+                return None;
+            };
+            match port {
+                None => port = Some((*view, *source)),
+                Some((first, _)) if first.data == view.data && view.offset == first.offset + i => {}
+                Some(_) => return None,
+            }
+        }
+        let (first, source) = port?;
+        Some(Self {
+            // SAFETY: `offset < stride`, inside the port's first row.
+            data: unsafe { first.data.add(first.offset) },
+            stride: first.stride,
+            processed: first.processed,
+            source,
+        })
+    }
+
+    /// Render the producer through slot `end` and return the first viewed
+    /// channel's data and the port's stride (channel width); slot `i` starts
+    /// at `data + i * stride`. `None` when the producer cannot reach `end`,
+    /// e.g. a feedback cycle reading back into a module mid-computation.
+    #[inline]
+    pub(crate) fn rendered_to(&self, end: usize) -> Option<(*const f32, usize)> {
+        // SAFETY: see the type-level invariant. `ensure_processed_to` runs on
+        // the audio thread, which owns every module.
+        unsafe {
+            if (*self.processed).get() < end {
+                self.source.as_ref().ensure_processed_to(end);
+            }
+            ((*self.processed).get() >= end).then_some((self.data, self.stride))
         }
     }
 }
@@ -2828,6 +2925,10 @@ pub struct ScopeStats {
     pub max: f64,
     pub peak_to_peak: f64,
     pub read_offset: u32,
+    /// How far, in buffer samples, the trigger crossing lies before the first
+    /// sample (0 to 1); 0 for an untriggered scope. Drawing each sample this
+    /// much later pins the crossing to the same spot every frame.
+    pub trigger_offset: f64,
 }
 
 /// One VU meter's loudness snapshot, joined to its `VuMeterSpec` by `module_id`.
@@ -2855,6 +2956,19 @@ pub struct Scope {
     /// Voltage range for display (default [-5.0, 5.0]). The scope displays from range[0] to range[1].
     #[serde(default = "default_scope_range")]
     pub range: (f64, f64),
+    /// Draw each channel in its own scope instead of overlaying them.
+    pub split: Option<ScopeSplit>,
+}
+
+/// How a split scope arranges its per-channel views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[napi(string_enum = "lowercase")]
+pub enum ScopeSplit {
+    /// Stacked top to bottom at full width.
+    Vertical,
+    /// Side by side in equal shares of the width.
+    Horizontal,
 }
 
 fn default_scope_range() -> (f64, f64) {
@@ -2874,7 +2988,7 @@ pub struct VuMeterSpec {
     pub port_name: String,
     /// 1 (mono) or 2 (stereo).
     pub channels: u32,
-    /// `$signal` module driving the mute gate (source 5 = audible, 0 =
+    /// `$signal` module driving the mute gate (value 5 = audible, 0 =
     /// silenced). None for the end-of-chain master meter, which has no gate.
     pub mute_module_id: Option<String>,
     /// When the out's pan is signal-driven, the output to sample so the

@@ -40,7 +40,7 @@ fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Box<dy
 /// thread-local, so restore the permissive default before returning.
 #[test]
 fn read_does_not_render_past_ceiling() {
-    let module = make_module("$signal", "sig", json!({ "source": 5.0 }));
+    let module = make_module("$signal", "sig", json!({ "value": 5.0 }));
     module.start_block();
 
     set_block_render_ceiling(8);

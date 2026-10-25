@@ -65,6 +65,41 @@ pub fn get_reserved_output_names() -> Vec<String> {
         .collect()
 }
 
+/// Whether this CPU has every x86 extension the addon was compiled to assume
+/// (`target-cpu` in `.cargo/config.toml`). Compiled code may use those
+/// instructions anywhere, so the app calls this only from a probe child
+/// process (`src/main/cpuGate.ts`) where an illegal instruction cannot take
+/// down the app. Reads CPUID at runtime, since compile-time feature detection
+/// reports every compiled-in feature as present.
+#[napi]
+pub fn cpu_supports_build() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64::__cpuid;
+        // (compiled to assume it, CPUID leaf 1 ECX bit)
+        let required = [
+            (cfg!(target_feature = "sse3"), 0),
+            (cfg!(target_feature = "ssse3"), 9),
+            (cfg!(target_feature = "cmpxchg16b"), 13),
+            (cfg!(target_feature = "sse4.1"), 19),
+            (cfg!(target_feature = "sse4.2"), 20),
+            (cfg!(target_feature = "popcnt"), 23),
+        ];
+        let ecx = __cpuid(1).ecx;
+        // x86-64-v2 also assumes LAHF/SAHF in 64-bit mode, which has no stable
+        // `target_feature` cfg; SSE4.2 marks a v2 build.
+        let lahf_sahf = !cfg!(target_feature = "sse4.2") || __cpuid(0x8000_0001).ecx & 1 != 0;
+        lahf_sahf
+            && required
+                .iter()
+                .all(|&(compiled, bit)| !compiled || ecx & (1 << bit) != 0)
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        true
+    }
+}
+
 /// Number of video tap slots the engine publishes.
 #[napi]
 pub const MAX_VIDEO_TAPS: u32 = video_tap::MAX_VIDEO_TAPS as u32;
@@ -912,6 +947,25 @@ struct StreamSetupParams<'a> {
     midi_manager: Arc<MidiInputManager>,
 }
 
+/// Fewest frames per internal block: below this, each module's per-block work
+/// (resolving inputs, dispatch) costs more than a shorter callback saves.
+const MIN_BLOCK_SIZE: usize = 64;
+/// Most frames per internal block, bounding each block buffer's memory.
+const MAX_BLOCK_SIZE: usize = 1024;
+/// Frames per internal block when the host picks the device buffer size.
+const DEFAULT_BLOCK_SIZE: usize = 256;
+
+/// The audio callback renders in internal blocks of this many frames: one per
+/// callback when it matches the device buffer (`buffer_size` frames, None for
+/// the host's default). A callback shorter than a block renders only the
+/// frames it emits and the next continues the block, so a block longer than
+/// the device buffer adds no latency.
+fn block_size_for(buffer_size: Option<u32>) -> usize {
+    buffer_size
+        .map_or(DEFAULT_BLOCK_SIZE, |frames| frames as usize)
+        .clamp(MIN_BLOCK_SIZE, MAX_BLOCK_SIZE)
+}
+
 /// Set up output and input streams with the given parameters.
 /// This is the shared core logic between `new` and `recreate_streams`.
 fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
@@ -933,18 +987,7 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
     let (command_tx, command_rx, error_tx, error_rx, garbage_tx, garbage_rx) =
         create_audio_channels();
 
-    // Internal block size. The audio callback drains `block_size` cpal
-    // frames per block-level pass (link sync, queued patch swap,
-    // force-processing every module in dependency order, transport-meter
-    // write). CPAL's own buffer size is independent — the callback handles
-    // any count of cpal frames per invocation, splitting them across
-    // internal blocks via `block_pos`.
-    //
-    // 64 samples @ 48 kHz = ~1.33 ms per block. Chosen as a balance
-    // between block-amortised CPU savings and per-bar-trigger jitter
-    // (triggers fire at block granularity until per-sample eager-fill of
-    // ROOT_CLOCK lands).
-    const BLOCK_SIZE: usize = 64;
+    let block_size = block_size_for(params.buffer_size);
 
     let state = Arc::new(AudioState::new_with_channels(
         command_tx,
@@ -953,7 +996,7 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
         params.sample_rate as f32,
         channels,
         params.midi_manager.clone(),
-        BLOCK_SIZE,
+        block_size,
     ));
 
     // Get shared state for audio processor
@@ -979,7 +1022,7 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
         garbage_tx,
         shared,
         input_reader,
-        BLOCK_SIZE,
+        block_size,
     )?;
 
     output_stream
@@ -2013,6 +2056,20 @@ pub fn derive_channel_count(
 // ============================================================================
 // Tests
 // ============================================================================
+
+#[cfg(test)]
+mod block_size_tests {
+    use super::block_size_for;
+
+    #[test]
+    fn block_size_follows_the_device_buffer_within_bounds() {
+        assert_eq!(block_size_for(Some(128)), 128);
+        assert_eq!(block_size_for(Some(512)), 512);
+        assert_eq!(block_size_for(Some(32)), 64);
+        assert_eq!(block_size_for(Some(4096)), 1024);
+        assert_eq!(block_size_for(None), 256);
+    }
+}
 
 #[cfg(test)]
 mod detect_wavetable_tests {

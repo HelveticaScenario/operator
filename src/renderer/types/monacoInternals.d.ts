@@ -1,6 +1,6 @@
-// Types for the deep monaco-editor ESM files the performance view resolves
-// token and bracket colors with. monaco-editor ships types only for its main
-// entry; these cover just the members used.
+// Types for the deep monaco-editor ESM files the renderer imports.
+// monaco-editor ships types only for its main entry; these cover just the
+// members used.
 
 declare module 'monaco-editor/esm/vs/base/common/color.js' {
     export class Color {
@@ -84,4 +84,80 @@ declare module 'monaco-editor/esm/vs/platform/registry/common/platform.js' {
             ): Color | undefined;
         };
     };
+}
+
+// The bundled TypeScript language adapters, which the JSDoc link providers
+// extend to render their documentation.
+declare module 'monaco-editor/esm/vs/language/typescript/languageFeatures.js' {
+    import type {
+        IPosition,
+        IRange,
+        Uri,
+        editor,
+        languages,
+        typescript,
+    } from 'monaco-editor';
+    import type { TextSpan } from 'typescript';
+
+    type WorkerAccessor = (
+        ...uris: Uri[]
+    ) => Promise<typescript.TypeScriptWorker>;
+
+    export class Adapter {
+        constructor(worker: WorkerAccessor);
+        protected _worker: WorkerAccessor;
+        protected _textSpanToRange(
+            model: editor.ITextModel,
+            span: TextSpan,
+        ): IRange;
+    }
+
+    export class QuickInfoAdapter
+        extends Adapter
+        implements languages.HoverProvider
+    {
+        provideHover(
+            model: editor.ITextModel,
+            position: IPosition,
+        ): Promise<languages.Hover | undefined>;
+    }
+
+    export class SuggestAdapter
+        extends Adapter
+        implements languages.CompletionItemProvider
+    {
+        static convertKind(kind: string): languages.CompletionItemKind;
+        get triggerCharacters(): string[];
+        provideCompletionItems(
+            model: editor.ITextModel,
+            position: IPosition,
+        ): Promise<languages.CompletionList | undefined>;
+        resolveCompletionItem(
+            item: languages.CompletionItem,
+        ): Promise<languages.CompletionItem>;
+    }
+
+    export class SignatureHelpAdapter
+        extends Adapter
+        implements languages.SignatureHelpProvider
+    {
+        static _toSignatureHelpTriggerReason(
+            context: languages.SignatureHelpContext,
+        ): unknown;
+        signatureHelpTriggerCharacters: string[];
+        provideSignatureHelp(
+            model: editor.ITextModel,
+            position: IPosition,
+            token: unknown,
+            context: languages.SignatureHelpContext,
+        ): Promise<languages.SignatureHelpResult | undefined>;
+    }
+}
+
+declare module 'monaco-editor/esm/vs/platform/commands/common/commands.js' {
+    export interface ICommandService {
+        executeCommand(id: string, ...args: unknown[]): Promise<unknown>;
+    }
+    /** Service identifier; pass to a command handler's `accessor.get`. */
+    export const ICommandService: { readonly __brand: 'ICommandService' };
 }

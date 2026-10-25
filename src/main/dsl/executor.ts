@@ -196,8 +196,13 @@ export function executePatchScript(
 
     // Create the execution environment with all DSL functions
     // Remove _clock from user-facing namespace (it's internal, used only for ROOT_CLOCK)
-    const { _clock, _videoTap, _mediaAudio, ...userNamespaceTree } =
-        context.namespaceTree;
+    const {
+        _clock,
+        _videoTap,
+        _mediaAudio,
+        _smoothControl,
+        ...userNamespaceTree
+    } = context.namespaceTree;
 
     if (typeof _clock !== 'function') {
         throw new Error(
@@ -658,10 +663,19 @@ export function executePatchScript(
         return $track(frames, { playhead, interpolationType }) as Collection;
     };
 
+    if (typeof _smoothControl !== 'function') {
+        throw new Error(
+            'DSL execution error: "_smoothControl" module not found in schemas',
+        );
+    }
+
     // Control factories; their collectors fill as the patch calls them.
+    const controlFactories = { $signal: signal, _smoothControl };
     const controls = createControls({
-        rangedSignal: (value, id, min, max) =>
-            builder.$c(signal(value, { id })).withRange(min, max),
+        rangedSignal: (moduleType, value, id, min, max) =>
+            builder
+                .$c(controlFactories[moduleType](value, { id }))
+                .withRange(min, max),
     });
 
     if (typeof _videoTap !== 'function') {

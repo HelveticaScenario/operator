@@ -36,6 +36,11 @@ struct BufferWriteOutputs {
     #[serde(skip)]
     #[schemars(skip)]
     buffer: BufferData,
+    /// A sample has been written, so each block start advances the cursor
+    /// past the previous block.
+    #[serde(skip)]
+    #[schemars(skip)]
+    started: bool,
 }
 
 impl Default for BufferWriteOutputs {
@@ -43,6 +48,7 @@ impl Default for BufferWriteOutputs {
         Self {
             sample: PolyOutput::default(),
             buffer: BufferData::new_zeroed(1, 1),
+            started: false,
         }
     }
 }
@@ -66,6 +72,7 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
 
     fn transfer_buffers_from(&mut self, old: &mut Self) {
         self.buffer.copy_overlap_from(&old.buffer);
+        self.started = old.started;
     }
 
     fn get_buffer_output(&self, port: &str) -> Option<&BufferData> {
@@ -79,14 +86,15 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
         vec!["buffer".to_string()]
     }
 
-    /// Advance the circular buffer write position by `block_size` once per
-    /// internal block. Called from the wrapper's `start_block()` before
-    /// any per-sample `update()` runs, so `read_write_index()` becomes the
-    /// base offset for the new block — `BufferWrite::update` adds
-    /// `current_block_index()` for the per-slot write position.
+    /// Advance the circular buffer write position past the previous block
+    /// at each block start, before any per-sample `update()` runs, so
+    /// `read_write_index()` is the absolute sample position of the new
+    /// block's first slot (0 for the first block written) whatever the block
+    /// size. `BufferWrite::update` adds `current_block_index()` for the
+    /// per-slot write position.
     fn tick_buffers(&mut self, block_size: usize) {
         let frame_count = self.buffer.frame_count();
-        if frame_count == 0 {
+        if frame_count == 0 || !self.started {
             return;
         }
         let new_index = self.buffer.read_write_index().wrapping_add(block_size);
@@ -182,9 +190,9 @@ impl BufferWrite {
             return;
         }
 
-        // `tick_buffers` advanced the write cursor by `block_size` at the
-        // block boundary. Inside the per-sample loop the effective write
-        // position for slot `i` is `read_write_index() + i`.
+        // `tick_buffers` set the write cursor to this block's first slot at
+        // the block boundary, so slot `i` writes at `read_write_index() + i`.
+        self.outputs.started = true;
         let base = self.outputs.buffer.read_write_index();
         let offset = self.current_block_index();
         let frame = base.wrapping_add(offset) % frame_count;
@@ -507,8 +515,8 @@ mod tests {
             .expect("no buffer output");
         assert_eq!(
             buffer.read_write_index(),
-            n,
-            "write_index should equal number of steps"
+            n - TEST_BLOCK_SIZE,
+            "write_index should be the current block's first sample position"
         );
     }
 
@@ -557,11 +565,13 @@ mod tests {
             s.tick(module.as_ref());
         }
 
-        // write_index should keep incrementing past frame_count (no modular reset)
+        // write_index keeps counting past frame_count (no modular reset): the
+        // absolute position of the current block's first sample.
         let write_index = buffer.read_write_index();
+        let expected = total_steps - TEST_BLOCK_SIZE;
         assert_eq!(
-            write_index, total_steps,
-            "write_index should be {total_steps}, got {write_index}"
+            write_index, expected,
+            "write_index should be {expected}, got {write_index}"
         );
 
         let last_frame = write_index % frame_count;
