@@ -1,7 +1,7 @@
 //! Per-channel generator state for `$noise`.
 
 use super::generators::{
-    BLUE_GAIN, BROWN_STEP, Lfsr, LfsrStart, PINK_GAIN, PinkFilter, coin, gaussian, rail, reflect,
+    BLUE_GAIN, BROWN_STEP, Lfsr, LfsrLoop, PINK_GAIN, PinkFilter, coin, gaussian, rail, reflect,
 };
 use super::{NoiseInterp, NoiseKind};
 use crate::dsp::utils::CatmullRom;
@@ -27,7 +27,7 @@ pub(super) struct NoiseChannelState {
     white_prev: f32,
     brown: f32,
     lfsr: Lfsr,
-    lfsr_start: LfsrStart,
+    lfsr_loop: LfsrLoop,
     /// Clock phase in `[0, 1)`; a tick fires each time it wraps. f64, so the
     /// tiny increments of slow rates still advance it near 1.
     phase: f64,
@@ -54,13 +54,20 @@ impl NoiseChannelState {
         &mut self,
         base: u64,
         channel: usize,
-        lfsr_start: LfsrStart,
+        lfsr_phase: u16,
+        lfsr_loop: LfsrLoop,
         kind: NoiseKind,
     ) {
         self.generator.seed(base, channel);
-        self.lfsr_start = lfsr_start;
+        self.lfsr.set_phase(lfsr_phase);
+        self.lfsr_loop = lfsr_loop;
         self.seeded = true;
         self.reset(kind);
+    }
+
+    /// The LFSR's current long-mode phase; see [`Lfsr::phase`].
+    pub(super) fn lfsr_phase(&self) -> u16 {
+        self.lfsr.phase()
     }
 
     /// Start `kind` fresh, already mid-stream: filters are settled and the
@@ -70,8 +77,11 @@ impl NoiseChannelState {
         self.pink_prev = 0.0;
         self.white_prev = 0.0;
         self.brown = self.generator.next_bipolar();
-        self.lfsr
-            .start(self.lfsr_start, kind == NoiseKind::LfsrShort);
+        match kind {
+            NoiseKind::Lfsr => self.lfsr.start_long(),
+            NoiseKind::LfsrShort => self.lfsr.start_short(self.lfsr_loop),
+            _ => {}
+        }
         self.telegraph_high = self.generator.next_unit() >= 0.5;
         self.phase = 0.0;
         self.schedule_impulse();
@@ -115,8 +125,8 @@ impl NoiseChannelState {
             }
             NoiseKind::Binary => coin(rng),
             NoiseKind::Gaussian => gaussian(rng),
-            NoiseKind::Lfsr => self.lfsr.step(1),
-            NoiseKind::LfsrShort => self.lfsr.step(6),
+            NoiseKind::Lfsr => self.lfsr.step_long(),
+            NoiseKind::LfsrShort => self.lfsr.step_short(),
             NoiseKind::Velvet | NoiseKind::Telegraph | NoiseKind::Dust => {
                 unreachable!("{kind:?} is not a clocked value kind")
             }
@@ -194,7 +204,7 @@ mod tests {
     #[test]
     fn tiny_increments_keep_advancing() {
         let mut state = NoiseChannelState::default();
-        state.seed(0x5eed, 0, LfsrStart::default(), NoiseKind::White);
+        state.seed(0x5eed, 0, 0, LfsrLoop::default(), NoiseKind::White);
         state.phase = 0.75;
         let inc = 2e-8;
         let samples = 48_000;

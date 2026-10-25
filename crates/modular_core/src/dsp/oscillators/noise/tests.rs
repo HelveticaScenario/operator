@@ -1,3 +1,4 @@
+use super::generators::lfsr_phase_distance;
 use super::*;
 use crate::dsp::utils::hz_to_voct;
 use crate::types::{OutputStruct, PatchUpdateHandler, Signal};
@@ -25,6 +26,20 @@ fn with_rate(color: NoiseKind, hz: f32, interp: NoiseInterp) -> NoiseParams {
 /// lifecycle: the macro allocates `channel_state` to the channel count, `init`
 /// caches the sample rate, then `on_patch_update` seeds each channel's RNG.
 fn make_noise(params: NoiseParams) -> Noise {
+    let mut n = build_noise(params);
+    n.on_patch_update();
+    n
+}
+
+/// [`make_noise`], seeded from a fixed `base` in place of the module address.
+fn make_noise_seeded(params: NoiseParams, base: u64) -> Noise {
+    let mut n = build_noise(params);
+    n.prepare_channels(base);
+    n
+}
+
+/// A constructed and initialized module whose channels are not seeded yet.
+fn build_noise(params: NoiseParams) -> Noise {
     let channels = __noise_derive_channel_count(&params);
     let mut outputs = NoiseOutputs::default();
     outputs.set_all_channels(channels);
@@ -40,7 +55,6 @@ fn make_noise(params: NoiseParams) -> Noise {
         _block_index: Default::default(),
     };
     n.init(SR);
-    n.on_patch_update();
     n
 }
 
@@ -51,10 +65,7 @@ fn render(params: NoiseParams, samples: usize) -> Vec<f32> {
 /// Render channel 0 from a fixed seed, for statistical checks whose bounds a
 /// small fraction of seeds would miss.
 fn render_seeded(params: NoiseParams, samples: usize) -> Vec<f32> {
-    let color = params.color;
-    let mut n = make_noise(params);
-    n.channel_state[0].seed(0x5eed, 0, LfsrStart::default(), color);
-    render_from(n, samples)
+    render_from(make_noise_seeded(params, 0x5eed), samples)
 }
 
 fn render_from(mut n: Noise, samples: usize) -> Vec<f32> {
@@ -290,33 +301,68 @@ fn assert_no_shifted_copies(n: &mut Noise) {
     }
 }
 
-/// Restart every channel as a fresh module with LFSR offset `offset` would.
-fn restart_with_lfsr_offset(n: &mut Noise, offset: u32) {
-    n.state.lfsr_offset = Some(offset);
-    for state in n.channel_state.iter_mut() {
+/// The smallest long-mode phase distance between any two channels.
+fn min_phase_distance(n: &Noise) -> u32 {
+    let phases: Vec<u16> = n.channel_state.iter().map(|s| s.lfsr_phase()).collect();
+    let mut min = u32::MAX;
+    for (a, &pa) in phases.iter().enumerate() {
+        for &pb in &phases[a + 1..] {
+            min = min.min(lfsr_phase_distance(pa, pb));
+        }
+    }
+    min
+}
+
+/// Unseed channels `from..` so the next update adds them beside the rest.
+fn drop_channels_from(n: &mut Noise, from: usize) {
+    for state in n.channel_state[from..].iter_mut() {
         *state = NoiseChannelState::default();
     }
-    n.on_patch_update();
 }
 
 #[test]
 fn channels_added_by_a_patch_update_get_their_own_sequence() {
     for kind in [NoiseKind::Lfsr, NoiseKind::LfsrShort] {
         let mut n = make_noise(params(kind, 4));
-        for state in n.channel_state[1..].iter_mut() {
-            *state = NoiseChannelState::default();
-        }
+        drop_channels_from(&mut n, 1);
         n.on_patch_update();
         assert_no_shifted_copies(&mut n);
+    }
+}
+
+/// Channels added after the carried-over ones have run for a while start
+/// away from the current phases of the carried-over channels.
+#[test]
+fn channels_added_after_running_stay_apart() {
+    for elapsed in [1, 511, 2047, 8191, 16383, 16384] {
+        let mut n = make_noise(params(NoiseKind::Lfsr, 4));
+        drop_channels_from(&mut n, 1);
+        for _ in 0..elapsed {
+            n.update(SR);
+        }
+        n.on_patch_update();
+        // Claims beside one running channel split gaps of at least a half and
+        // then a quarter period; seeding draws a few ticks of history after.
+        let min = min_phase_distance(&n);
+        assert!(min >= LFSR_LONG_PERIOD / 4 - 8, "{elapsed}: {min} ticks");
+        assert_no_shifted_copies(&mut n);
+    }
+}
+
+#[test]
+fn fresh_lfsr_channels_are_evenly_spaced() {
+    for channels in [2, 3, 4, 16, PORT_MAX_CHANNELS] {
+        let n = make_noise(params(NoiseKind::Lfsr, channels));
+        let spacing = LFSR_LONG_PERIOD / channels as u32;
+        assert!(min_phase_distance(&n) >= spacing, "{channels} channels");
     }
 }
 
 #[test]
 fn lfsr_channels_are_never_shifted_copies() {
     for kind in [NoiseKind::Lfsr, NoiseKind::LfsrShort] {
-        let mut n = make_noise(params(kind, PORT_MAX_CHANNELS));
-        for offset in (0..32_767).step_by(1021) {
-            restart_with_lfsr_offset(&mut n, offset);
+        for base in (0..LFSR_LONG_PERIOD).step_by(1021) {
+            let mut n = make_noise_seeded(params(kind, PORT_MAX_CHANNELS), u64::from(base));
             assert_no_shifted_copies(&mut n);
         }
     }
