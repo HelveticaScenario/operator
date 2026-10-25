@@ -1,0 +1,3 @@
+kind: New
+body: 'Experimental modules are now labelled in the editor: hover docs, autocomplete and the help window mark them, so you know their sound and parameters may still change between releases. `$comp` and `$xover` are experimental.'
+time: 2026-10-24T22:15:22.001423-04:00

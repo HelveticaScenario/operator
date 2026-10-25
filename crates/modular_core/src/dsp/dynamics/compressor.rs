@@ -182,8 +182,6 @@ struct CompressorOutputs {
     sample: PolyOutput,
 }
 
-/// EXPERIMENTAL
-///
 /// Single-band feed-forward dynamics processor with peak envelope follower.
 ///
 /// Two stages run in parallel:
@@ -248,7 +246,7 @@ struct CompressorOutputs {
 /// let high = $comp(bands.high, { threshold: 2,   ratio: 6 })
 /// $mix([low, mid, high]).out()
 /// ```
-#[module(name = "$comp", args(input))]
+#[module(name = "$comp", args(input), experimental)]
 pub struct Compressor {
     outputs: CompressorOutputs,
     channel_state: Box<[ChannelState]>,

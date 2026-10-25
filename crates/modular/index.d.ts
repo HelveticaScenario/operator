@@ -484,6 +484,11 @@ export interface ModuleSchema {
   channelsParam?: string
   /** If set, the default value for the channels param when not explicitly set */
   channelsParamDefault?: number
+  /**
+   * Set by `#[module(experimental)]`: the module's sound and params may
+   * still change between releases. Always serialized, like `buffer_outputs`.
+   */
+  experimental: boolean
 }
 
 export interface ModuleSpec {

@@ -2867,6 +2867,10 @@ pub struct ModuleSchema {
     /// If set, the default value for the channels param when not explicitly set
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channels_param_default: Option<u8>,
+    /// Set by `#[module(experimental)]`: the module's sound and params may
+    /// still change between releases. Always serialized, like `buffer_outputs`.
+    #[serde(default)]
+    pub experimental: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

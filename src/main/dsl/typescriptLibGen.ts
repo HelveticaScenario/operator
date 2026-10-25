@@ -26,6 +26,7 @@ import {
     renderOutOptionsJsDocList,
     renderOutOptionsMembers,
 } from '../../shared/dsl/outOptions';
+import { EXPERIMENTAL_NOTICE } from '../../shared/dsl/experimental';
 export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
@@ -2325,7 +2326,9 @@ function buildConfigArg(moduleSchema: Schema): {
  * prepended to the parameter list (the `.$m.` `mix` crossfade); `leadDocLines`
  * are prepended before the module's own documentation. The module's full
  * documentation and every `@param` are always included, so the factory and
- * `.$.` surfaces carry identical docs and cannot drift.
+ * `.$.` surfaces carry identical docs and cannot drift. An experimental module
+ * leads with `EXPERIMENTAL_NOTICE`, which signature help shows (it omits tags),
+ * and ends with an `@experimental` tag, which marks its completion entries.
  */
 function buildSignature(
     moduleSchema: Schema,
@@ -2348,7 +2351,10 @@ function buildSignature(
     );
 
     const args: string[] = [];
-    const docLines: string[] = [...(opts.leadDocLines ?? [])];
+    const docLines: string[] = moduleSchema.experimental
+        ? [EXPERIMENTAL_NOTICE, '']
+        : [];
+    docLines.push(...(opts.leadDocLines ?? []));
     if (moduleSchema.documentation) {
         docLines.push(...moduleSchema.documentation.split(/\r?\n/));
     }
@@ -2408,6 +2414,9 @@ function buildSignature(
         }
     } else {
         docLines.push(`@param config Configuration object`);
+    }
+    if (moduleSchema.experimental) {
+        docLines.push('@experimental');
     }
 
     return { args, docLines };

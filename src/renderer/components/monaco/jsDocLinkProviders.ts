@@ -5,7 +5,7 @@ import {
     SuggestAdapter,
 } from 'monaco-editor/esm/vs/language/typescript/languageFeatures.js';
 import { ICommandService } from 'monaco-editor/esm/vs/platform/commands/common/commands.js';
-import type { SignatureHelpItem, SymbolDisplayPart } from 'typescript';
+import type { JSDocTagInfo, SignatureHelpItem, SymbolDisplayPart } from 'typescript';
 import type { ModuleSchema } from '@modular/core';
 import type { Monaco } from '../../hooks/useCustomMonaco';
 import electronAPI from '../../electronAPI';
@@ -124,6 +124,16 @@ export function registerJsDocLinkProviders(
             return segments.slice(1).map((_, i) => segments.slice(0, i + 1).join('.'));
         }),
     );
+    // Completion labels an experimental module can appear under: its factory
+    // name and its `.$.` method name.
+    const experimentalLabels = new Set(
+        schemas
+            .filter((s) => s.experimental)
+            .flatMap((s) => {
+                const leaf = s.name.split('.').pop() ?? s.name;
+                return [leaf, leaf.replace(/^\$/, '')];
+            }),
+    );
     const resolverAt = (from: Uri, position: IPosition) =>
         linkResolver(moduleNames, namespaces, from, position);
 
@@ -162,17 +172,51 @@ export function registerJsDocLinkProviders(
     }
 
     class LinkedSuggestAdapter extends SuggestAdapter {
+        /**
+         * Labels an experimental module's entries in the list. A label match
+         * is confirmed by the `@experimental` tag, so a user identifier that
+         * shares the name stays unmarked.
+         */
+        override async provideCompletionItems(model: editor.ITextModel, position: IPosition) {
+            const list = await super.provideCompletionItems(model, position);
+            const candidates = list?.suggestions.filter(
+                (item) => typeof item.label === 'string' && experimentalLabels.has(item.label),
+            );
+            if (!candidates?.length) {
+                return list;
+            }
+            const languageService = await this._worker(model.uri);
+            if (model.isDisposed()) {
+                return list;
+            }
+            await Promise.all(
+                candidates.map(async (item) => {
+                    const name = item.label as string;
+                    const details = await languageService.getCompletionEntryDetails(
+                        model.uri.toString(),
+                        model.getOffsetAt(position),
+                        name,
+                    );
+                    if (details?.tags?.some((tag: JSDocTagInfo) => tag.name === 'experimental')) {
+                        item.label = { description: 'experimental', label: name };
+                    }
+                }),
+            );
+            return list;
+        }
+
         override async resolveCompletionItem(item: languages.CompletionItem) {
             const { uri, position, offset } = item as languages.CompletionItem & {
                 uri: Uri;
                 position: IPosition;
                 offset: number;
             };
+            const name = typeof item.label === 'string' ? item.label : item.label.label;
             const languageService = await this._worker(uri);
             const details = await languageService.getCompletionEntryDetails(
                 uri.toString(),
                 offset,
-                item.label as string,
+                name,
             );
             if (!details) {
                 return item;
@@ -189,7 +233,7 @@ export function registerJsDocLinkProviders(
                     ),
                 },
                 kind: SuggestAdapter.convertKind(details.kind),
-                label: details.name,
+                label: typeof item.label === 'string' ? details.name : item.label,
             };
         }
     }
