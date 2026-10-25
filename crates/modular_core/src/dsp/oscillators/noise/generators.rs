@@ -73,8 +73,11 @@ pub(super) fn gaussian(rng: &mut LcgRng) -> f32 {
     (sum / (3.0 * SUM4_STD)).clamp(-1.0, 1.0)
 }
 
-/// Length of the 15-bit LFSR's short-mode cycle that contains state 1.
+/// Length of the short-mode cycles that [`Lfsr::start`] starts on.
 pub(super) const LFSR_SHORT_CYCLE: u32 = 93;
+
+/// Period of the 15-bit LFSR's long mode: every nonzero state.
+pub(super) const LFSR_LONG_PERIOD: u32 = 32767;
 
 /// 15-bit linear-feedback shift register in the style of the NES noise
 /// channel. Long mode (tap 1) cycles through all 32767 nonzero states; short
@@ -90,13 +93,17 @@ impl Default for Lfsr {
 }
 
 impl Lfsr {
-    /// Restart at a random point of the 93-step short cycle. Every state on
-    /// that cycle is nonzero, so long mode runs from it as well.
-    pub(super) fn reset(&mut self, rng: &mut LcgRng) {
-        self.state = 1;
-        let skip = (rng.next_unit() * LFSR_SHORT_CYCLE as f32) as u32;
-        for _ in 0..skip {
-            self.step(1);
+    /// Start at the state `slot` selects. Slots that differ modulo the mode's
+    /// period (32767 long, 93 short) start different sequences, and every
+    /// short-mode start lies on a 93-step cycle.
+    pub(super) fn start(&mut self, slot: u32, short: bool) {
+        if short {
+            self.state = 1;
+            for _ in 0..slot % LFSR_SHORT_CYCLE {
+                self.step(1);
+            }
+        } else {
+            self.state = (slot % LFSR_LONG_PERIOD) as u16 + 1;
         }
     }
 
@@ -111,15 +118,36 @@ impl Lfsr {
 mod tests {
     use super::*;
 
+    /// Each of the 93 short-mode starts is a distinct state that loops back
+    /// to itself after exactly 93 ticks.
     #[test]
-    fn lfsr_short_mode_repeats_every_93_ticks() {
-        let mut rng = LcgRng::default();
-        rng.seed(0x5eed, 0);
-        let mut lfsr = Lfsr::default();
-        lfsr.reset(&mut rng);
-        let first: Vec<f32> = (0..93).map(|_| lfsr.step(6)).collect();
-        let second: Vec<f32> = (0..93).map(|_| lfsr.step(6)).collect();
-        assert_eq!(first, second);
+    fn lfsr_short_starts_are_distinct_93_step_loops() {
+        let mut starts = Vec::new();
+        for slot in 0..LFSR_SHORT_CYCLE {
+            let mut lfsr = Lfsr::default();
+            lfsr.start(slot, true);
+            let start = lfsr.state;
+            let period = (1..=LFSR_SHORT_CYCLE)
+                .find(|_| {
+                    lfsr.step(6);
+                    lfsr.state == start
+                })
+                .unwrap_or(0);
+            assert_eq!(period, LFSR_SHORT_CYCLE, "slot {slot}");
+            starts.push(start);
+        }
+        starts.sort_unstable();
+        starts.dedup();
+        assert_eq!(starts.len(), LFSR_SHORT_CYCLE as usize);
+    }
+
+    #[test]
+    fn lfsr_long_starts_are_nonzero() {
+        for slot in [0, 1, LFSR_LONG_PERIOD - 1, LFSR_LONG_PERIOD, u32::MAX] {
+            let mut lfsr = Lfsr::default();
+            lfsr.start(slot, false);
+            assert!((1..=0x7fff).contains(&lfsr.state), "slot {slot}");
+        }
     }
 
     #[test]

@@ -27,6 +27,8 @@ pub(super) struct NoiseChannelState {
     white_prev: f32,
     brown: f32,
     lfsr: Lfsr,
+    /// Selects the LFSR's start state; see [`Lfsr::start`].
+    lfsr_slot: u32,
     /// Clock phase in `[0, 1)`; a tick fires each time it wraps. f64, so the
     /// tiny increments of slow rates still advance it near 1.
     phase: f64,
@@ -45,12 +47,13 @@ pub(super) struct NoiseChannelState {
 }
 
 impl NoiseChannelState {
-    /// Seed this channel's RNG from a [`seed_base`] and its channel index,
-    /// then start `kind` fresh.
+    /// Seed this channel's RNG from a [`seed_base`] and its channel index, set
+    /// its LFSR start slot, then start `kind` fresh.
     ///
     /// [`seed_base`]: crate::dsp::utils::rng::seed_base
-    pub(super) fn seed(&mut self, base: u64, channel: usize, kind: NoiseKind) {
+    pub(super) fn seed(&mut self, base: u64, channel: usize, lfsr_slot: u32, kind: NoiseKind) {
         self.generator.seed(base, channel);
+        self.lfsr_slot = lfsr_slot;
         self.seeded = true;
         self.reset(kind);
     }
@@ -62,7 +65,8 @@ impl NoiseChannelState {
         self.pink_prev = 0.0;
         self.white_prev = 0.0;
         self.brown = self.generator.next_bipolar();
-        self.lfsr.reset(&mut self.generator);
+        self.lfsr
+            .start(self.lfsr_slot, kind == NoiseKind::LfsrShort);
         self.telegraph_high = self.generator.next_unit() >= 0.5;
         self.phase = 0.0;
         self.schedule_impulse();
@@ -185,7 +189,7 @@ mod tests {
     #[test]
     fn tiny_increments_keep_advancing() {
         let mut state = NoiseChannelState::default();
-        state.seed(0x5eed, 0, NoiseKind::White);
+        state.seed(0x5eed, 0, 0, NoiseKind::White);
         state.phase = 0.75;
         let inc = 2e-8;
         let samples = 48_000;

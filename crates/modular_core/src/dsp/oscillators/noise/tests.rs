@@ -45,7 +45,19 @@ fn make_noise(params: NoiseParams) -> Noise {
 }
 
 fn render(params: NoiseParams, samples: usize) -> Vec<f32> {
+    render_from(make_noise(params), samples)
+}
+
+/// Render channel 0 from a fixed seed, for statistical checks whose bounds a
+/// small fraction of seeds would miss.
+fn render_seeded(params: NoiseParams, samples: usize) -> Vec<f32> {
+    let color = params.color;
     let mut n = make_noise(params);
+    n.channel_state[0].seed(0x5eed, 0, 0, color);
+    render_from(n, samples)
+}
+
+fn render_from(mut n: Noise, samples: usize) -> Vec<f32> {
     (0..samples)
         .map(|_| {
             n.update(SR);
@@ -170,7 +182,7 @@ fn velvet_fires_once_per_tick() {
 
 #[test]
 fn telegraph_and_dust_follow_rate_on_average() {
-    let out = render(
+    let out = render_seeded(
         with_rate(NoiseKind::Telegraph, 100.0, NoiseInterp::Step),
         480_000,
     );
@@ -180,7 +192,7 @@ fn telegraph_and_dust_follow_rate_on_average() {
         "{flips} flips in 10s at 100/s"
     );
 
-    let out = render(
+    let out = render_seeded(
         with_rate(NoiseKind::Dust, 100.0, NoiseInterp::Step),
         480_000,
     );
@@ -244,24 +256,45 @@ fn velvet_without_rate_fires_every_sample() {
     assert!(out.iter().all(|v| v.abs() == 5.0));
 }
 
-#[test]
-fn channels_added_by_a_patch_update_get_their_own_sequence() {
-    let mut n = make_noise(params(NoiseKind::Lfsr, 4));
-    for state in n.channel_state[1..].iter_mut() {
-        *state = NoiseChannelState::default();
-    }
-    n.on_patch_update();
-    let mut series = [[0.0f32; 64]; 4];
+/// Render 64 samples of every channel and assert no two channels match.
+fn assert_channels_differ(n: &mut Noise) {
+    let channels = n.channel_count();
+    let mut series = vec![[0.0f32; 64]; channels];
     for i in 0..64 {
         n.update(SR);
         for (ch, s) in series.iter_mut().enumerate() {
             s[i] = n.outputs.sample.get(ch);
         }
     }
-    for a in 0..4 {
-        for b in (a + 1)..4 {
-            assert_ne!(series[a], series[b], "channels {a} and {b} match");
+    for a in 0..channels {
+        for b in (a + 1)..channels {
+            assert_ne!(
+                series[a], series[b],
+                "{:?}: channels {a} and {b} match",
+                n.params.color
+            );
         }
+    }
+}
+
+#[test]
+fn channels_added_by_a_patch_update_get_their_own_sequence() {
+    for kind in [NoiseKind::Lfsr, NoiseKind::LfsrShort] {
+        let mut n = make_noise(params(kind, 4));
+        for state in n.channel_state[1..].iter_mut() {
+            *state = NoiseChannelState::default();
+        }
+        n.on_patch_update();
+        assert_channels_differ(&mut n);
+    }
+}
+
+/// LFSR channels start at distinct states, so even 64 channels of a 93-step
+/// loop never coincide.
+#[test]
+fn every_lfsr_channel_differs() {
+    for kind in [NoiseKind::Lfsr, NoiseKind::LfsrShort] {
+        assert_channels_differ(&mut make_noise(params(kind, PORT_MAX_CHANNELS)));
     }
 }
 
