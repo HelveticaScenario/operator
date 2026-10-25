@@ -193,6 +193,20 @@ describe('computeControlQuickFixes — namespaced modules', () => {
         expect(fix.title).toBe(`Wrap 'resonance' in $slider`);
         expect(apply(source, fix)).toContain(`$slider('resonance', 2.5, `);
     });
+
+    test('a namespaced drum call broken across lines resolves', () => {
+        const { fixes } = fixesAt(
+            `$tr808\n  .lowConga($pulse('2hz'), {\n    |\n    restart: false,\n  })\n  .out();`,
+        );
+        expect(addTitles(fixes)).toContain(`Add slider for 'decay'`);
+    });
+
+    test('comments between segments do not break resolution', () => {
+        const { fixes } = fixesAt(
+            `$unstable /* filters */ .filter.lp($sine(0), '100hz', 2.|5).out();`,
+        );
+        expect(wrapFix(fixes).title).toBe(`Wrap 'resonance' in $slider`);
+    });
 });
 
 describe('computeControlQuickFixes — direct positional arguments', () => {

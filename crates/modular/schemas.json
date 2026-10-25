@@ -1090,6 +1090,3666 @@
     "channels": 2
   },
   {
+    "name": "$tr808.kick",
+    "documentation": "TR-808 bass drum.\n\nA circuit model of the 808's deep, booming kick: a low, round ring at ≈49.5\nHz with a click at the attack and a pitch that sighs down as it rings.\n**decay** sets how long it booms, **tone** how much click comes through,\n**freq** its pitch, and **accent** how hard it hits.\n\nAs on the 808, a hit that lands on a still-ringing one builds on it, so long\ndecays at fast tempos swing in level from hit to hit; **restart** starts\nevery hit from rest instead.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**. Near the top of the **freq** range the drum overdrives, so accent adds\nless there.\n\n```js\n$tr808.kick($clock.beatTrigger, { decay: 4 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Bd808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud, with more pitch sigh (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.09 s to\n≈3.8 s (default 2.5, ≈0.6 s)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈49.5 Hz (default -2.4035)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "tone": {
+          "description": "tone control, 0–5 V: from a dull thud to a bright click at the attack\n(default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud, with more pitch sigh (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "tone control, 0–5 V: from a dull thud to a bright click at the attack\n(default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.09 s to\n≈3.8 s (default 2.5, ≈0.6 s)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈49.5 Hz (default -2.4035)",
+        "signalType": "pitch",
+        "defaultValue": -2.4035,
+        "minValue": -3.5,
+        "maxValue": -1.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.snare",
+    "documentation": "TR-808 snare drum.\n\nA circuit model of the 808's snare: two drum tones near 250 and 500 Hz under\na burst of bright noise. **tone** blends from the low tone to the high one,\n**snappy** sets how much noise, **freq** the pitch, and **accent** how hard\nit hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.snare($clock.beatTrigger, { snappy: 4 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Sd808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch of the low tone in V/Oct, the high one following; stock is ≈250 Hz\n(default -0.0678)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "snappy": {
+          "description": "snappy control, 0–5 V: how loud and long the noise rattles over the\ntones (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "tone control, 0–5 V: blends from the low tone to the high one (default\n2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "tone control, 0–5 V: blends from the low tone to the high one (default\n2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "snappy",
+        "description": "snappy control, 0–5 V: how loud and long the noise rattles over the\ntones (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch of the low tone in V/Oct, the high one following; stock is ≈250 Hz\n(default -0.0678)",
+        "signalType": "pitch",
+        "defaultValue": -0.0678,
+        "minValue": -1.5,
+        "maxValue": 1.5
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.rimShot",
+    "documentation": "TR-808 rim shot.\n\nA circuit model of the 808's rim shot: a bright, woody crack, over in about\n10 ms, built from two tones near 1.8 kHz and 450 Hz. **freq** sets its pitch\nand **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.rimShot($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Rs808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch of the upper tone in V/Oct, the lower one following; stock is\n≈1.79 kHz (default 2.771)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch of the upper tone in V/Oct, the lower one following; stock is\n≈1.79 kHz (default 2.771)",
+        "signalType": "pitch",
+        "defaultValue": 2.771,
+        "minValue": 1.5,
+        "maxValue": 4.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.claves",
+    "documentation": "TR-808 claves.\n\nA circuit model of the 808's claves: a short, pure wooden click ringing at\n≈2.5 kHz. **decay** sets how long it rings, **freq** its pitch, and\n**accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.claves($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cl808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the claves ring, from ≈0.025 s to\n≈0.23 s (default 2.5, ≈0.075 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈2.53 kHz (default 3.273)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈2.53 kHz (default 3.273)",
+        "signalType": "pitch",
+        "defaultValue": 3.273,
+        "minValue": 1.5,
+        "maxValue": 4.5
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the claves ring, from ≈0.025 s to\n≈0.23 s (default 2.5, ≈0.075 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.cowbell",
+    "documentation": "TR-808 cowbell.\n\nA circuit model of the 808's cowbell: two square waves near 540 and 800 Hz\nthrough a band-pass filter, for its clanking, slightly sour clang. **freq**\nsets the pitch and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.cowbell($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cb808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch of the lower tone in V/Oct, the higher one following; stock is 540\nHz against 800 Hz (default 1.0454)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the bell",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the bell",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch of the lower tone in V/Oct, the higher one following; stock is 540\nHz against 800 Hz (default 1.0454)",
+        "signalType": "pitch",
+        "defaultValue": 1.0454,
+        "minValue": -0.5,
+        "maxValue": 2.5
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.clap",
+    "documentation": "TR-808 hand clap.\n\nA circuit model of the 808's hand clap: bursts of filtered noise in quick\nsuccession, like several hands clapping at once, over a softer noise tail.\n**accent** makes it louder and its tail longer.\n\nAn unaccented clap peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.clap($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cp808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a longer tail (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a clap still sounding over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise each clap runs into the last, as\non the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges clap",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges clap",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a longer tail (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.maracas",
+    "documentation": "TR-808 maracas.\n\nA circuit model of the 808's maracas: a short shake of high, hissing noise.\n**accent** makes it louder and draws it out.\n\nAn unaccented shake peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.maracas($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Ma808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the shake: up to\ntwice as loud, and drawn out (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a shake still sounding over 2 ms as the next one strikes, so\nevery shake starts from rest; otherwise each shake runs into the last,\nas on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges shake the maracas",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges shake the maracas",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the shake: up to\ntwice as loud, and drawn out (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.cymbal",
+    "documentation": "TR-808 cymbal.\n\nA circuit model of the 808's cymbal: six detuned square waves filtered into\na shimmering high band and a ringing lower one. **decay** sets how long the\nlower band rings, **tone** the balance from dark to bright, and **accent**\nhow hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.cymbal($clock.barTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cy808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the cymbal's lower band rings on (default\n2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "tone": {
+          "description": "tone control, 0–5 V: from dark, with the high band cut, to bright\n(default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the cymbal",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the cymbal",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the cymbal's lower band rings on (default\n2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "tone control, 0–5 V: from dark, with the high band cut, to bright\n(default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.hiHat",
+    "documentation": "TR-808 hi-hats, closed and open.\n\nA circuit model of the 808's hi-hats: the cymbal's six square waves filtered\nto a thin, bright band. **closed** strikes a short, tight hat and **open** a\nlonger one that rings for as long as **decay** sets; **accent** makes either\nhit harder.\n\nAs on the 808, a closed hit cuts off a ringing open hat. **cut** sets how\nhard: below 0 the open hat only ducks, and above 0 it stops dead.\n\nAn unaccented hit of either hat peaks near **±5 V** and a fully accented one\nnear **±10 V**.\n\n```js\n$tr808.hiHat($clock.beatTrigger, { open: $clock.barTrigger, cut: -2 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Hh808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike of either hat and held for the\nhit: up to twice as loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "closed": {
+          "description": "rising edges strike the closed hat, which also cuts off a ringing\nopen hat",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "cut": {
+          "description": "how hard a closed hit cuts off the open hat, −5 to 5 V: 0 is the 808's\nown cut, silencing it in about 100 ms; −5 lets it ring on, and 5\nsilences it in a few milliseconds (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the open hat rings (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike of either hat and hold them until\nthe next, as accent always is, so changes reach only the hits after\nthem (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "open": {
+          "description": "rising edges strike the open hat",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one on the same hat\nstrikes, so every hit starts from rest; otherwise each hit builds on the\nlast, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "closed"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "both hats",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "closed",
+        "description": "the closed hat alone",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "open",
+        "description": "the open hat alone",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "closed",
+        "description": "rising edges strike the closed hat, which also cuts off a ringing\nopen hat",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "open",
+        "description": "rising edges strike the open hat",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike of either hat and held for the\nhit: up to twice as loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the open hat rings (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cut",
+        "description": "how hard a closed hit cuts off the open hat, −5 to 5 V: 0 is the 808's\nown cut, silencing it in about 100 ms; −5 lets it ring on, and 5\nsilences it in a few milliseconds (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "closed"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.lowTom",
+    "documentation": "TR-808 low tom.\n\nA circuit model of the 808's low tom: a round, low ring at ≈87 Hz that\nstarts sharp and settles in pitch, over a soft puff of noise. **decay**\nsets how long it rings, **freq** its pitch, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Lt808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈87 Hz (default -1.5959)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈87 Hz (default -1.5959)",
+        "signalType": "pitch",
+        "defaultValue": -1.5959,
+        "minValue": -3.1,
+        "maxValue": -0.1
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.midTom",
+    "documentation": "TR-808 mid tom.\n\nA circuit model of the 808's mid tom: a round ring at ≈134 Hz that\nstarts sharp and settles in pitch, over a soft puff of noise. **decay**\nsets how long it rings, **freq** its pitch, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Mt808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.13 s to ≈1.2 s (default 2.5, ≈0.4 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈134 Hz (default -0.9623)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈134 Hz (default -0.9623)",
+        "signalType": "pitch",
+        "defaultValue": -0.9623,
+        "minValue": -2.46,
+        "maxValue": 0.54
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.13 s to ≈1.2 s (default 2.5, ≈0.4 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.highTom",
+    "documentation": "TR-808 high tom.\n\nA circuit model of the 808's high tom: a round ring at ≈182 Hz that\nstarts sharp and settles in pitch, over a soft puff of noise. **decay**\nsets how long it rings, **freq** its pitch, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Ht808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈182 Hz (default -0.5216)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈182 Hz (default -0.5216)",
+        "signalType": "pitch",
+        "defaultValue": -0.5216,
+        "minValue": -2.02,
+        "maxValue": 0.98
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.lowConga",
+    "documentation": "TR-808 low conga.\n\nA circuit model of the 808's low conga: a bright, hollow ring at ≈192 Hz\nthat starts sharp and settles in pitch. **decay** sets how long it\nrings, **freq** its pitch, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowConga($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Lc808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈192 Hz (default -0.4471)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈192 Hz (default -0.4471)",
+        "signalType": "pitch",
+        "defaultValue": -0.4471,
+        "minValue": -1.95,
+        "maxValue": 1.05
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.midConga",
+    "documentation": "TR-808 mid conga.\n\nA circuit model of the 808's mid conga: a bright, hollow ring at ≈276 Hz\nthat starts sharp and settles in pitch. **decay** sets how long it\nrings, **freq** its pitch, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midConga($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Mc808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈276 Hz (default 0.0792)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈276 Hz (default 0.0792)",
+        "signalType": "pitch",
+        "defaultValue": 0.0792,
+        "minValue": -1.42,
+        "maxValue": 1.58
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.highConga",
+    "documentation": "TR-808 high conga.\n\nA circuit model of the 808's high conga: a bright, hollow ring at ≈405\nHz that starts sharp and settles in pitch. **decay** sets how long it\nrings, **freq** its pitch, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highConga($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Hc808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈405 Hz (default 0.629)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈405 Hz (default 0.629)",
+        "signalType": "pitch",
+        "defaultValue": 0.629,
+        "minValue": -0.87,
+        "maxValue": 2.13
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.kick",
+    "documentation": "TR-909 bass drum.\n\nA circuit model of the 909's punchy kick: a rounded tone that sweeps down\nfrom about 300 Hz to rest near 56 Hz, with a click and a puff of noise at\nthe attack. **freq** sets the resting pitch, **sweep** how long the fall\ntakes, **attack** how loud the click is, **decay** how long it booms, and\n**accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.kick($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Bd909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attack": {
+          "description": "attack control, 0–5 V: how loud the click is (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum booms (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "resting pitch in V/Oct, the sweep following; stock is ≈56 Hz (default\n-2.2235)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "sweep": {
+          "description": "sweep control, 0–5 V: how long the pitch takes to fall to rest, the\n909's tune knob (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "resting pitch in V/Oct, the sweep following; stock is ≈56 Hz (default\n-2.2235)",
+        "signalType": "pitch",
+        "defaultValue": -2.2235,
+        "minValue": -3.7,
+        "maxValue": -0.7
+      },
+      {
+        "name": "sweep",
+        "description": "sweep control, 0–5 V: how long the pitch takes to fall to rest, the\n909's tune knob (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "attack",
+        "description": "attack control, 0–5 V: how loud the click is (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum booms (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.snare",
+    "documentation": "TR-909 snare drum.\n\nA circuit model of the 909's snare: a drum tone that bends up at the strike,\nunder a burst of noise. **freq** sets the pitch, **snappy** how loud the\nnoise is, **tone** how long it rings on, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.snare($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Sd909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈148 Hz (default -0.8243)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "snappy": {
+          "description": "snappy control, 0–5 V: how loud the noise is (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "tone control, 0–5 V: how long the noise rings on, from a short snap to a\nlong hiss (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈148 Hz (default -0.8243)",
+        "signalType": "pitch",
+        "defaultValue": -0.8243,
+        "minValue": -2.3,
+        "maxValue": 0.7
+      },
+      {
+        "name": "tone",
+        "description": "tone control, 0–5 V: how long the noise rings on, from a short snap to a\nlong hiss (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "snappy",
+        "description": "snappy control, 0–5 V: how loud the noise is (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.rimShot",
+    "documentation": "TR-909 rim shot.\n\nA circuit model of the 909's rim shot: a short, sharp, metallic click from\nthree tones rung together and clipped. **accent** makes it hit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.rimShot($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Rs909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the rim",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the rim",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.clap",
+    "documentation": "TR-909 hand clap.\n\nA circuit model of the 909's hand clap: bursts of filtered noise in quick\nsuccession, like several hands clapping at once, over a swelling noise tail.\n**accent** makes it louder and swells the tail.\n\nAn unaccented clap peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.clap($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cp909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a fuller tail (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a clap still sounding over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise each clap runs into the last, as\non the 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges clap",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges clap",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a fuller tail (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.lowTom",
+    "documentation": "TR-909 low tom.\n\nA circuit model of the 909's low tom: a deep tone that bends down from\nthe strike and grows gritty as it fades, over a puff of noise. **freq**\nsets the pitch, **decay** how long it rings, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr909.lowTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Lt909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈61 Hz (default -2.0993)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈61 Hz (default -2.0993)",
+        "signalType": "pitch",
+        "defaultValue": -2.0993,
+        "minValue": -3.6,
+        "maxValue": -0.6
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.midTom",
+    "documentation": "TR-909 mid tom.\n\nThe 909's mid tom: the low tom's sound, pitched higher and shorter.\n**freq** sets the pitch, **decay** how long it rings, and **accent** how\nhard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr909.midTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Mt909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈75 Hz (default -1.8098)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈75 Hz (default -1.8098)",
+        "signalType": "pitch",
+        "defaultValue": -1.8098,
+        "minValue": -3.3,
+        "maxValue": -0.3
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.highTom",
+    "documentation": "TR-909 high tom.\n\nThe 909's high tom: the low tom's sound, the highest and shortest of the\nthree. **freq** sets the pitch, **decay** how long it rings, and\n**accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr909.highTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Ht909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈92 Hz (default -1.5143)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈92 Hz (default -1.5143)",
+        "signalType": "pitch",
+        "defaultValue": -1.5143,
+        "minValue": -3.0,
+        "maxValue": 0.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
     "name": "$comp",
     "documentation": "EXPERIMENTAL\n\nSingle-band feed-forward dynamics processor with peak envelope follower.\n\nTwo stages run in parallel:\n\n- **downward stage** acts on signal above `threshold`. `ratio > 1` =\n  compression, `ratio < 1` = upward expansion (boost loud), `ratio = 1` =\n  passthrough.\n- **upward stage** acts on signal below `upwardThreshold`. `upwardRatio > 1`\n  = upward compression (boost quiet), `upwardRatio < 1` = downward\n  expansion / gate-like attenuation of quiet signal, `upwardRatio = 1` =\n  passthrough.\n\nBoth ratios use textbook `X:1` notation (X = Δinput dB / Δoutput dB) and\nare lower-bounded at 1e-3 (≈ Ableton's 1:1000 display). The detected\nlevel is clamped to ±60 dB so expansion stays bounded at signal extremes.\n\nAn optional **side-chain** input lets the envelope follower track an\nexternal signal while the gain is applied to `input` — useful for\nducking, kick-triggered pumping, or building multiband effects like OTT.\n\n**Signal flow:** input → input gain → (detector: side-chain or input)\n  → up + down compression → output gain → dry/wet mix → output\n\n- **threshold** — downward stage threshold in volts (0–5, default 2.5).\n- **ratio** — downward stage ratio in textbook X:1 form. > 1 compresses,\n  < 1 expands (boosts loud signal), 1 = passthrough. Lower-bounded at\n  1e-3 (≈ 1:1000 expansion); upper bound is `f32::INFINITY` =\n  brick-wall limiter. Default 4.0 (= Ableton display 1:0.25).\n- **upwardThreshold** — upward stage threshold in volts (0–5, default 0).\n- **upwardRatio** — upward stage ratio in textbook X:1 form. > 1 boosts\n  quiet signal, < 1 gates quiet signal, 1 = passthrough. Same bounds as\n  `ratio`. Default 1 (passthrough).\n- **sidechain** — optional external detector signal.\n- **attack** / **release** — envelope follower time constants in seconds.\n- **makeup** — post-compression makeup gain as a dB-domain voltage\n  (-5V = -24dB, 0V = unity, +5V = +24dB, default 0).\n- **inputGain** — gain before the compressor (-5V = -24dB, 0V = unity,\n  5V = +24dB). Raising input gain drives more signal into the compressor.\n- **outputGain** — gain after compression (-5V = -24dB, 0V = unity,\n  5V = +24dB). Trims the final output level.\n- **mix** — dry/wet blend (0 = fully dry, 5 = fully wet, default 5.0).\n  The dry signal is the original input before any gain staging.\n\n```js\n// simple bus compressor\n$comp($saw('c2'), { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })\n```\n\n```js\n// side-chain ducking — a kick envelope ducks a sustained pad\n$comp($saw('c3'), {\n  sidechain: $perc($clock.beatTrigger, { decay: 0.2 }),\n  threshold: 1.0, ratio: 8, attack: 0.005, release: 0.2,\n})\n```\n\n```js\n// multiband compression using $xover + $comp\nlet bands = $xover($saw('c2'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix([low, mid, high]).out()\n```",
     "paramsSchema": {
