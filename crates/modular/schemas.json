@@ -6937,6 +6937,1028 @@
     ]
   },
   {
+    "name": "$reverb",
+    "documentation": "Reverb from Mutable Instruments Beads, with a stereo output.\n\n`amount` sets both how much reverb you hear and how long it rings; at 0\nthe input passes through untouched. `size` makes the space bigger and\n`tone` makes the tail darken faster as it fades. Beads' own settings are\n`size` 0 and `tone` 1 for digital, 0 and 2 for clean tape, 2.5 and 2 for\nvintage, and 5 and 2 for dirty tape. The input passes through clean, so\nput `$granular` or `$wowFlutter` before it for their colour. Peaks above\n±5 V are limited.\n\n```js\n$reverb($saw('c3'), 4, { size: 5, tone: 2 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "BeadsReverbParams",
+      "type": "object",
+      "properties": {
+        "amount": {
+          "description": "how much reverb, and how long it rings (0–5, default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "audio input; even channels feed the left side and odd channels the\nright",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "size": {
+          "description": "room size; moving it while the reverb rings bends the tail's pitch\n(0–5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "how quickly the tail darkens, from bright at 0 to muffled at 5\n(default 1)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo output (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio input; even channels feed the left side and odd channels the\nright",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "amount",
+        "description": "how much reverb, and how long it rings (0–5, default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "size",
+        "description": "room size; moving it while the reverb rings bends the tail's pitch\n(0–5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "how quickly the tail darkens, from bright at 0 to muffled at 5\n(default 1)",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "amount"
+      }
+    ],
+    "channels": 2
+  },
+  {
+    "name": "$granular",
+    "documentation": "Granular processor from Mutable Instruments Beads: it records `input` and\nplays it back as grains, starting one on each rising edge at `trigger`.\n\nEach grain takes `time`, `size`, `shape`, `freq` and `spread` when it\nstarts, so for grain-to-grain variation modulate them with something\nsampled on the same trigger, such as `$sah`. Set `rootFreq` to the\npitch of the input and `freq` plays notes. `freeze` holds the recording\nso the grains keep replaying it.\n\nEach input channel gets its own voice. `output` is a stereo mix of every\nvoice, and `voices` gives each voice its own channel. Follow it with\n`$wowFlutter` and `$reverb` for the rest of Beads' sound.\n\n```js\nconst grains = $pulse('8hz')\n$granular($saw('a3'), grains, {\n  time: $sah($noise('white').range(0, 2), grains),\n  freq: $cycle($p('[c4, e4, g4] [b3, d4, g4]')),\n  rootFreq: 'a3',\n  width: 4,\n  spread: 2,\n  mix: 4,\n}).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GranularParams",
+      "type": "object",
+      "properties": {
+        "feedback": {
+          "description": "feeds the grains back into the recording, building up dense washes\n(0–5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freeze": {
+          "description": "while high, recording stops and grains keep playing the audio already\nheld",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "grain pitch; grains play at the input's own pitch when `freq` equals\n`rootFreq` (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "audio to record; each channel gets its own voice",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mix": {
+          "description": "dry/wet: 0 = input only, 5 = grains only (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "description": "recording character: digital, vintage, cleanTape or dirtyTape\n(default digital)",
+          "$ref": "#/$defs/GranularQuality"
+        },
+        "rootFreq": {
+          "description": "pitch of the input, so `freq` plays in tune (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shape": {
+          "description": "grain envelope: 0 = square, 1.67 = sharp attack, 3.33 = smooth,\n5 = reverse swell (default 3.33)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "grain length: 0 = shortest, 5 = longest; negative values play the\ngrains backwards (−5 to 5, default 2.75)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spread": {
+          "description": "random stereo position for each grain (0–5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "time": {
+          "description": "where grains start: 0 = the most recent audio, 5 = the oldest\n(default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "starts a grain on each rising edge",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "description": "spreads the voices across the stereo field: 0 = all centred, 5 =\nfirst voice hard left to last hard right (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "GranularQuality": {
+          "description": "Sound character, after Beads' four quality settings. Lower qualities\nsound darker and grittier and hold more audio.",
+          "oneOf": [
+            {
+              "description": "Clean, with 4 s of audio.",
+              "type": "string",
+              "const": "digital"
+            },
+            {
+              "description": "Slightly gritty early digital, with 8 s of audio.",
+              "type": "string",
+              "const": "vintage"
+            },
+            {
+              "description": "Darker, softer grains, with 10.7 s of audio.",
+              "type": "string",
+              "const": "cleanTape"
+            },
+            {
+              "description": "Lo-fi and noisy, with 16 s of audio.",
+              "type": "string",
+              "const": "dirtyTape"
+            }
+          ]
+        },
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo mix of every voice (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0,
+        "channels": 2
+      },
+      {
+        "name": "voices",
+        "description": "one channel per voice",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio to record; each channel gets its own voice",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "starts a grain on each rising edge",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freeze",
+        "description": "while high, recording stops and grains keep playing the audio already\nheld",
+        "signalType": "gate",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "time",
+        "description": "where grains start: 0 = the most recent audio, 5 = the oldest\n(default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "size",
+        "description": "grain length: 0 = shortest, 5 = longest; negative values play the\ngrains backwards (−5 to 5, default 2.75)",
+        "signalType": "control",
+        "defaultValue": 2.75,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "shape",
+        "description": "grain envelope: 0 = square, 1.67 = sharp attack, 3.33 = smooth,\n5 = reverse swell (default 3.33)",
+        "signalType": "control",
+        "defaultValue": 3.33,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "grain pitch; grains play at the input's own pitch when `freq` equals\n`rootFreq` (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "rootFreq",
+        "description": "pitch of the input, so `freq` plays in tune (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "spread",
+        "description": "random stereo position for each grain (0–5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "width",
+        "description": "spreads the voices across the stereo field: 0 = all centred, 5 =\nfirst voice hard left to last hard right (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "feedback",
+        "description": "feeds the grains back into the recording, building up dense washes\n(0–5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "mix",
+        "description": "dry/wet: 0 = input only, 5 = grains only (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$granularSampler",
+    "documentation": "`$granular` playing a WAV file instead of a live input: it plays grains\nfrom `wav`, starting one on each rising edge at `trigger`.\n\nEach grain takes `time`, `size`, `shape`, `freq` and `spread` when it\nstarts, so for grain-to-grain variation modulate them with something\nsampled on the same trigger, such as `$sah`. Set `rootFreq` to the pitch\nof the file and `freq` plays notes.\n\nEach channel of the file gets its own voice. `output` is a stereo mix of\nevery voice, and `voices` gives each voice its own channel. `quality`\ncolours the file as `$granular` colours its recording.\n\n```js\nconst grains = $pulse('8hz')\n$granularSampler($wavs().pad, grains, {\n  time: $sah($noise('white').range(0, 5), grains),\n  width: 4,\n  spread: 2,\n}).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GranularSamplerParams",
+      "type": "object",
+      "properties": {
+        "freq": {
+          "description": "grain pitch; grains play at the file's own pitch when `freq` equals\n`rootFreq` (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "description": "sound character: digital, vintage, cleanTape or dirtyTape (default\ndigital)",
+          "$ref": "#/$defs/GranularQuality"
+        },
+        "rootFreq": {
+          "description": "pitch of the file, so `freq` plays in tune (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shape": {
+          "description": "grain envelope: 0 = square, 1.67 = sharp attack, 3.33 = smooth,\n5 = reverse swell (default 3.33)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "grain length: 0 = shortest, 5 = longest; negative values play the\ngrains backwards (−5 to 5, default 2.75)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spread": {
+          "description": "random stereo position for each grain (0–5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "time": {
+          "description": "where grains start: 0 = the start of the file, 5 = its end\n(default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "starts a grain on each rising edge",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wav": {
+          "description": "the file to play; each of its channels gets its own voice",
+          "$ref": "#/$defs/Wav"
+        },
+        "width": {
+          "description": "spreads the voices across the stereo field: 0 = all centred, 5 =\nfirst voice hard left to last hard right (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "wav"
+      ],
+      "$defs": {
+        "GranularQuality": {
+          "description": "Sound character, after Beads' four quality settings. Lower qualities\nsound darker and grittier and hold more audio.",
+          "oneOf": [
+            {
+              "description": "Clean, with 4 s of audio.",
+              "type": "string",
+              "const": "digital"
+            },
+            {
+              "description": "Slightly gritty early digital, with 8 s of audio.",
+              "type": "string",
+              "const": "vintage"
+            },
+            {
+              "description": "Darker, softer grains, with 10.7 s of audio.",
+              "type": "string",
+              "const": "cleanTape"
+            },
+            {
+              "description": "Lo-fi and noisy, with 16 s of audio.",
+              "type": "string",
+              "const": "dirtyTape"
+            }
+          ]
+        },
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "Wav": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "wav_ref"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "channels"
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo mix of every voice (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0,
+        "channels": 2
+      },
+      {
+        "name": "voices",
+        "description": "one channel per voice",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "starts a grain on each rising edge",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "time",
+        "description": "where grains start: 0 = the start of the file, 5 = its end\n(default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "size",
+        "description": "grain length: 0 = shortest, 5 = longest; negative values play the\ngrains backwards (−5 to 5, default 2.75)",
+        "signalType": "control",
+        "defaultValue": 2.75,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "shape",
+        "description": "grain envelope: 0 = square, 1.67 = sharp attack, 3.33 = smooth,\n5 = reverse swell (default 3.33)",
+        "signalType": "control",
+        "defaultValue": 3.33,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "grain pitch; grains play at the file's own pitch when `freq` equals\n`rootFreq` (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "rootFreq",
+        "description": "pitch of the file, so `freq` plays in tune (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "spread",
+        "description": "random stereo position for each grain (0–5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "width",
+        "description": "spreads the voices across the stereo field: 0 = all centred, 5 =\nfirst voice hard left to last hard right (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "wav"
+      },
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$wowFlutter",
+    "documentation": "Tape wow and flutter from Mutable Instruments Beads' dirty tape setting:\nslow, drifting pitch wobble with a slight softening of the highs. Every\nchannel wobbles together, like one tape carrying them all.\n\n`speed` and `intensity` set how fast and how deep the wobble is; their\ndefaults are Beads'. Faster and deeper both bend the pitch further.\n\n```js\nconst grains = $pulse('8hz')\nconst cloud = $granular($saw('a3'), grains, { mix: 4, quality: 'dirtyTape' })\n$reverb($wowFlutter(cloud), 3, { size: 5, tone: 2 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "WowFlutterParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "audio input",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "intensity": {
+          "description": "how deep the wobble is: 0 = none, 2.5 = Beads' dirty tape, 5 = twice\nas deep (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "description": "how fast the tape wobbles; each volt doubles it, and 2.5 is Beads'\ndirty tape (0–5, default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "the input with wow and flutter",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio input",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "speed",
+        "description": "how fast the tape wobbles; each volt doubles it, and 2.5 is Beads'\ndirty tape (0–5, default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "intensity",
+        "description": "how deep the wobble is: 0 = none, 2.5 = Beads' dirty tape, 5 = twice\nas deep (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ]
+  },
+  {
     "name": "$sine",
     "documentation": "A sine wave oscillator.\n\n## Example\n\n```js\n$sine('c4').out()\n```",
     "paramsSchema": {
@@ -17146,6 +18168,163 @@
       },
       {
         "name": "division"
+      }
+    ]
+  },
+  {
+    "name": "$scan",
+    "documentation": "Steps a counter by `distance` on each trigger, wrapping it within 0 to\n`length`.\n\nA step past `length` wraps around by the overshoot, as many times as it\ntakes, and so does a step below 0. With `snapOnWrap`, a step past\n`length` lands on 0 and a step below 0 lands on `length`. A counter\nexactly at `length` stays there. `reset` sets the counter to 0, and wins\nover a trigger in the same sample. Lengths are read at each trigger, so a\nshorter `length` takes effect on the next step.\n\n```js\n// Pitch steps of a quarter octave, wrapping within an octave:\n$sine($scan(1, 0.25, $pulse('4hz'))).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ScanParams",
+      "type": "object",
+      "properties": {
+        "distance": {
+          "description": "amount added to the counter on each trigger; negative steps backwards",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "length": {
+          "description": "span the counter wraps within; must be above 0",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "reset": {
+          "description": "rising edges set the counter to 0",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapOnWrap": {
+          "description": "a step past either end lands on the opposite end instead of wrapping\nby the overshoot (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges step the counter by `distance`",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "length",
+        "distance",
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "the counter, from 0 to length",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "length",
+        "description": "span the counter wraps within; must be above 0",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "distance",
+        "description": "amount added to the counter on each trigger; negative steps backwards",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "rising edges step the counter by `distance`",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "reset",
+        "description": "rising edges set the counter to 0",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "length"
+      },
+      {
+        "name": "distance"
+      },
+      {
+        "name": "trigger"
       }
     ]
   },

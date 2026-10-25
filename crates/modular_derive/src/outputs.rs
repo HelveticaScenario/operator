@@ -18,6 +18,7 @@ struct OutputAttr {
     description: Option<LitStr>,
     is_default: bool,
     range: Option<(f64, f64)>,
+    channels: Option<u32>,
 }
 
 /// Precision type for output fields
@@ -35,6 +36,8 @@ struct OutputField {
     description: TokenStream2,
     is_default: bool,
     range: Option<(f64, f64)>,
+    /// Fixed channel count of a `PolyOutput`, independent of the module's.
+    channels: Option<u32>,
 }
 
 /// Parse output attribute tokens into OutputAttr
@@ -43,6 +46,7 @@ struct OutputField {
 /// - #[output("name", "description", default)]
 /// - #[output("name", "description", range = (-1.0, 1.0))]
 /// - #[output("name", "description", default, range = (-1.0, 1.0))]
+/// - #[output("name", "description", channels = 2)]
 fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
     use syn::Result as SynResult;
     use syn::parse::{Parse, ParseStream};
@@ -52,6 +56,7 @@ fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
         description: Option<LitStr>,
         is_default: bool,
         range: Option<(f64, f64)>,
+        channels: Option<u32>,
     }
 
     impl Parse for OutputAttrParser {
@@ -91,6 +96,7 @@ fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
             // Parse optional attributes (default, range)
             let mut is_default = false;
             let mut range: Option<(f64, f64)> = None;
+            let mut channels: Option<u32> = None;
             while input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
 
@@ -111,11 +117,19 @@ fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
                         content.parse::<Token![,]>()?;
                         let max: syn::LitFloat = content.parse()?;
                         range = Some((min.base10_parse()?, max.base10_parse()?));
+                    } else if ident == "channels" {
+                        input.parse::<Token![=]>()?;
+                        let n: syn::LitInt = input.parse()?;
+                        let value: u32 = n.base10_parse()?;
+                        if value == 0 {
+                            return Err(syn::Error::new(n.span(), "channels must be at least 1"));
+                        }
+                        channels = Some(value);
                     } else {
                         return Err(syn::Error::new(
                             ident.span(),
                             format!(
-                                "Unknown output attribute '{}'. Expected 'default' or 'range'",
+                                "Unknown output attribute '{}'. Expected 'default', 'range' or 'channels'",
                                 ident
                             ),
                         ));
@@ -128,6 +142,7 @@ fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
                 description: Some(description),
                 is_default,
                 range,
+                channels,
             })
         }
     }
@@ -139,6 +154,7 @@ fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
         description: parsed.description,
         is_default: parsed.is_default,
         range: parsed.range,
+        channels: parsed.channels,
     })
 }
 
@@ -206,6 +222,15 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                         .map(|d| quote!(#d.to_string()))
                         .unwrap_or(quote!("".to_string()));
 
+                    if output_attr.channels.is_some() && precision != OutputPrecision::PolySignal {
+                        return syn::Error::new(
+                            f.span(),
+                            "`channels` applies only to PolyOutput fields",
+                        )
+                        .to_compile_error()
+                        .into();
+                    }
+
                     out.push(OutputField {
                         field_name,
                         output_name,
@@ -213,6 +238,7 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                         description,
                         is_default: output_attr.is_default,
                         range: output_attr.range,
+                        channels: output_attr.channels,
                     });
                 }
                 out
@@ -314,6 +340,10 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 Some((_, max)) => quote! { Some(#max) },
                 None => quote! { None },
             };
+            let channels = match o.channels {
+                Some(n) => quote! { Some(#n) },
+                None => quote! { None },
+            };
             quote! {
                 crate::types::OutputSchema {
                     name: #output_name.to_string(),
@@ -322,6 +352,7 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                     default: #is_default,
                     min_value: #min_value,
                     max_value: #max_value,
+                    channels: #channels,
                 }
             }
         })
@@ -332,8 +363,12 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         .filter(|o| o.precision == OutputPrecision::PolySignal)
         .map(|o| {
             let field_name = &o.field_name;
-            quote! {
-                self.#field_name.set_channels(channels);
+            match o.channels {
+                Some(n) => {
+                    let n = n as usize;
+                    quote! { self.#field_name.set_channels(#n); }
+                }
+                None => quote! { self.#field_name.set_channels(channels); },
             }
         })
         .collect();
@@ -379,8 +414,8 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         .collect();
 
     // Each port is sized to its true width: f32 outputs are mono (1 channel,
-    // broadcast to consumers via cycling-on-read), PolyOutput ports get the
-    // module's derived channel count.
+    // broadcast to consumers via cycling-on-read), PolyOutput ports get their
+    // fixed `channels` or else the module's derived channel count.
     let block_new_inits: Vec<_> = outputs
         .iter()
         .map(|o| {
@@ -389,9 +424,15 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 OutputPrecision::F32 => {
                     quote! { #field_name: crate::block_port::BlockPort::new(block_size, 1) }
                 }
-                OutputPrecision::PolySignal => {
-                    quote! { #field_name: crate::block_port::BlockPort::new(block_size, channel_count) }
-                }
+                OutputPrecision::PolySignal => match o.channels {
+                    Some(n) => {
+                        let n = n as usize;
+                        quote! { #field_name: crate::block_port::BlockPort::new(block_size, #n) }
+                    }
+                    None => quote! {
+                        #field_name: crate::block_port::BlockPort::new(block_size, channel_count)
+                    },
+                },
             }
         })
         .collect();

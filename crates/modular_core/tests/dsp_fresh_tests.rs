@@ -409,12 +409,19 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
             json!({ "trigger": 0.0 })
         }
         "$clockDivider" => json!({ "division": 2, "input": 0.0 }),
+        "$scan" => json!({ "length": 1.0, "distance": 1.0, "trigger": 0.0 }),
         "$sah" => json!({ "input": 0.0, "trigger": 0.0 }),
         "$tah" => json!({ "input": 0.0, "gate": 0.0 }),
         "$dattorro" => json!({ "input": 0.0 }),
         "$plate" => json!({ "input": 0.0 }),
         "$unstable.reverb" => json!({ "input": 0.0 }),
         "$unstable.reverb2" => json!({ "input": 0.0 }),
+        "$reverb" => json!({ "input": 0.0 }),
+        "$granular" => json!({ "input": 0.0 }),
+        "$granularSampler" => {
+            json!({ "wav": { "type": "wav_ref", "path": "test", "channels": 1 } })
+        }
+        "$wowFlutter" => json!({ "input": 0.0 }),
         "$eq" => json!({ "input": 0.0 }),
         "$filterDC" => json!({ "input": 0.0 }),
         "$quantNoise" => json!({ "input": 0.0, "amount": 1.0 }),

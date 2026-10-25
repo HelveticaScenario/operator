@@ -2762,6 +2762,10 @@ pub struct OutputSchema {
     /// The maximum value of the raw output range (before any remapping)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_value: Option<f64>,
+    /// Fixed channel count of a polyphonic output; `None` follows the
+    /// module's derived channel count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channels: Option<u32>,
 }
 
 pub trait OutputStruct: Default + Send + 'static {

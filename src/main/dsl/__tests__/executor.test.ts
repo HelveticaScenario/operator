@@ -222,6 +222,22 @@ describe('polyphony', () => {
         expect(findModules(patch, '$lpf').length).toBe(1);
         expect(findModules(patch, '$saw').length).toBe(1);
     });
+
+    test('an output with fixed channels keeps them on a wider module', () => {
+        const patch = execPatch(`
+            const cloud = $granular(0, 0, { freq: ['c4', 'e4', 'g4'] })
+            $sine(cloud.voices).out()
+            $saw(cloud).out()
+        `);
+        const perVoice = findModules(patch, '$sine')[0].params.freq;
+        const stereo = findModules(patch, '$saw')[0].params.freq;
+        expect(perVoice).toHaveLength(3);
+        expect(stereo).toHaveLength(2);
+        expect(stereo.map((s: { port: string }) => s.port)).toEqual([
+            'output',
+            'output',
+        ]);
+    });
 });
 
 // ─── Collections ─────────────────────────────────────────────────────────────

@@ -322,7 +322,8 @@ fn comp_chain(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
-/// Two seconds of deterministic white noise at 48 kHz, for `$grains`.
+/// Two seconds of deterministic white noise at 48 kHz, for `$grains` and
+/// `$granularSampler`.
 fn noise_wav() -> Arc<WavData> {
     let mut state = 1u32;
     let samples = (0..96_000)
@@ -377,6 +378,28 @@ fn grains(channels: usize) -> BenchPatch {
                 "gate": poly_cable(&gate, "output", channels),
                 "density": density,
                 "length": length,
+            }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
+/// 4 `$granularSampler` clouds, triggered at 5, 20, 80 and 320 Hz.
+fn granular(channels: usize) -> BenchPatch {
+    let mut modules = Vec::new();
+    for (i, rate) in [5.0f32, 20.0, 80.0, 320.0].iter().enumerate() {
+        let trigger = format!("trigger{i}");
+        modules.push((
+            trigger.clone(),
+            "$pulse",
+            json!({ "freq": poly((rate / 261.625_58).log2(), channels) }),
+        ));
+        modules.push((
+            format!("grains{i}"),
+            "$granularSampler",
+            json!({
+                "wav": { "type": "wav_ref", "path": "noise", "channels": 1 },
+                "trigger": poly_cable(&trigger, "output", channels),
             }),
         ));
     }
@@ -515,7 +538,7 @@ fn erratic_modulated(channels: usize) -> BenchPatch {
 }
 
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 14] = [
+    let cases: [(&str, fn(usize) -> BenchPatch); 15] = [
         ("wide_mix_sample_160", wide_mix_sample),
         ("remap_chain_32", remap_chain),
         ("wide_mix_160", wide_mix),
@@ -527,6 +550,7 @@ fn bench_patches(c: &mut Criterion) {
         ("voices_8", voices),
         ("comp_chain_8", comp_chain),
         ("grains_4", grains),
+        ("granular_4", granular),
         ("wavetable_8", wavetables),
         ("eq_8", eqs),
         ("video_tap_16", video_taps),
