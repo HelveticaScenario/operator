@@ -1,0 +1,23 @@
+changesDir: .changes
+unreleasedDir: unreleased
+headerPath: header.tpl.md
+changelogPath: CHANGELOG.md
+versionExt: md
+versionFormat: '## {{.Version}} — {{.Time.Format "January 2, 2006"}}'
+kindFormat: '### {{.Kind}}'
+changeFormat: '- {{indent 2 .Body | trim}}'
+kinds:
+    - label: Breaking
+      auto: minor
+    - label: New
+      auto: patch
+    - label: Improved
+      auto: patch
+    - label: Fixed
+      auto: patch
+newlines:
+    afterChangelogHeader: 0
+    beforeChangelogVersion: 1
+    beforeKind: 1
+    afterKind: 1
+    endOfVersion: 1
