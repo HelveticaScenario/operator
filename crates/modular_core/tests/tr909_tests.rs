@@ -5,16 +5,15 @@
 //! A constant 5 V trigger strikes each drum on its first sample.
 
 use modular_core::Patch;
+use modular_core::dsp::get_params_deserializers;
 use modular_core::dsp::utils::rng::TEST_SEED_BASE;
-use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
-use modular_core::types::{ProcessingMode, Sampleable};
+use modular_core::types::ProcessingMode;
 use serde_json::{Value, json};
 
-const SR: f32 = 48_000.0;
+mod drum_common;
 
-/// Every module seeds its noise from this, so each run draws the same noise.
-const SEED: u64 = 0x5eed;
+use drum_common::*;
 
 const BD: &str = "$tr909.kick";
 const SD: &str = "$tr909.snare";
@@ -25,40 +24,6 @@ const RS: &str = "$tr909.rimShot";
 const CP: &str = "$tr909.clap";
 const ALL: [&str; 7] = [BD, SD, LT, MT, HT, RS, CP];
 
-fn make(module_type: &str, params: Value, sample_rate: f32) -> Box<dyn Sampleable> {
-    TEST_SEED_BASE.set(Some(SEED));
-    let cached = get_params_deserializers()[module_type](params)
-        .unwrap_or_else(|e| panic!("params for {module_type}: {e}"));
-    get_constructors()[module_type](
-        &"drum".to_string(),
-        sample_rate,
-        DeserializedParams {
-            params: cached.params,
-            channel_count: cached.channel_count,
-        },
-        1,
-        ProcessingMode::Block,
-    )
-    .unwrap_or_else(|e| panic!("construct {module_type}: {e}"))
-}
-
-/// Render `secs` of output at `sample_rate` with `params` plus a held 5 V trigger.
-fn render_at(module_type: &str, mut params: Value, secs: f32, sample_rate: f32) -> Vec<f32> {
-    params["trigger"] = json!(5.0);
-    let m = make(module_type, params, sample_rate);
-    (0..(secs * sample_rate) as usize)
-        .map(|_| {
-            m.start_block();
-            m.ensure_processed();
-            m.get_value_at("output", 0, 0)
-        })
-        .collect()
-}
-
-fn render(module_type: &str, params: Value, secs: f32) -> Vec<f32> {
-    render_at(module_type, params, secs, SR)
-}
-
 /// The median peak of hits on a voice at rest: one on each of `channels`
 /// channels, which each draw their own noise, struck once and again after
 /// the first hit has settled.
@@ -67,11 +32,7 @@ fn median_hit_peak(module_type: &str, mut params: Value, channels: usize) -> f32
     let clock = json!({ "type": "cable", "module": "clock", "port": "output", "channel": 0 });
     params["trigger"] = json!(vec![clock; channels]);
     let modules = [
-        (
-            "clock",
-            "$pulse",
-            json!({ "freq": (1.0f32 / 261.625_58).log2() }),
-        ),
+        ("clock", "$pulse", json!({ "freq": voct(1.0) })),
         ("drum", module_type, params),
     ];
     let deserializers = get_params_deserializers();
@@ -119,41 +80,9 @@ fn median_hit_peak(module_type: &str, mut params: Value, channels: usize) -> f32
     peaks[channels / 2]
 }
 
-fn peak(x: &[f32]) -> f32 {
-    x.iter().fold(0.0, |m, v| m.max(v.abs()))
-}
-
-fn rms(x: &[f32]) -> f32 {
-    (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
-}
-
 /// Seconds at `t` of window `w`.
 fn window(x: &[f32], t: f32, w: f32) -> &[f32] {
     &x[(t * SR) as usize..((t + w) * SR) as usize]
-}
-
-/// Mean frequency from upward zero crossings between `from` and `to` seconds.
-fn crossing_hz(x: &[f32], from: f32, to: f32) -> f32 {
-    let ups: Vec<usize> = ((from * SR) as usize..(to * SR) as usize)
-        .filter(|&i| x[i - 1] <= 0.0 && x[i] > 0.0)
-        .collect();
-    (ups.len() - 1) as f32 * SR / (ups[ups.len() - 1] - ups[0]) as f32
-}
-
-/// Share of energy above `hz` through four cascaded one-pole high-passes.
-fn energy_above(x: &[f32], hz: f32) -> f32 {
-    let a = (-std::f32::consts::TAU * hz / SR).exp();
-    let mut y = x.to_vec();
-    for _ in 0..4 {
-        let (mut prev_in, mut prev_out) = (0.0f32, 0.0f32);
-        for v in y.iter_mut() {
-            let out = a * (prev_out + *v - prev_in);
-            prev_in = *v;
-            prev_out = out;
-            *v = out;
-        }
-    }
-    y.iter().map(|v| v * v).sum::<f32>() / x.iter().map(|v| v * v).sum::<f32>()
 }
 
 /// Seconds until the output last stands above `fraction` of its peak.
@@ -165,12 +94,7 @@ fn ring(x: &[f32], fraction: f32) -> f32 {
 #[test]
 fn voices_are_silent_until_struck() {
     for voice in ALL {
-        let m = make(voice, json!({ "trigger": 0.0 }), SR);
-        for _ in 0..4800 {
-            m.start_block();
-            m.ensure_processed();
-            assert_eq!(m.get_value_at("output", 0, 0), 0.0, "{voice}");
-        }
+        assert_silent_until_struck(voice, json!({ "trigger": 0.0 }), &["output"]);
     }
 }
 
@@ -221,8 +145,8 @@ fn bd_sweeps_down_to_rest() {
     // IC12a's offset through R27 sets the rest near 56 Hz; the pitch
     // envelope starts it far higher.
     let x = render(BD, json!({ "attack": 0.0, "decay": 5.0 }), 0.4);
-    let early = crossing_hz(&x, 0.003, 0.012);
-    let rest = crossing_hz(&x, 0.15, 0.3);
+    let early = crossing_hz(&x, 0.003, 0.012, SR);
+    let rest = crossing_hz(&x, 0.15, 0.3, SR);
     assert!(early > 130.0, "{early}");
     assert!((rest - 56.0).abs() < 3.0, "{rest}");
 }
@@ -231,7 +155,7 @@ fn bd_sweeps_down_to_rest() {
 fn bd_sweep_lengthens_the_sweep() {
     let hz = |sweep: f32| {
         let x = render(BD, json!({ "attack": 0.0, "sweep": sweep }), 0.1);
-        crossing_hz(&x, 0.03, 0.06)
+        crossing_hz(&x, 0.03, 0.06, SR)
     };
     let (short, long) = (hz(0.0), hz(5.0));
     assert!(long > short + 20.0, "{short} {long}");
@@ -255,8 +179,8 @@ fn bd_attack_adds_the_click() {
 fn sd_pitch_bends_down_after_the_strike() {
     // IC35 lifts the inverters' supply at the strike, then lets it fall.
     let x = render(SD, json!({ "snappy": 0.0 }), 0.2);
-    let early = crossing_hz(&x, 0.003, 0.012);
-    let late = crossing_hz(&x, 0.05, 0.12);
+    let early = crossing_hz(&x, 0.003, 0.012, SR);
+    let late = crossing_hz(&x, 0.05, 0.12, SR);
     assert!(early > late * 1.05, "{early} {late}");
 }
 
@@ -302,7 +226,7 @@ fn freq_tracks_volts_per_octave() {
             let mut params = params.clone();
             params["freq"] = json!(freq);
             let x = render(voice, params, to);
-            crossing_hz(&x, from, to)
+            crossing_hz(&x, from, to, SR)
         };
         let base = hz(stock);
         for octaves in [-1.0f32, 1.0] {
@@ -317,7 +241,7 @@ fn freq_tracks_volts_per_octave() {
 
 #[test]
 fn toms_rise_from_low_to_high() {
-    let hz = |voice| crossing_hz(&render(voice, json!({}), 0.4), 0.1, 0.3);
+    let hz = |voice| crossing_hz(&render(voice, json!({}), 0.4), 0.1, 0.3, SR);
     let (lt, mt, ht) = (hz(LT), hz(MT), hz(HT));
     assert!(lt < mt && mt < ht, "{lt} {mt} {ht}");
 }
@@ -331,25 +255,13 @@ fn toms_decay_lengthens_the_ring() {
     }
 }
 
-/// Power of `x` at `hz`, by Goertzel's algorithm.
-fn power_at(x: &[f32], hz: f32) -> f32 {
-    let c = 2.0 * (std::f32::consts::TAU * hz / SR).cos();
-    let (mut s1, mut s2) = (0.0f32, 0.0f32);
-    for &v in x {
-        let s0 = v + c * s1 - s2;
-        s2 = s1;
-        s1 = s0;
-    }
-    (s1 * s1 + s2 * s2 - c * s1 * s2) / x.len() as f32
-}
-
 #[test]
 fn rs_rings_briefly_at_its_resonators() {
     // IC49a's bridged-T rings near 220 Hz and IC49b's near 1050 Hz.
     let x = render(RS, json!({}), 0.3);
-    let floor = power_at(&x, 3000.0);
+    let floor = power_at(&x, 3000.0, SR);
     for hz in [220.0, 1050.0] {
-        assert!(power_at(&x, hz) > 20.0 * floor, "{hz}");
+        assert!(power_at(&x, hz, SR) > 20.0 * floor, "{hz}");
     }
     assert!(peak(window(&x, 0.08, 0.1)) < 0.01 * peak(&x));
 }
