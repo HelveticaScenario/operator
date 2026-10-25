@@ -122,6 +122,3 @@ crates/modular_core/src/pattern_system/__fixtures__/sp_combine_chain2.json
 
 # Per-machine Claude Code settings
 .claude/settings.local.json
-
-# Local beads issue-tracker state.
-.beads
