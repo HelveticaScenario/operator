@@ -210,7 +210,7 @@ struct PlateState {
 /// $plate($saw('c3'), { decay: 2, bandwidth: 3 }).out()
 /// $plate($saw('c3'), { modulation: $sine('0.1hz') }).out()
 /// ```
-#[module(name = "$plate", channels = 2, patch_update, has_init, args(input))]
+#[module(name = "$plate", channels = 2, has_init, args(input))]
 pub struct Plate {
     outputs: PlateOutputs,
     state: PlateState,
@@ -326,17 +326,27 @@ impl Plate {
 
         let bw_v = self.params.bandwidth.value_or(2.02);
         let bw_coeff = map_range(bw_v, -5.0, 5.0, 0.005, 0.9999).clamp(0.005, 0.9999);
-        self.state.smoothed_bandwidth.update(bw_coeff, sample_rate);
+        self.state.smoothed_bandwidth.update(
+            bw_coeff,
+            self.params.bandwidth.glide_mark(),
+            sample_rate,
+        );
         let bandwidth = *self.state.smoothed_bandwidth;
 
         let damp_v = self.params.damping.value_or(4.09);
         let damp_coeff = map_range(damp_v, -5.0, 5.0, 0.9999, 0.005).clamp(0.005, 0.9999);
-        self.state.smoothed_damping.update(damp_coeff, sample_rate);
+        self.state.smoothed_damping.update(
+            damp_coeff,
+            self.params.damping.glide_mark(),
+            sample_rate,
+        );
         let damping = *self.state.smoothed_damping;
 
         let decay_v = self.params.decay.value_or(-2.0);
         let decay_raw = map_range(decay_v, -5.0, 5.0, 0.0, 0.9999).clamp(0.0, 0.9999);
-        self.state.smoothed_decay.update(decay_raw, sample_rate);
+        self.state
+            .smoothed_decay
+            .update(decay_raw, self.params.decay.glide_mark(), sample_rate);
         let decay = *self.state.smoothed_decay;
 
         let mod_v = self.params.modulation.value_or(0.0);
@@ -502,14 +512,6 @@ impl Plate {
 
         self.outputs.sample.set(0, dc_out_l);
         self.outputs.sample.set(1, dc_out_r);
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Plate {
-    fn on_patch_update(&mut self) {
-        self.state.smoothed_bandwidth.arm();
-        self.state.smoothed_damping.arm();
-        self.state.smoothed_decay.arm();
     }
 }
 

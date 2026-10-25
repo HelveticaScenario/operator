@@ -53,7 +53,7 @@ struct FoldState {
 /// Wavefolder that reflects the signal back when it exceeds a threshold,
 /// producing dense, harmonically rich tones. Higher amounts create more
 /// complex, metallic timbres.
-#[module(name = "$fold", patch_update, args(input, amount), has_init)]
+#[module(name = "$fold", args(input, amount), has_init)]
 pub struct Fold {
     outputs: FoldOutputs,
     state: FoldState,
@@ -81,7 +81,9 @@ impl Fold {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.get_value(ch);
 
-            state.amount.update(amount_raw, sample_rate);
+            state
+                .amount
+                .update(amount_raw, self.params.amount.glide_mark(ch), sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1] for table lookup
@@ -111,20 +113,12 @@ impl Fold {
     }
 }
 
-impl crate::types::PatchUpdateHandler for Fold {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.amount.arm();
-        }
-    }
-}
-
 message_handlers!(impl Fold {});
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{OutputStruct, Signal};
+    use crate::types::{Connect, OutputStruct, Signal};
 
     fn make(input: f32, amount: f32) -> Fold {
         let mut outputs = FoldOutputs::default();
@@ -156,9 +150,12 @@ mod tests {
         }
         let mut prev = fold.outputs.sample.get(0);
         let mut max_step = 0.0_f32;
-        // Step the param through a patch update, whose glide drives the transition.
+        // Step the param through a patch swap, whose glide drives the transition.
+        let before = fold.params.amount.clone();
         fold.params.amount = PolySignal::mono(Signal::Volts(target_amount));
-        crate::types::PatchUpdateHandler::on_patch_update(&mut fold);
+        fold.params
+            .amount
+            .mark_glides(Some(&before), 1, &crate::types::SameIds);
         for _ in 0..4000 {
             fold.update(48000.0);
             let cur = fold.outputs.sample.get(0);

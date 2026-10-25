@@ -10,7 +10,7 @@ use crate::dsp::utils::dc_blocker::{DEFAULT_DC_BLOCK_FC_HZ, DcBlocker};
 use crate::dsp::utils::fade::{DEFAULT_FADE_IN_SECS, FadeIn};
 use crate::dsp::utils::halfband::{Halfband2xDown, Halfband2xUp};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::SwapGlide;
+use crate::types::{GlideMark, SwapGlide};
 
 /// Modular audio level. Signals swing ±5 V; the Surge XT shapers work in `[-1, 1]`,
 /// so we divide going in and multiply coming out.
@@ -63,12 +63,13 @@ impl<S: Shaper> ShapeChannel<S> {
         &mut self,
         x_in: f32,
         drive_raw: f32,
+        drive_mark: GlideMark,
         mode: S::Mode,
         dc_coeff: f32,
         fade_inc: f32,
         sample_rate: f32,
     ) -> f32 {
-        self.drive.update(drive_raw, sample_rate);
+        self.drive.update(drive_raw, drive_mark, sample_rate);
         let drive = drive_map(*self.drive);
         let x = x_in / AUDIO_LEVEL;
 
@@ -117,15 +118,15 @@ pub fn run<S: Shaper>(
 ) {
     for ch in 0..channels {
         let x = input.get_value(ch);
-        let d = drive.value_or(ch, 0.0);
-        let y = channel_state[ch].process(x, d, mode, state.dc_coeff, state.fade_inc, sample_rate);
+        let y = channel_state[ch].process(
+            x,
+            drive.value_or(ch, 0.0),
+            drive.glide_mark(ch),
+            mode,
+            state.dc_coeff,
+            state.fade_inc,
+            sample_rate,
+        );
         out.set(ch, y);
-    }
-}
-
-/// Arms every channel's drive glide; called from each module's `on_patch_update`.
-pub fn on_patch_update<S: Shaper>(channel_state: &mut [ShapeChannel<S>]) {
-    for cs in channel_state.iter_mut() {
-        cs.drive.arm();
     }
 }

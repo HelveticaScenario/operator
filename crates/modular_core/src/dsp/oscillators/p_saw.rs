@@ -50,7 +50,7 @@ struct ChannelState {
 /// - **5** — Ramp (instant rise, all fall)
 ///
 /// Output range is **±5V**.
-#[module(name = "$pSaw", patch_update, args(phase))]
+#[module(name = "$pSaw", args(phase))]
 pub struct PSawOscillator {
     outputs: PSawOscillatorOutputs,
     channel_state: Box<[ChannelState]>,
@@ -65,7 +65,9 @@ impl PSawOscillator {
             let state = &mut self.channel_state[ch];
 
             let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
-            state.shape.update(shape_val, sample_rate);
+            state
+                .shape
+                .update(shape_val, self.params.shape.glide_mark(ch), sample_rate);
 
             let phase = wrap(0.0..1.0, self.params.phase.get_value(ch)) as f64;
 
@@ -132,14 +134,6 @@ fn naive_triangle(phase: f64, s: f64) -> f64 {
         2.0 * phase / s - 1.0
     } else {
         1.0 - 2.0 * (phase - s) / (1.0 - s)
-    }
-}
-
-impl crate::types::PatchUpdateHandler for PSawOscillator {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.shape.arm();
-        }
     }
 }
 

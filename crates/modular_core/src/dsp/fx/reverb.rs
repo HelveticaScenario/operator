@@ -230,13 +230,7 @@ struct ReverbState {
 /// $unstable.reverb($saw('c3'), { decay: 3, damping: 1.5, size: 2 }).out()
 /// $unstable.reverb($saw('c3'), { decay: 4, width: 4, modulation: 3 }).out()
 /// ```
-#[module(
-    name = "$unstable.reverb",
-    channels = 2,
-    patch_update,
-    has_init,
-    args(input)
-)]
+#[module(name = "$unstable.reverb", channels = 2, has_init, args(input))]
 pub struct Reverb {
     outputs: ReverbOutputs,
     state: ReverbState,
@@ -299,7 +293,9 @@ impl Reverb {
             MAX_SIZE,
         )
         .clamp(MIN_SIZE, MAX_SIZE);
-        self.state.smoothed_size.update(size_raw, sample_rate);
+        self.state
+            .smoothed_size
+            .update(size_raw, self.params.size.glide_mark(), sample_rate);
         let size = *self.state.smoothed_size;
 
         let predelay_secs = self
@@ -307,9 +303,11 @@ impl Reverb {
             .predelay
             .value_or(0.0)
             .clamp(0.0, MAX_PREDELAY_SECS);
-        self.state
-            .smoothed_predelay
-            .update(predelay_secs * self.state.sample_rate, sample_rate);
+        self.state.smoothed_predelay.update(
+            predelay_secs * self.state.sample_rate,
+            self.params.predelay.glide_mark(),
+            sample_rate,
+        );
         let predelay_samples = *self.state.smoothed_predelay;
 
         // Decay maps to a target T60, then to the per-sample-length gain
@@ -319,13 +317,17 @@ impl Reverb {
             .exp()
             .clamp(MIN_T60, MAX_T60);
         let decay_k = -LN_1000 / (self.state.sample_rate * t60);
-        self.state.smoothed_decay_k.update(decay_k, sample_rate);
+        self.state
+            .smoothed_decay_k
+            .update(decay_k, self.params.decay.glide_mark(), sample_rate);
         let decay_k = *self.state.smoothed_decay_k;
 
         // Damping: more voltage → lower coefficient → darker tail.
         let damp_coeff =
             map_range(self.params.damping.value_or(0.0), -5.0, 5.0, 1.0, 0.08).clamp(0.08, 1.0);
-        self.state.smoothed_damp.update(damp_coeff, sample_rate);
+        self.state
+            .smoothed_damp
+            .update(damp_coeff, self.params.damping.glide_mark(), sample_rate);
         let damp_coeff = *self.state.smoothed_damp;
 
         // Width sets the cross-coupling rotation between the two sub-networks:
@@ -339,7 +341,9 @@ impl Reverb {
             WIDE_ANGLE,
         )
         .clamp(WIDE_ANGLE, NARROW_ANGLE);
-        self.state.smoothed_width.update(angle_raw, sample_rate);
+        self.state
+            .smoothed_width
+            .update(angle_raw, self.params.width.glide_mark(), sample_rate);
         let (cross_sin, cross_cos) = (*self.state.smoothed_width).sin_cos();
 
         let mod_depth = map_range(
@@ -446,16 +450,6 @@ impl Reverb {
 
         self.outputs.sample.set(0, out_l);
         self.outputs.sample.set(1, out_r);
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Reverb {
-    fn on_patch_update(&mut self) {
-        self.state.smoothed_size.arm();
-        self.state.smoothed_predelay.arm();
-        self.state.smoothed_decay_k.arm();
-        self.state.smoothed_damp.arm();
-        self.state.smoothed_width.arm();
     }
 }
 

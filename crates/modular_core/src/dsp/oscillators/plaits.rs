@@ -275,7 +275,7 @@ impl Default for PlaitsChannelState {
 /// - Analog bass drum
 /// - Analog snare drum
 /// - Analog hi-hat
-#[module(name = "$macro", patch_update, args(freq, engine), has_init)]
+#[module(name = "$macro", args(freq, engine), has_init)]
 pub struct Plaits {
     outputs: PlaitsOutputs,
     params: PlaitsParams,
@@ -352,6 +352,7 @@ impl Plaits {
 
             state.mix.update(
                 self.params.mix.value_or(ch, 0.0).clamp(0.0, 5.0),
+                self.params.mix.glide_mark(ch),
                 sample_rate,
             );
 
@@ -372,34 +373,45 @@ impl Plaits {
 
             state.harmonics.update(
                 self.params.harmonics.value_or(ch, 0.0).clamp(-5.0, 5.0),
+                self.params.harmonics.glide_mark(ch),
                 block_rate,
             );
             state.timbre.update(
                 self.params.timbre.value_or(ch, 0.0).clamp(-5.0, 5.0),
+                self.params.timbre.glide_mark(ch),
                 block_rate,
             );
             state.morph.update(
                 self.params.morph.value_or(ch, 0.0).clamp(-5.0, 5.0),
+                self.params.morph.glide_mark(ch),
                 block_rate,
             );
             state.lpg_color.update(
                 self.params.lpg_color.value_or(ch, 2.5).clamp(0.0, 5.0),
+                self.params.lpg_color.glide_mark(ch),
                 block_rate,
             );
             state.lpg_decay.update(
                 self.params.lpg_decay.value_or(ch, 2.5).clamp(0.0, 5.0),
+                self.params.lpg_decay.glide_mark(ch),
                 block_rate,
             );
 
-            state
-                .timbre_amt
-                .update(self.params.timbre_amt.value_or(ch, 0.0), block_rate);
-            state
-                .fm_amt
-                .update(self.params.fm_amt.value_or(ch, 0.0), block_rate);
-            state
-                .morph_amt
-                .update(self.params.morph_amt.value_or(ch, 0.0), block_rate);
+            state.timbre_amt.update(
+                self.params.timbre_amt.value_or(ch, 0.0),
+                self.params.timbre_amt.glide_mark(ch),
+                block_rate,
+            );
+            state.fm_amt.update(
+                self.params.fm_amt.value_or(ch, 0.0),
+                self.params.fm_amt.glide_mark(ch),
+                block_rate,
+            );
+            state.morph_amt.update(
+                self.params.morph_amt.value_or(ch, 0.0),
+                self.params.morph_amt.glide_mark(ch),
+                block_rate,
+            );
 
             // Get engine index from enum
             let engine_index = self.params.engine.to_index();
@@ -467,27 +479,12 @@ impl Plaits {
     }
 }
 
-impl crate::types::PatchUpdateHandler for Plaits {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.harmonics.arm();
-            cs.timbre.arm();
-            cs.morph.arm();
-            cs.lpg_color.arm();
-            cs.lpg_decay.arm();
-            cs.timbre_amt.arm();
-            cs.fm_amt.arm();
-            cs.morph_amt.arm();
-            cs.mix.arm();
-        }
-    }
-}
-
 message_handlers!(impl Plaits {});
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{Connect, SameIds, Signal};
 
     /// A patch-edit glide follows the firmware's `ONE_POLE(value, target, c)`,
     /// run once per block at 48 kHz, one block behind: the glide holds the
@@ -496,14 +493,16 @@ mod tests {
     fn knob_glides_match_firmware_pot_filters() {
         let block_rate = 48_000.0 / BLOCK_SIZE as f32;
         for (tau, c) in [(KNOB_TAU_FAST, 0.01f32), (KNOB_TAU_SLOW, 0.005)] {
+            let before = PolySignal::mono(Signal::Volts(-5.0));
+            let mut after = PolySignal::mono(Signal::Volts(5.0));
+            after.mark_glides(Some(&before), 1, &SameIds);
             let mut glide = SwapGlide::with_time_constant(tau);
-            glide.update(-5.0, block_rate);
-            glide.arm();
-            glide.update(5.0, block_rate);
+            glide.update(-5.0, before.glide_mark(0), block_rate);
+            glide.update(5.0, after.glide_mark(0), block_rate);
             let mut pot = -5.0f32;
             for block in 0..4_000 {
                 pot += c * (5.0 - pot);
-                glide.update(5.0, block_rate);
+                glide.update(5.0, after.glide_mark(0), block_rate);
                 assert!(
                     (*glide - pot).abs() < 1e-3,
                     "c = {c}: block {block} glide {} vs firmware {pot}",

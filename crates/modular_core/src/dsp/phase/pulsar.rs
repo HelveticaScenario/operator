@@ -55,7 +55,7 @@ struct ChannelState {
 /// // Compress the phase with pulsar and convert to audio
 /// $pSine($pulsar($ramp('c3'), 3)).out()
 /// ```
-#[module(name = "$pulsar", patch_update, args(input, amount))]
+#[module(name = "$pulsar", args(input, amount))]
 pub struct Pulsar {
     outputs: PulsarOutputs,
     channel_state: Box<[ChannelState]>,
@@ -73,7 +73,9 @@ impl Pulsar {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.value_or(ch, 0.0);
 
-            state.amount.update(amount_raw, sample_rate);
+            state
+                .amount
+                .update(amount_raw, self.params.amount.glide_mark(ch), sample_rate);
             let amount = *state.amount;
 
             // Map amount from [0, 5] to multiplier [1, 64]
@@ -101,14 +103,6 @@ impl Pulsar {
 
             // Output the distorted phase
             self.outputs.sample.set(ch, compressed_phase);
-        }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Pulsar {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.amount.arm();
         }
     }
 }

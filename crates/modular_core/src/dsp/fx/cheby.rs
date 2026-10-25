@@ -70,7 +70,7 @@ struct ChebyState {
 /// At low amounts the signal passes through cleanly; turning it up
 /// progressively emphasizes higher harmonics (2nd, 3rd, … up to 16th),
 /// thickening and brightening the tone.
-#[module(name = "$cheby", patch_update, args(input, amount), has_init)]
+#[module(name = "$cheby", args(input, amount), has_init)]
 pub struct Cheby {
     outputs: ChebyOutputs,
     state: ChebyState,
@@ -101,7 +101,9 @@ impl Cheby {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.get_value(ch);
 
-            state.amount.update(amount_raw, sample_rate);
+            state
+                .amount
+                .update(amount_raw, self.params.amount.glide_mark(ch), sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1] for table lookup
@@ -136,14 +138,6 @@ impl Cheby {
 
             // Scale back to output range
             self.outputs.sample.set(ch, out * 5.0 * fade);
-        }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Cheby {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.amount.arm();
         }
     }
 }

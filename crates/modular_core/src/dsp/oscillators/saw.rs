@@ -100,7 +100,7 @@ struct ChannelState {
 /// ```js
 /// $saw('a3', { shape: 2.5 }).out() // triangle wave
 /// ```
-#[module(name = "$saw", patch_update, args(freq))]
+#[module(name = "$saw", args(freq))]
 pub struct SawOscillator {
     outputs: SawOscillatorOutputs,
     channel_state: Box<[ChannelState]>,
@@ -120,7 +120,9 @@ impl SawOscillator {
             let state = &mut self.channel_state[ch];
 
             let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
-            state.shape.update(shape_val, sample_rate);
+            state
+                .shape
+                .update(shape_val, self.params.shape.glide_mark(ch), sample_rate);
 
             let pitch = self.params.freq.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);
@@ -257,14 +259,6 @@ fn naive_triangle(phase: f64, s: f64) -> f64 {
         2.0 * phase / s - 1.0
     } else {
         1.0 - 2.0 * (phase - s) / (1.0 - s)
-    }
-}
-
-impl crate::types::PatchUpdateHandler for SawOscillator {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.shape.arm();
-        }
     }
 }
 

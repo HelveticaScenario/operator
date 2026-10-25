@@ -803,6 +803,10 @@ fn impl_module_macro_attr(
             /// Allocated once at construction; never resized on the audio
             /// thread.
             block_outputs: std::cell::UnsafeCell<#block_outputs_ty>,
+            /// Counts the patch swaps this module's lineage has gone through;
+            /// stamped into the params so a `SwapGlide` can tell a new swap
+            /// from the one it already handled.
+            glide_generation: std::cell::Cell<u64>,
             /// Block size pinned at construction. Mirrors the BlockPort length.
             block_size: usize,
             /// Block vs. Sample mode, assigned by graph_analysis cycle
@@ -958,7 +962,11 @@ fn impl_module_macro_attr(
                 crate::types::OutputStruct::get_buffer_output(&module.outputs, port)
             }
 
-            fn transfer_state_from(&self, old: &dyn crate::types::Sampleable) {
+            fn transfer_state_from(
+                &self,
+                old: &dyn crate::types::Sampleable,
+                ids: &dyn crate::types::PreviousIds,
+            ) {
                 if let Some(old_typed) = old.as_any().downcast_ref::<Self>() {
                     // Guard against self-aliasing: if old and new are the same box,
                     // creating two &mut refs to the same UnsafeCell contents is UB.
@@ -972,6 +980,14 @@ fn impl_module_macro_attr(
                     // between modules of the same count.
                     let same_channels = new_inner._channel_count == old_inner._channel_count;
                     #transfer_state_body
+                    let generation = old_typed.glide_generation.get().wrapping_add(1);
+                    self.glide_generation.set(generation);
+                    crate::types::Connect::mark_glides(
+                        &mut new_inner.params,
+                        Some(&old_inner.params),
+                        generation,
+                        ids,
+                    );
                     // Transfer buffer data (no-op for modules without buffer outputs)
                     crate::types::OutputStruct::transfer_buffers_from(
                         &mut new_inner.outputs,
@@ -1027,6 +1043,7 @@ fn impl_module_macro_attr(
                 module: std::cell::UnsafeCell::new(inner),
                 index: std::cell::Cell::new(0),
                 block_outputs: std::cell::UnsafeCell::new(<#block_outputs_ty>::new(_block_size, deserialized.channel_count)),
+                glide_generation: std::cell::Cell::new(0),
                 block_size: _block_size,
                 mode: _mode,
                 computing: std::cell::Cell::new(false),

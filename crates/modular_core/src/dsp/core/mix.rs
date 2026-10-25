@@ -83,19 +83,11 @@ pub fn mix_derive_channel_count(params: &MixParams) -> usize {
 /// Use this when you want to blend several multichannel modulation/audio sources.
 /// It mixes channel `n` across all inputs into output channel `n`, rather than
 /// folding all channels into a single mono channel.
-#[module(name = "$mix", channels_derive = mix_derive_channel_count, patch_update, args(inputs))]
+#[module(name = "$mix", channels_derive = mix_derive_channel_count, args(inputs))]
 pub struct Mix {
     outputs: MixOutputs,
     params: MixParams,
     channel_state: Box<[SwapGlide]>,
-}
-
-impl crate::types::PatchUpdateHandler for Mix {
-    fn on_patch_update(&mut self) {
-        for gain in self.channel_state.iter_mut() {
-            gain.arm();
-        }
-    }
 }
 
 message_handlers!(impl Mix {});
@@ -232,7 +224,7 @@ impl Mix {
             let amp_val = gain.value_or(i, 5.0);
             let normalized = (amp_val.abs() * (1.0 / 5.0)).max(0.0);
             let curved = amp_val.signum() * (normalized * normalized * normalized);
-            self.channel_state[i].update(curved, sample_rate);
+            self.channel_state[i].update(curved, gain.glide_mark(i), sample_rate);
             let gain_value = *self.channel_state[i];
             self.outputs.sample.set(i, pre_gain_value * gain_value);
         }

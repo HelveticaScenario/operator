@@ -213,11 +213,11 @@ impl crate::types::PatchUpdateHandler for ParametricEq {
         self.state.active = Some(now);
 
         for rt in self.state.mono.iter_mut() {
-            rt.arm();
+            rt.invalidate();
         }
         for cs in self.channel_state.iter_mut() {
             for rt in cs.per.iter_mut() {
-                rt.arm();
+                rt.invalidate();
             }
         }
     }

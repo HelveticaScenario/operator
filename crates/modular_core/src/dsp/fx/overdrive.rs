@@ -88,7 +88,7 @@ const TONE_RANGE: f32 = 3.0;
 /// or asymmetric shaper, with a tone control applying pre-emphasis before
 /// distortion and matching de-emphasis after. Internally oversampled 2× to
 /// reduce aliasing.
-#[module(name = "$overdrive", patch_update, args(input, drive), has_init)]
+#[module(name = "$overdrive", args(input, drive), has_init)]
 pub struct Overdrive {
     outputs: OverdriveOutputs,
     state: OverdriveState,
@@ -131,8 +131,12 @@ impl Overdrive {
             let drive_raw = self.params.drive.get_value(ch);
             let tone_raw = self.params.tone.value_or(ch, 0.0);
 
-            state.drive.update(drive_raw, sample_rate);
-            state.tone.update(tone_raw, sample_rate);
+            state
+                .drive
+                .update(drive_raw, self.params.drive.glide_mark(ch), sample_rate);
+            state
+                .tone
+                .update(tone_raw, self.params.tone.glide_mark(ch), sample_rate);
             let drive = (*state.drive).clamp(0.0, 5.0);
             let tone = (*state.tone).clamp(-5.0, 5.0);
 
@@ -204,15 +208,6 @@ fn process_one(
     let lp_out = tilt_post.process(shaped);
     let hp_out = shaped - lp_out;
     lp_out + hp_out * post_high_gain
-}
-
-impl crate::types::PatchUpdateHandler for Overdrive {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.drive.arm();
-            cs.tone.arm();
-        }
-    }
 }
 
 message_handlers!(impl Overdrive {});

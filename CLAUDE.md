@@ -136,6 +136,8 @@ Use it to verify the "no heap allocation on the audio thread" rule above. Notes:
 3. Rebuild N-API (`yarn build-native`) to refresh `crates/modular/index.d.ts`.
 4. Adjust DSL factories in `src/main/dsl/factories.ts` if needed.
 
+A param whose edits would click (a gain, a cutoff, a mix amount) glides across patch updates: keep a `SwapGlide` in `state`/`channel_state` and feed it with `glide.update(value, param.glide_mark(ch), sample_rate)`. It glides only when that param's source changed in the swap, so live modulation and unchanged cables pass through untouched; no hook is needed. The per-sample check still costs a few operations per channel, which shows on modules that do little else (`$signal`, `$curve`): give those a block path that returns `None` while `param.glides_pending(glides)` and otherwise reads the param raw and calls `param.settle_glides`, and use `glide.follow` in `update` so both paths agree.
+
 ### Reserved Output Names
 
 When adding methods to `ModuleOutput`, `ModuleOutputWithRange`, `BaseCollection`, `Collection`, or `CollectionWithRange`, add the method name to `RESERVED_OUTPUT_NAMES` in `crates/reserved_output_names.rs`. This is the single source of truth shared by the Rust proc-macro and TypeScript DSL via NAPI.

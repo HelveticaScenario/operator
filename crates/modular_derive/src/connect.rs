@@ -82,6 +82,7 @@ fn emit_field_named_struct(
     connect_stmts: &mut TokenStream2,
     collect_cables_stmts: &mut TokenStream2,
     inject_index_stmts: &mut TokenStream2,
+    mark_glides_stmts: &mut TokenStream2,
 ) -> Result<(), syn::Error> {
     let Some(field_ident) = &field.ident else {
         return Ok(());
@@ -167,17 +168,35 @@ fn emit_field_named_struct(
     inject_index_stmts.extend(quote_spanned! {field.span()=>
         crate::types::Connect::inject_index_ptr(&mut self.#field_ident, ptr);
     });
+    mark_glides_stmts.extend(quote_spanned! {field.span()=>
+        crate::types::Connect::mark_glides(
+            &mut self.#field_ident,
+            old.map(|o| &o.#field_ident),
+            generation,
+            ids,
+        );
+    });
 
     Ok(())
 }
 
 /// For one enum variant, build (defaults-arm, connect-arm, collect-arm,
-/// inject-arm) tokens. Bindings are named `field_<ident>` for named fields
-/// and `field_<n>` for unnamed.
+/// inject-arm, mark-glides-arm) tokens. Bindings are named `field_<ident>`
+/// for named fields and `field_<n>` for unnamed; the mark-glides arm binds the
+/// same variant of `old` as `old_<binding>`.
 fn emit_variant_arms(
     enum_name: &Ident,
     variant: &syn::Variant,
-) -> Result<(TokenStream2, TokenStream2, TokenStream2, TokenStream2), syn::Error> {
+) -> Result<
+    (
+        TokenStream2,
+        TokenStream2,
+        TokenStream2,
+        TokenStream2,
+        TokenStream2,
+    ),
+    syn::Error,
+> {
     // Reject `#[default_connection]` on enum variants — it's struct-only.
     for field in variant.fields.iter() {
         for attr in &field.attrs {
@@ -195,6 +214,7 @@ fn emit_variant_arms(
         Fields::Unit => {
             let pat = quote! { #enum_name::#var_name };
             Ok((
+                quote! { #pat => {} },
                 quote! { #pat => {} },
                 quote! { #pat => {} },
                 quote! { #pat => {} },
@@ -224,11 +244,18 @@ fn emit_variant_arms(
                 });
             }
             let pat = quote! { #enum_name::#var_name { #(#binds),* } };
+            let old_binds: Vec<Ident> = binds
+                .iter()
+                .map(|b| Ident::new(&format!("old_{}", b), Span::call_site()))
+                .collect();
+            let old_pat = quote! { #enum_name::#var_name { #(#binds: #old_binds),* } };
+            let mark_arm = mark_glides_arm(&pat, &old_pat, &binds, &old_binds);
             Ok((
                 quote! { #pat => { #defaults_calls } },
                 quote! { #pat => { #connect_calls } },
                 quote! { #pat => { #collect_calls } },
                 quote! { #pat => { #inject_calls } },
+                mark_arm,
             ))
         }
         Fields::Unnamed(fields) => {
@@ -254,12 +281,38 @@ fn emit_variant_arms(
                 });
             }
             let pat = quote! { #enum_name::#var_name(#(#binds),*) };
+            let old_binds: Vec<Ident> = binds
+                .iter()
+                .map(|b| Ident::new(&format!("old_{}", b), Span::call_site()))
+                .collect();
+            let old_pat = quote! { #enum_name::#var_name(#(#old_binds),*) };
+            let mark_arm = mark_glides_arm(&pat, &old_pat, &binds, &old_binds);
             Ok((
                 quote! { #pat => { #defaults_calls } },
                 quote! { #pat => { #connect_calls } },
                 quote! { #pat => { #collect_calls } },
                 quote! { #pat => { #inject_calls } },
+                mark_arm,
             ))
+        }
+    }
+}
+
+/// A variant's `mark_glides` arm: its fields pair with the same variant's
+/// fields in `old`, and with nothing when `old` is another variant.
+fn mark_glides_arm(
+    pat: &TokenStream2,
+    old_pat: &TokenStream2,
+    binds: &[Ident],
+    old_binds: &[Ident],
+) -> TokenStream2 {
+    quote! {
+        #pat => {
+            if let Some(#old_pat) = old {
+                #(crate::types::Connect::mark_glides(#binds, Some(#old_binds), generation, ids);)*
+            } else {
+                #(crate::types::Connect::mark_glides(#binds, None, generation, ids);)*
+            }
         }
     }
 }
@@ -267,81 +320,93 @@ fn emit_variant_arms(
 pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
     let name = &ast.ident;
 
-    let (apply_defaults_body, connect_body, collect_cables_body, inject_index_body) =
-        match &ast.data {
-            Data::Struct(data) => match &data.fields {
-                Fields::Named(fields) => {
-                    let mut default_stmts = TokenStream2::new();
-                    let mut apply_defaults_stmts = TokenStream2::new();
-                    let mut connect_stmts = TokenStream2::new();
-                    let mut collect_cables_stmts = TokenStream2::new();
-                    let mut inject_index_stmts = TokenStream2::new();
+    let (
+        apply_defaults_body,
+        connect_body,
+        collect_cables_body,
+        inject_index_body,
+        mark_glides_body,
+    ) = match &ast.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(fields) => {
+                let mut default_stmts = TokenStream2::new();
+                let mut apply_defaults_stmts = TokenStream2::new();
+                let mut connect_stmts = TokenStream2::new();
+                let mut collect_cables_stmts = TokenStream2::new();
+                let mut inject_index_stmts = TokenStream2::new();
+                let mut mark_glides_stmts = TokenStream2::new();
 
-                    for field in fields.named.iter() {
-                        if let Err(e) = emit_field_named_struct(
-                            field,
-                            &mut default_stmts,
-                            &mut apply_defaults_stmts,
-                            &mut connect_stmts,
-                            &mut collect_cables_stmts,
-                            &mut inject_index_stmts,
-                        ) {
-                            return e.to_compile_error().into();
-                        }
-                    }
-
-                    // Own-field `#[default_connection]` fills run before the
-                    // per-field recursion into nested `Connect` values.
-                    default_stmts.extend(apply_defaults_stmts);
-                    (
-                        default_stmts,
-                        connect_stmts,
-                        collect_cables_stmts,
-                        inject_index_stmts,
-                    )
-                }
-                Fields::Unnamed(_) | Fields::Unit => {
-                    return syn::Error::new(
-                        ast.span(),
-                        "#[derive(Connect)] on a struct requires named fields",
-                    )
-                    .to_compile_error()
-                    .into();
-                }
-            },
-            Data::Enum(data) => {
-                let mut defaults_arms = TokenStream2::new();
-                let mut connect_arms = TokenStream2::new();
-                let mut collect_arms = TokenStream2::new();
-                let mut inject_arms = TokenStream2::new();
-                for variant in data.variants.iter() {
-                    match emit_variant_arms(name, variant) {
-                        Ok((d_arm, c_arm, cc_arm, ii_arm)) => {
-                            defaults_arms.extend(d_arm);
-                            defaults_arms.extend(quote! { , });
-                            connect_arms.extend(c_arm);
-                            connect_arms.extend(quote! { , });
-                            collect_arms.extend(cc_arm);
-                            collect_arms.extend(quote! { , });
-                            inject_arms.extend(ii_arm);
-                            inject_arms.extend(quote! { , });
-                        }
-                        Err(e) => return e.to_compile_error().into(),
+                for field in fields.named.iter() {
+                    if let Err(e) = emit_field_named_struct(
+                        field,
+                        &mut default_stmts,
+                        &mut apply_defaults_stmts,
+                        &mut connect_stmts,
+                        &mut collect_cables_stmts,
+                        &mut inject_index_stmts,
+                        &mut mark_glides_stmts,
+                    ) {
+                        return e.to_compile_error().into();
                     }
                 }
+
+                // Own-field `#[default_connection]` fills run before the
+                // per-field recursion into nested `Connect` values.
+                default_stmts.extend(apply_defaults_stmts);
                 (
-                    quote! { match self { #defaults_arms } },
-                    quote! { match self { #connect_arms } },
-                    quote! { match self { #collect_arms } },
-                    quote! { match self { #inject_arms } },
+                    default_stmts,
+                    connect_stmts,
+                    collect_cables_stmts,
+                    inject_index_stmts,
+                    mark_glides_stmts,
                 )
             }
-            Data::Union(_) => {
-                return syn::Error::new(ast.span(), "#[derive(Connect)] does not support unions")
-                    .to_compile_error()
-                    .into();
+            Fields::Unnamed(_) | Fields::Unit => {
+                return syn::Error::new(
+                    ast.span(),
+                    "#[derive(Connect)] on a struct requires named fields",
+                )
+                .to_compile_error()
+                .into();
             }
-        };
+        },
+        Data::Enum(data) => {
+            let mut defaults_arms = TokenStream2::new();
+            let mut connect_arms = TokenStream2::new();
+            let mut collect_arms = TokenStream2::new();
+            let mut inject_arms = TokenStream2::new();
+            let mut mark_arms = TokenStream2::new();
+            for variant in data.variants.iter() {
+                match emit_variant_arms(name, variant) {
+                    Ok((d_arm, c_arm, cc_arm, ii_arm, m_arm)) => {
+                        defaults_arms.extend(d_arm);
+                        defaults_arms.extend(quote! { , });
+                        connect_arms.extend(c_arm);
+                        connect_arms.extend(quote! { , });
+                        collect_arms.extend(cc_arm);
+                        collect_arms.extend(quote! { , });
+                        inject_arms.extend(ii_arm);
+                        inject_arms.extend(quote! { , });
+                        mark_arms.extend(m_arm);
+                        mark_arms.extend(quote! { , });
+                    }
+                    Err(e) => return e.to_compile_error().into(),
+                }
+            }
+            (
+                quote! { match self { #defaults_arms } },
+                quote! { match self { #connect_arms } },
+                quote! { match self { #collect_arms } },
+                quote! { match self { #inject_arms } },
+                quote! { match self { #mark_arms } },
+            )
+        }
+        Data::Union(_) => {
+            return syn::Error::new(ast.span(), "#[derive(Connect)] does not support unions")
+                .to_compile_error()
+                .into();
+        }
+    };
 
     let generated = quote! {
         impl crate::types::Connect for #name {
@@ -356,6 +421,15 @@ pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
             }
             fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
                 #inject_index_body
+            }
+            #[allow(unused_variables)]
+            fn mark_glides(
+                &mut self,
+                old: Option<&Self>,
+                generation: u64,
+                ids: &dyn crate::types::PreviousIds,
+            ) {
+                #mark_glides_body
             }
         }
     };

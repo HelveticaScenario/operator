@@ -57,7 +57,7 @@ struct ChannelState {
 /// // Apply feedback distortion to a ramp phase and convert to audio
 /// $pSine($feedback($ramp('c3'), 3)).out()
 /// ```
-#[module(name = "$feedback", patch_update, args(input, amount))]
+#[module(name = "$feedback", args(input, amount))]
 pub struct Feedback {
     outputs: FeedbackOutputs,
     channel_state: Box<[ChannelState]>,
@@ -75,7 +75,9 @@ impl Feedback {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.value_or(ch, 0.0);
 
-            state.amount.update(amount_raw, sample_rate);
+            state
+                .amount
+                .update(amount_raw, self.params.amount.glide_mark(ch), sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1]
@@ -118,14 +120,6 @@ impl Feedback {
 
             // Output the distorted phase
             self.outputs.sample.set(ch, phase);
-        }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Feedback {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.amount.arm();
         }
     }
 }

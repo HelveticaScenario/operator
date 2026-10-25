@@ -123,12 +123,16 @@ impl QuantNoise {
             let state = &mut self.channel_state[ch];
 
             let input = self.params.input.get_value(ch);
-            state
-                .amount
-                .update(self.params.amount.get_value(ch), sample_rate);
-            state
-                .step
-                .update(self.params.step.value_or(ch, 0.25), sample_rate);
+            state.amount.update(
+                self.params.amount.get_value(ch),
+                self.params.amount.glide_mark(ch),
+                sample_rate,
+            );
+            state.step.update(
+                self.params.step.value_or(ch, 0.25),
+                self.params.step.glide_mark(ch),
+                sample_rate,
+            );
             let amount = (*state.amount).max(0.0);
             let step = (*state.step).max(MIN_STEP);
             let dither = self.params.dither.value_or(ch, 5.0).clamp(0.0, 5.0) / 5.0;
@@ -161,10 +165,6 @@ impl crate::types::PatchUpdateHandler for QuantNoise {
     fn on_patch_update(&mut self) {
         if !self.state.seeded {
             self.seed();
-        }
-        for cs in self.channel_state.iter_mut() {
-            cs.amount.arm();
-            cs.step.arm();
         }
     }
 }

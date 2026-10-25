@@ -1,7 +1,7 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal};
 use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -52,11 +52,7 @@ struct RemapOutputs {
 /// // convert a -5–5 V signal to 0–1 V
 /// $remap($sine('1hz'), 0, 1, -5, 5)
 /// ```
-#[module(
-    name = "$remap",
-    patch_update,
-    args(input, outMin, outMax, inMin, inMax)
-)]
+#[module(name = "$remap", args(input, outMin, outMax, inMin, inMax))]
 pub struct Remap {
     outputs: RemapOutputs,
     channel_state: Box<[ChannelState]>,
@@ -71,18 +67,26 @@ impl Remap {
             let input_val = self.params.input.get_value(i);
             let state = &mut self.channel_state[i];
 
-            state
-                .in_min
-                .update(self.params.in_min.get_value(i), sample_rate);
-            state
-                .in_max
-                .update(self.params.in_max.get_value(i), sample_rate);
-            state
-                .out_min
-                .update(self.params.out_min.get_value(i), sample_rate);
-            state
-                .out_max
-                .update(self.params.out_max.get_value(i), sample_rate);
+            state.in_min.update(
+                self.params.in_min.get_value(i),
+                self.params.in_min.glide_mark(i),
+                sample_rate,
+            );
+            state.in_max.update(
+                self.params.in_max.get_value(i),
+                self.params.in_max.glide_mark(i),
+                sample_rate,
+            );
+            state.out_min.update(
+                self.params.out_min.get_value(i),
+                self.params.out_min.glide_mark(i),
+                sample_rate,
+            );
+            state.out_max.update(
+                self.params.out_max.get_value(i),
+                self.params.out_max.glide_mark(i),
+                sample_rate,
+            );
 
             // Apply remapping using map_range utility
             let output = crate::dsp::utils::map_range(
@@ -94,17 +98,6 @@ impl Remap {
             );
 
             self.outputs.sample.set(i, output);
-        }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Remap {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.in_min.arm();
-            cs.in_max.arm();
-            cs.out_min.arm();
-            cs.out_max.arm();
         }
     }
 }

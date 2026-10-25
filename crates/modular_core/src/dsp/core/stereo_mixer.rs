@@ -36,7 +36,7 @@ struct ChannelState {
 }
 
 /// Pan and spread a signal into stereo.
-#[module(name = "$stereoMix", channels = 2, patch_update, args(input), has_init)]
+#[module(name = "$stereoMix", channels = 2, args(input), has_init)]
 pub struct StereoMixer {
     outputs: StereoMixerOutputs,
     params: StereoMixerParams,
@@ -68,9 +68,11 @@ impl StereoMixer {
 
         // Width: 0 = no spread, 5 = full ±5V spread across voices. Defaults to
         // 0 (no spread) when no width signal is connected.
-        self.state
-            .width_buffer
-            .update(self.params.width.value_or(0.0).clamp(0.0, 5.0), sample_rate);
+        self.state.width_buffer.update(
+            self.params.width.value_or(0.0).clamp(0.0, 5.0),
+            self.params.width.glide_mark(),
+            sample_rate,
+        );
         let width = *self.state.width_buffer;
 
         let mut left_sum = 0.0f32;
@@ -80,7 +82,13 @@ impl StereoMixer {
             let input = self.params.input.get_value(ch);
 
             // Base pan from cycling PolySignal (-5 to +5 range, 0 = center)
-            let base_pan = self.params.pan.value_or_zero(ch).clamp(-5.0, 5.0);
+            let pan_glide = &mut self.channel_state[ch].pan;
+            pan_glide.update(
+                self.params.pan.value_or_zero(ch).clamp(-5.0, 5.0),
+                self.params.pan.glide_mark(ch),
+                sample_rate,
+            );
+            let base_pan = **pan_glide;
 
             // Calculate width spread offset:
             // Voices spread from -width to +width relative to base pan
@@ -93,10 +101,7 @@ impl StereoMixer {
             };
 
             // Final pan position, clamped to valid range
-            let final_pan = (base_pan + spread_offset).clamp(-5.0, 5.0);
-
-            self.channel_state[ch].pan.update(final_pan, sample_rate);
-            let pan = *self.channel_state[ch].pan;
+            let pan = (base_pan + spread_offset).clamp(-5.0, 5.0);
 
             // Convert -5..+5 to 0..1 (0 = full left, 1 = full right)
             let pan_norm = (pan + 5.0) / 10.0;
@@ -111,15 +116,6 @@ impl StereoMixer {
 
         self.outputs.sample.set(0, left_sum); // Left
         self.outputs.sample.set(1, right_sum); // Right
-    }
-}
-
-impl crate::types::PatchUpdateHandler for StereoMixer {
-    fn on_patch_update(&mut self) {
-        self.state.width_buffer.arm();
-        for cs in self.channel_state.iter_mut() {
-            cs.pan.arm();
-        }
     }
 }
 

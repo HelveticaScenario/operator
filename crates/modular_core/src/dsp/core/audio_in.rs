@@ -93,7 +93,7 @@ impl Sampleable for AudioIn {
         unsafe { (*self.block.get())[index][ch] }
     }
 
-    fn transfer_state_from(&self, old: &dyn Sampleable) {
+    fn transfer_state_from(&self, old: &dyn Sampleable, _ids: &dyn crate::types::PreviousIds) {
         let Some(old) = old.as_any().downcast_ref::<AudioIn>() else {
             return;
         };

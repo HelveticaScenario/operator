@@ -34,6 +34,7 @@ struct PPulseOscillatorOutputs {
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
     width: SwapGlide,
+    pwm: SwapGlide,
     prev_phase: f32,
 }
 
@@ -48,7 +49,7 @@ struct ChannelState {
 /// `pwm` is added to `width` for modulation.
 ///
 /// Output range is **±5V**.
-#[module(name = "$pPulse", patch_update, args(phase))]
+#[module(name = "$pPulse", args(phase))]
 pub struct PPulseOscillator {
     outputs: PPulseOscillatorOutputs,
     channel_state: Box<[ChannelState]>,
@@ -62,11 +63,17 @@ impl PPulseOscillator {
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
-            let base_width = self.params.width.value_or(ch, 2.5);
-            let pwm = self.params.pwm.value_or(ch, 0.0);
-            state
-                .width
-                .update((base_width + pwm).clamp(0.0, 5.0), sample_rate);
+            state.width.update(
+                self.params.width.value_or(ch, 2.5),
+                self.params.width.glide_mark(ch),
+                sample_rate,
+            );
+            state.pwm.update(
+                self.params.pwm.value_or(ch, 0.0),
+                self.params.pwm.glide_mark(ch),
+                sample_rate,
+            );
+            let width = (*state.width + *state.pwm).clamp(0.0, 5.0);
 
             let phase = wrap(0.0..1.0, self.params.phase.get_value(ch));
 
@@ -82,7 +89,7 @@ impl PPulseOscillator {
             state.prev_phase = phase;
 
             // Pulse width (0.0 to 1.0, 0.5 is square wave)
-            let pulse_width = (*state.width / 5.0).clamp(0.01, 0.99);
+            let pulse_width = (width / 5.0).clamp(0.01, 0.99);
 
             // Naive pulse wave
             let mut pulse = if phase < pulse_width { 1.0 } else { -1.0 };
@@ -121,14 +128,6 @@ fn poly_blep(phase: f32, phase_increment: f32) -> f32 {
         return t * t + t + t + 1.0;
     }
     0.0
-}
-
-impl crate::types::PatchUpdateHandler for PPulseOscillator {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.width.arm();
-        }
-    }
 }
 
 message_handlers!(impl PPulseOscillator {});

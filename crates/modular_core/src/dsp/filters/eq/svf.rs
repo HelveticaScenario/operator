@@ -63,9 +63,11 @@ impl SectionRuntime {
             sec.gain.value_or(0.0),
             sec.q.value_or(DEFAULT_Q),
         );
-        s.smooth_freq.update(target_f, sample_rate);
-        s.smooth_gain.update(target_g, sample_rate);
-        s.smooth_q.update(target_q, sample_rate);
+        s.smooth_freq
+            .update(target_f, sec.freq.glide_mark(), sample_rate);
+        s.smooth_gain
+            .update(target_g, sec.gain.glide_mark(), sample_rate);
+        s.smooth_q.update(target_q, sec.q.glide_mark(), sample_rate);
         let arrived = !s.smooth_freq.gliding() && !s.smooth_gain.gliding() && !s.smooth_q.gliding();
         if arrived
             && sec.freq.constant_value().is_some()
@@ -97,13 +99,9 @@ impl SectionRuntime {
         ]
     }
 
-    /// Arms the patch-update glides and forces the next refresh to recompute
-    /// coefficients.
-    pub(super) fn arm(&mut self) {
+    /// Forces the next refresh to run its glides and recompute coefficients.
+    pub(super) fn invalidate(&mut self) {
         self.settled = false;
-        self.smooth.smooth_freq.arm();
-        self.smooth.smooth_gain.arm();
-        self.smooth.smooth_q.arm();
         self.smooth.last_freq = f32::NAN;
         self.smooth.last_gain = f32::NAN;
         self.smooth.last_q = f32::NAN;

@@ -41,6 +41,13 @@ impl Connect for Arc<MathCompiled> {
     fn connect(&mut self, _patch: &crate::Patch) {}
     fn collect_cables(&self, _sink: &mut Vec<String>) {}
     fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
+    fn mark_glides(
+        &mut self,
+        _old: Option<&Self>,
+        _generation: u64,
+        _ids: &dyn crate::types::PreviousIds,
+    ) {
+    }
 }
 
 impl MathExpressionParam {

@@ -7,10 +7,11 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
+    dsp::filters::resonant_svf::{Response, cutoff_gain},
     dsp::filters::svf_core::{self, SvfCoeffs},
-    dsp::utils::{changed, sanitize, voct_to_hz},
+    dsp::utils::{changed, sanitize},
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::SwapGlide,
+    types::{GlideMark, SwapGlide},
 };
 
 // Default crossover frequencies in V/Oct
@@ -54,12 +55,11 @@ struct CrossoverOutputs {
 
 /// Butterworth (Q = 1/√2) lowpass and highpass at one crossover point.
 fn compute_coeffs(voct: f32, sample_rate: f32) -> (SvfCoeffs, SvfCoeffs) {
-    let freq = voct_to_hz(voct).min(sample_rate * 0.45).max(20.0);
-    let g = (std::f32::consts::PI * freq / sample_rate).tan();
+    let g = cutoff_gain(voct, sample_rate);
     let k = 1.0 / BUTTERWORTH_Q;
     (
-        SvfCoeffs::new(g, k, 0.0, 0.0, 1.0),
-        SvfCoeffs::new(g, k, 1.0, -k, -1.0),
+        Response::Lowpass.coeffs(g, k),
+        Response::Highpass.coeffs(g, k),
     )
 }
 
@@ -101,8 +101,8 @@ impl Default for CrossoverPoint {
 
 impl CrossoverPoint {
     #[inline]
-    fn refresh(&mut self, voct: f32, sample_rate: f32) {
-        self.glide.update(voct, sample_rate);
+    fn refresh(&mut self, voct: f32, mark: GlideMark, sample_rate: f32) {
+        self.glide.update(voct, mark, sample_rate);
         let v = *self.glide;
         if changed(v, self.last) {
             (self.lp, self.hp) = compute_coeffs(v, sample_rate);
@@ -150,7 +150,7 @@ struct ChannelState {
 /// let high = $comp(bands.high, { threshold: 2,   ratio: 6 })
 /// $mix([low, mid, high]).out()
 /// ```
-#[module(name = "$xover", patch_update, args(input))]
+#[module(name = "$xover", args(input))]
 pub struct Crossover {
     outputs: CrossoverOutputs,
     channel_state: Box<[ChannelState]>,
@@ -176,8 +176,16 @@ impl Crossover {
                 .mid_high_freq
                 .value_or(ch, DEFAULT_MID_HIGH_FREQ_VOCT);
 
-            state.low_mid.refresh(low_mid_voct, sample_rate);
-            state.mid_high.refresh(mid_high_voct, sample_rate);
+            state.low_mid.refresh(
+                low_mid_voct,
+                self.params.low_mid_freq.glide_mark(ch),
+                sample_rate,
+            );
+            state.mid_high.refresh(
+                mid_high_voct,
+                self.params.mid_high_freq.glide_mark(ch),
+                sample_rate,
+            );
 
             // ── Split into 3 bands using LR4 crossover ──────────────────
             let x = sanitize(input);
@@ -196,15 +204,6 @@ impl Crossover {
             self.outputs.low.set(ch, low_band);
             self.outputs.mid.set(ch, mid_band);
             self.outputs.high.set(ch, high_band);
-        }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Crossover {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.low_mid.glide.arm();
-            cs.mid_high.glide.arm();
         }
     }
 }

@@ -42,7 +42,7 @@ struct ChannelState {
 /// amount control. Low settings pass the signal cleanly; mid settings compress
 /// and square it off; high settings introduce stepped, ripple-like overtone
 /// patterns. Works best on simple waveforms like sines or triangles.
-#[module(name = "$segment", patch_update, args(input, amount))]
+#[module(name = "$segment", args(input, amount))]
 pub struct Segment {
     outputs: SegmentOutputs,
     channel_state: Box<[ChannelState]>,
@@ -60,7 +60,9 @@ impl Segment {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.get_value(ch);
 
-            state.amount.update(amount_raw, sample_rate);
+            state
+                .amount
+                .update(amount_raw, self.params.amount.glide_mark(ch), sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1] for table lookup
@@ -82,14 +84,6 @@ impl Segment {
 
             // Scale back to output range
             self.outputs.sample.set(ch, shaped * 5.0);
-        }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Segment {
-    fn on_patch_update(&mut self) {
-        for cs in self.channel_state.iter_mut() {
-            cs.amount.arm();
         }
     }
 }

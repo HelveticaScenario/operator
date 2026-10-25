@@ -14,6 +14,7 @@ use modular_core::profiling::{ModuleProfileAccum, ModuleProfileCollection};
 use modular_core::types::ClockMessages;
 use modular_core::types::Message;
 use modular_core::types::ScopeMode;
+use modular_core::types::{PreviousIds, SameIds};
 use napi::Result;
 use napi::bindgen_prelude::Float32Array;
 use napi_derive::napi;
@@ -92,7 +93,7 @@ impl ModuleStateMetaCache {
 
 use crate::commands::{
     AudioError, COMMAND_QUEUE_CAPACITY, ERROR_QUEUE_CAPACITY, GARBAGE_QUEUE_CAPACITY, GarbageItem,
-    GraphCommand, PatchUpdate, QueuedTrigger, TransportMeta,
+    GraphCommand, PatchUpdate, QueuedTrigger, TransferSourceIds, TransportMeta,
 };
 use crate::midi::MidiInputManager;
 use crate::recording::{RecordingFeed, RecordingSession};
@@ -1427,13 +1428,9 @@ impl AudioState {
                 .map(|spec| VuMeterState::new(spec, sample_rate))
                 .collect();
             let vu_collection = self.vu_collection.lock();
+            let previous_ids = TransferSourceIds(&update.transfer_sources);
             for meter in update.vu_next.iter_mut() {
-                let source_id = match update.transfer_sources.get(&meter.module_id) {
-                    Some(Some(old_id)) => Some(old_id.as_str()),
-                    Some(None) => None,
-                    None => Some(meter.module_id.as_str()),
-                };
-                if let Some(source_id) = source_id
+                if let Some(source_id) = previous_ids.previous(&meter.module_id)
                     && let Some(prev) = vu_collection
                         .iter()
                         .find(|p| p.module_id == source_id && p.port_name == meter.port_name)
@@ -1901,7 +1898,7 @@ impl AudioProcessor {
                     // so the existing entries already route to the new box.
                     if let Some((key, old_module)) = self.patch.sampleables.remove_entry(&module_id)
                     {
-                        new_module.transfer_state_from(old_module.as_ref());
+                        new_module.transfer_state_from(old_module.as_ref(), &SameIds);
                         self.patch.sampleables.insert(key, new_module);
                         self.try_push_garbage_item(GarbageItem::Module((module_id, old_module)));
                         // Reconnect all modules so the new module picks up its
@@ -2011,16 +2008,12 @@ impl AudioProcessor {
         // without ever touching the live patch's map, then swap.
 
         // Copy runtime state from the live (old) patch into each new module.
+        let previous_ids = TransferSourceIds(&update.transfer_sources);
         for (id, module) in update.new_patch.sampleables.iter() {
-            let source_id = match update.transfer_sources.get(id) {
-                Some(Some(old_id)) => Some(old_id.as_str()),
-                Some(None) => None,
-                None => Some(id.as_str()),
-            };
-            if let Some(old_id) = source_id
+            if let Some(old_id) = previous_ids.previous(id)
                 && let Some(old) = self.patch.sampleables.get(old_id)
             {
-                module.transfer_state_from(old.as_ref());
+                module.transfer_state_from(old.as_ref(), &previous_ids);
             }
         }
 
@@ -3349,7 +3342,11 @@ mod tests {
             &self.label
         }
         fn connect(&self, _patch: &modular_core::patch::Patch) {}
-        fn transfer_state_from(&self, old: &dyn modular_core::types::Sampleable) {
+        fn transfer_state_from(
+            &self,
+            old: &dyn modular_core::types::Sampleable,
+            _ids: &dyn modular_core::types::PreviousIds,
+        ) {
             if let Some(old) = old.as_any().downcast_ref::<MockModule>() {
                 self.state.set(old.state.get());
             }
@@ -3697,6 +3694,23 @@ mod tests {
             1.0,
             "osc-2 inherits the old osc-1's state"
         );
+    }
+
+    #[test]
+    fn transfer_source_ids_follow_renames() {
+        // Params compare their cables through this view, so a renamed
+        // upstream reads as the module it was before the swap.
+        let mut update = PatchUpdate::new(48000.0);
+        update.set_remaps(&[ModuleIdRemap {
+            from: "lfo-1".into(),
+            to: "lfo-2".into(),
+        }]);
+        update.transfer_sources.insert("gate-1".into(), None);
+        let ids = TransferSourceIds(&update.transfer_sources);
+        assert_eq!(ids.previous("lfo-2"), Some("lfo-1"));
+        assert_eq!(ids.previous("lfo-1"), None, "a vacated id starts fresh");
+        assert_eq!(ids.previous("gate-1"), None);
+        assert_eq!(ids.previous("vca-1"), Some("vca-1"));
     }
 
     #[test]
