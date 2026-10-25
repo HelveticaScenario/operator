@@ -53,7 +53,7 @@ fn render(params: NoiseParams, samples: usize) -> Vec<f32> {
 fn render_seeded(params: NoiseParams, samples: usize) -> Vec<f32> {
     let color = params.color;
     let mut n = make_noise(params);
-    n.channel_state[0].seed(0x5eed, 0, 0, color);
+    n.channel_state[0].seed(0x5eed, 0, LfsrStart::default(), color);
     render_from(n, samples)
 }
 
@@ -256,25 +256,47 @@ fn velvet_without_rate_fires_every_sample() {
     assert!(out.iter().all(|v| v.abs() == 5.0));
 }
 
-/// Render 64 samples of every channel and assert no two channels match.
-fn assert_channels_differ(n: &mut Noise) {
+/// Largest delay, in samples, at which [`assert_no_shifted_copies`] compares
+/// channels. One short-mode period, so it covers every rotation of a loop.
+const MAX_LAG: usize = 93;
+
+/// Assert that no LFSR channel is another channel delayed by up to
+/// [`MAX_LAG`] samples. Any 15 consecutive output bits are the whole register,
+/// so two channels sharing one 64-sample window are shifted copies.
+fn assert_no_shifted_copies(n: &mut Noise) {
+    const WINDOW: usize = 64;
     let channels = n.channel_count();
-    let mut series = vec![[0.0f32; 64]; channels];
-    for i in 0..64 {
+    let mut series = vec![Vec::new(); channels];
+    for _ in 0..WINDOW + 2 * MAX_LAG {
         n.update(SR);
-        for (ch, s) in series.iter_mut().enumerate() {
-            s[i] = n.outputs.sample.get(ch);
+        for (ch, bits) in series.iter_mut().enumerate() {
+            bits.push(n.outputs.sample.get(ch) > 0.0);
         }
     }
-    for a in 0..channels {
-        for b in (a + 1)..channels {
-            assert_ne!(
-                series[a], series[b],
-                "{:?}: channels {a} and {b} match",
-                n.params.color
-            );
+    let mut owner = std::collections::HashMap::new();
+    for (ch, bits) in series.iter().enumerate() {
+        for lag in 0..=2 * MAX_LAG {
+            let window = bits[lag..lag + WINDOW]
+                .iter()
+                .fold(0u64, |w, &bit| (w << 1) | u64::from(bit));
+            if let Some(other) = owner.insert(window, ch) {
+                assert_eq!(
+                    other, ch,
+                    "{:?}: channels {other} and {ch} are shifted copies",
+                    n.params.color
+                );
+            }
         }
     }
+}
+
+/// Restart every channel as a fresh module with LFSR offset `offset` would.
+fn restart_with_lfsr_offset(n: &mut Noise, offset: u32) {
+    n.state.lfsr_offset = Some(offset);
+    for state in n.channel_state.iter_mut() {
+        *state = NoiseChannelState::default();
+    }
+    n.on_patch_update();
 }
 
 #[test]
@@ -285,16 +307,18 @@ fn channels_added_by_a_patch_update_get_their_own_sequence() {
             *state = NoiseChannelState::default();
         }
         n.on_patch_update();
-        assert_channels_differ(&mut n);
+        assert_no_shifted_copies(&mut n);
     }
 }
 
-/// LFSR channels start at distinct states, so even 64 channels of a 93-step
-/// loop never coincide.
 #[test]
-fn every_lfsr_channel_differs() {
+fn lfsr_channels_are_never_shifted_copies() {
     for kind in [NoiseKind::Lfsr, NoiseKind::LfsrShort] {
-        assert_channels_differ(&mut make_noise(params(kind, PORT_MAX_CHANNELS)));
+        let mut n = make_noise(params(kind, PORT_MAX_CHANNELS));
+        for offset in (0..32_767).step_by(1021) {
+            restart_with_lfsr_offset(&mut n, offset);
+            assert_no_shifted_copies(&mut n);
+        }
     }
 }
 

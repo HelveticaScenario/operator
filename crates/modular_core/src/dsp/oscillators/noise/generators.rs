@@ -2,6 +2,7 @@
 //! clock tick, normalized to `[-1, 1]`.
 
 use crate::dsp::utils::rng::LcgRng;
+use crate::poly::PORT_MAX_CHANNELS;
 
 /// Paul Kellett's pink filter bank: −3 dB/octave from white input.
 #[derive(Default)]
@@ -73,11 +74,97 @@ pub(super) fn gaussian(rng: &mut LcgRng) -> f32 {
     (sum / (3.0 * SUM4_STD)).clamp(-1.0, 1.0)
 }
 
-/// Length of the short-mode cycles that [`Lfsr::start`] starts on.
+/// Length of the short-mode cycles that [`Lfsr::start`] starts on. The one
+/// other short-mode cycle has 31 steps, and plays at three times the pitch.
 pub(super) const LFSR_SHORT_CYCLE: u32 = 93;
+
+/// Number of 93-step short-mode cycles.
+const LFSR_SHORT_CYCLE_COUNT: usize = 352;
 
 /// Period of the 15-bit LFSR's long mode: every nonzero state.
 pub(super) const LFSR_LONG_PERIOD: u32 = 32767;
+
+/// Ticks between neighbouring entries of [`LFSR_LONG_STARTS`], which bounds
+/// the steps a long-mode start takes.
+const LFSR_LONG_STRIDE: u32 = 64;
+
+/// Long-mode ticks between the starts of neighbouring channels of one module.
+const LFSR_CHANNEL_SPACING: u32 = LFSR_LONG_PERIOD / PORT_MAX_CHANNELS as u32;
+
+const _: () = assert!(LFSR_SHORT_CYCLE_COUNT >= PORT_MAX_CHANNELS);
+
+const fn lfsr_step(state: u16, tap: u32) -> u16 {
+    let bit = (state ^ (state >> tap)) & 1;
+    (state >> 1) | (bit << 14)
+}
+
+/// The long-mode state at every [`LFSR_LONG_STRIDE`]th tick from state 1.
+static LFSR_LONG_STARTS: [u16; LFSR_LONG_PERIOD.div_ceil(LFSR_LONG_STRIDE) as usize] = {
+    let mut starts = [0; LFSR_LONG_PERIOD.div_ceil(LFSR_LONG_STRIDE) as usize];
+    let mut state = 1;
+    let mut i = 0;
+    while i < starts.len() {
+        starts[i] = state;
+        let mut step = 0;
+        while step < LFSR_LONG_STRIDE {
+            state = lfsr_step(state, 1);
+            step += 1;
+        }
+        i += 1;
+    }
+    starts
+};
+
+/// The lowest state on each 93-step short-mode cycle, in ascending order.
+static LFSR_SHORT_STARTS: [u16; LFSR_SHORT_CYCLE_COUNT] = {
+    let mut starts = [0; LFSR_SHORT_CYCLE_COUNT];
+    let mut seen = [false; 1 << 15];
+    let mut count = 0;
+    let mut first = 1;
+    while first < seen.len() {
+        if !seen[first] {
+            let mut state = first as u16;
+            let mut len = 0;
+            loop {
+                seen[state as usize] = true;
+                state = lfsr_step(state, 6);
+                len += 1;
+                if state as usize == first {
+                    break;
+                }
+            }
+            if len == LFSR_SHORT_CYCLE {
+                starts[count] = first as u16;
+                count += 1;
+            }
+        }
+        first += 1;
+    }
+    assert!(count == LFSR_SHORT_CYCLE_COUNT);
+    starts
+};
+
+/// Where a channel's LFSR starts in each mode.
+#[derive(Default, Clone, Copy)]
+pub(super) struct LfsrStart {
+    /// Long-mode ticks from state 1, below [`LFSR_LONG_PERIOD`].
+    phase: u32,
+    /// Index into [`LFSR_SHORT_STARTS`].
+    cycle: usize,
+}
+
+impl LfsrStart {
+    /// The start of channel `channel` in a module with random offset `offset`.
+    /// Channels of one module sit at least [`LFSR_CHANNEL_SPACING`] ticks
+    /// apart in long mode and on distinct 93-step cycles in short mode, so no
+    /// channel is a delayed copy of another.
+    pub(super) fn for_channel(offset: u32, channel: usize) -> Self {
+        Self {
+            phase: (offset + channel as u32 * LFSR_CHANNEL_SPACING) % LFSR_LONG_PERIOD,
+            cycle: (offset as usize + channel) % LFSR_SHORT_CYCLE_COUNT,
+        }
+    }
+}
 
 /// 15-bit linear-feedback shift register in the style of the NES noise
 /// channel. Long mode (tap 1) cycles through all 32767 nonzero states; short
@@ -93,23 +180,21 @@ impl Default for Lfsr {
 }
 
 impl Lfsr {
-    /// Start at the state `slot` selects. Slots that differ modulo the mode's
-    /// period (32767 long, 93 short) start different sequences, and every
-    /// short-mode start lies on a 93-step cycle.
-    pub(super) fn start(&mut self, slot: u32, short: bool) {
+    /// Jump to `start` for the given mode. A long-mode start takes fewer than
+    /// [`LFSR_LONG_STRIDE`] steps; a short-mode start takes none.
+    pub(super) fn start(&mut self, start: LfsrStart, short: bool) {
         if short {
-            self.state = 1;
-            for _ in 0..slot % LFSR_SHORT_CYCLE {
-                self.step(1);
-            }
+            self.state = LFSR_SHORT_STARTS[start.cycle];
         } else {
-            self.state = (slot % LFSR_LONG_PERIOD) as u16 + 1;
+            self.state = LFSR_LONG_STARTS[(start.phase / LFSR_LONG_STRIDE) as usize];
+            for _ in 0..start.phase % LFSR_LONG_STRIDE {
+                self.state = lfsr_step(self.state, 1);
+            }
         }
     }
 
     pub(super) fn step(&mut self, tap: u32) -> f32 {
-        let bit = (self.state ^ (self.state >> tap)) & 1;
-        self.state = (self.state >> 1) | (bit << 14);
+        self.state = lfsr_step(self.state, tap);
         rail(self.state & 1 == 1)
     }
 }
@@ -118,36 +203,44 @@ impl Lfsr {
 mod tests {
     use super::*;
 
-    /// Each of the 93 short-mode starts is a distinct state that loops back
-    /// to itself after exactly 93 ticks.
+    /// Every long-mode phase starts at the state that many ticks from state 1.
     #[test]
-    fn lfsr_short_starts_are_distinct_93_step_loops() {
-        let mut starts = Vec::new();
-        for slot in 0..LFSR_SHORT_CYCLE {
+    fn lfsr_long_start_reaches_its_phase() {
+        let mut expected = 1;
+        for phase in 0..LFSR_LONG_PERIOD {
             let mut lfsr = Lfsr::default();
-            lfsr.start(slot, true);
-            let start = lfsr.state;
-            let period = (1..=LFSR_SHORT_CYCLE)
-                .find(|_| {
-                    lfsr.step(6);
-                    lfsr.state == start
-                })
-                .unwrap_or(0);
-            assert_eq!(period, LFSR_SHORT_CYCLE, "slot {slot}");
-            starts.push(start);
+            lfsr.start(LfsrStart { phase, cycle: 0 }, false);
+            assert_eq!(lfsr.state, expected, "phase {phase}");
+            expected = lfsr_step(expected, 1);
         }
-        starts.sort_unstable();
-        starts.dedup();
-        assert_eq!(starts.len(), LFSR_SHORT_CYCLE as usize);
+        assert_eq!(expected, 1, "long mode has period {LFSR_LONG_PERIOD}");
     }
 
+    /// The short-mode table holds the lowest state of every 93-step cycle,
+    /// and the states it leaves out form the single 31-step cycle.
     #[test]
-    fn lfsr_long_starts_are_nonzero() {
-        for slot in [0, 1, LFSR_LONG_PERIOD - 1, LFSR_LONG_PERIOD, u32::MAX] {
+    fn lfsr_short_starts_cover_every_93_step_cycle() {
+        let mut covered = std::collections::HashSet::new();
+        for (cycle, &start) in LFSR_SHORT_STARTS.iter().enumerate() {
             let mut lfsr = Lfsr::default();
-            lfsr.start(slot, false);
-            assert!((1..=0x7fff).contains(&lfsr.state), "slot {slot}");
+            lfsr.start(LfsrStart { phase: 0, cycle }, true);
+            assert_eq!(lfsr.state, start);
+            let mut states = vec![start];
+            while lfsr_step(*states.last().unwrap(), 6) != start {
+                states.push(lfsr_step(*states.last().unwrap(), 6));
+            }
+            assert_eq!(states.len(), LFSR_SHORT_CYCLE as usize, "cycle {cycle}");
+            assert_eq!(states.iter().min(), Some(&start), "cycle {cycle}");
+            assert!(states.into_iter().all(|s| covered.insert(s)));
         }
+        let rest: Vec<u16> = (1..=0x7fff).filter(|s| !covered.contains(s)).collect();
+        assert_eq!(rest.len(), 31);
+        let mut state = rest[0];
+        for _ in 0..31 {
+            state = lfsr_step(state, 6);
+            assert!(rest.contains(&state));
+        }
+        assert!(LFSR_SHORT_STARTS.is_sorted());
     }
 
     #[test]

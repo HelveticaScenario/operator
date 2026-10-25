@@ -1,7 +1,7 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::dsp::utils::rng::{LcgRng, seed_base};
+use crate::dsp::utils::rng::{hash_bipolar, seed_base};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal};
 
@@ -11,14 +11,7 @@ mod generators;
 mod tests;
 
 use channel::NoiseChannelState;
-use generators::{LFSR_LONG_PERIOD, LFSR_SHORT_CYCLE};
-
-/// Channel `ch` starts its LFSR at slot `lfsr_offset + ch * LFSR_SLOT_STRIDE`.
-/// The stride is coprime to both LFSR periods, and both exceed
-/// `PORT_MAX_CHANNELS`, so every channel of a module starts a different
-/// sequence.
-const LFSR_SLOT_STRIDE: u32 = 58;
-const _: () = assert!(LFSR_SHORT_CYCLE as usize > PORT_MAX_CHANNELS);
+use generators::{LFSR_LONG_PERIOD, LFSR_SHORT_CYCLE, LfsrStart};
 
 fn default_channels() -> usize {
     1
@@ -168,9 +161,9 @@ pub struct Noise {
 struct NoiseState {
     last_noise_type: NoiseKind,
     inv_sample_rate: f32,
-    /// Random per-module LFSR slot offset, drawn once. It transfers with the
-    /// module, so channels a patch update adds take slots distinct from the
-    /// transferred channels'.
+    /// Random per-module offset for [`LfsrStart::for_channel`], drawn once.
+    /// It transfers with the module, so channels a patch update adds keep the
+    /// same spacing from the transferred ones.
     lfsr_offset: Option<u32>,
 }
 
@@ -237,14 +230,12 @@ impl crate::types::PatchUpdateHandler for Noise {
         let color_changed = self.state.last_noise_type != color;
         self.state.last_noise_type = color;
         let lfsr_offset = *self.state.lfsr_offset.get_or_insert_with(|| {
-            let mut rng = LcgRng::default();
-            rng.seed(base, PORT_MAX_CHANNELS);
-            (rng.next_unit() * LFSR_LONG_PERIOD as f32) as u32
+            let unit = (hash_bipolar(base, 0) + 1.0) * 0.5;
+            (unit * f64::from(LFSR_LONG_PERIOD)) as u32
         });
         for (ch, state) in self.channel_state.iter_mut().enumerate() {
             if !state.seeded {
-                let lfsr_slot = lfsr_offset + ch as u32 * LFSR_SLOT_STRIDE;
-                state.seed(base, ch, lfsr_slot, color);
+                state.seed(base, ch, LfsrStart::for_channel(lfsr_offset, ch), color);
             } else if color_changed {
                 state.reset(color);
             }
