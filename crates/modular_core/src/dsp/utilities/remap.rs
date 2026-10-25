@@ -1,8 +1,8 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::poly::{PolyOutput, PolySignal};
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -26,10 +26,10 @@ struct RemapParams {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    in_min: Clickless,
-    in_max: Clickless,
-    out_min: Clickless,
-    out_max: Clickless,
+    in_min: SwapGlide,
+    in_max: SwapGlide,
+    out_min: SwapGlide,
+    out_max: SwapGlide,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -60,18 +60,33 @@ pub struct Remap {
 }
 
 impl Remap {
-    fn update(&mut self, _sample_rate: f32) {
+    fn update(&mut self, sample_rate: f32) {
         let channels = self.channel_count();
 
         for i in 0..channels as usize {
             let input_val = self.params.input.get_value(i);
             let state = &mut self.channel_state[i];
 
-            // Smooth range parameters to avoid clicks
-            state.in_min.update(self.params.in_min.get_value(i));
-            state.in_max.update(self.params.in_max.get_value(i));
-            state.out_min.update(self.params.out_min.get_value(i));
-            state.out_max.update(self.params.out_max.get_value(i));
+            state.in_min.update(
+                self.params.in_min.get_value(i),
+                self.params.in_min.glide_mark(i),
+                sample_rate,
+            );
+            state.in_max.update(
+                self.params.in_max.get_value(i),
+                self.params.in_max.glide_mark(i),
+                sample_rate,
+            );
+            state.out_min.update(
+                self.params.out_min.get_value(i),
+                self.params.out_min.glide_mark(i),
+                sample_rate,
+            );
+            state.out_max.update(
+                self.params.out_max.get_value(i),
+                self.params.out_max.glide_mark(i),
+                sample_rate,
+            );
 
             // Apply remapping using map_range utility
             let output = crate::dsp::utils::map_range(

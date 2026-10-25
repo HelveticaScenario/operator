@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
 use modular_core::patch::Patch;
-use modular_core::types::{ModuleSpec, PatchGraph, Sampleable};
+use modular_core::types::{ModuleSpec, PatchGraph, SameIds, Sampleable};
 use serde_json::{Value, json};
 
 mod common;
@@ -867,7 +867,7 @@ fn quantizer_hold_survives_state_transfer() {
         "q",
         json!({ "input": 7.0 / 12.0, "scale": c_major_triad, "gate": 0.0 }),
     );
-    new.transfer_state_from(old.as_ref());
+    new.transfer_state_from(old.as_ref(), &SameIds);
     let mut stepper = Stepper::new();
     for _ in 0..64 {
         let slot = stepper.tick(new.as_ref());
@@ -1329,7 +1329,7 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
     // Transfer state from old modules to new modules
     for (id, new_module) in &new_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
-            new_module.transfer_state_from(old_module.as_ref());
+            new_module.transfer_state_from(old_module.as_ref(), &SameIds);
         }
     }
 
@@ -1400,7 +1400,7 @@ fn clock_meter_change_keeps_beat_triggers_on_bar_grid() {
         from_graph(&make(3), SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("3/4 patch");
     for (id, new_module) in &new_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
-            new_module.transfer_state_from(old_module.as_ref());
+            new_module.transfer_state_from(old_module.as_ref(), &SameIds);
         }
     }
     new_patch.connect_all();
@@ -1479,7 +1479,7 @@ fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
     // re-runs on_patch_update so param-derived caches reflect the new params).
     for (id, new_module) in &new_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
-            new_module.transfer_state_from(old_module.as_ref());
+            new_module.transfer_state_from(old_module.as_ref(), &SameIds);
         }
     }
     new_patch.connect_all();
@@ -1580,7 +1580,7 @@ fn cycle_ps_cv_holds_during_rest_after_state_transfer() {
 
     for (id, new_module) in &new_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
-            new_module.transfer_state_from(old_module.as_ref());
+            new_module.transfer_state_from(old_module.as_ref(), &SameIds);
         }
     }
     for module in new_patch.sampleables.values() {
@@ -1624,7 +1624,7 @@ fn tah_holds_voltage_across_state_transfer() {
             .expect("from_graph failed");
         for (id, new_module) in &new_patch.sampleables {
             if let Some(old_module) = old.sampleables.get(id) {
-                new_module.transfer_state_from(old_module.as_ref());
+                new_module.transfer_state_from(old_module.as_ref(), &SameIds);
             }
         }
         for module in new_patch.sampleables.values() {
@@ -1818,7 +1818,7 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
     // on_patch_update. NO ClearPatch / transport reset.
     for (id, new_module) in &new_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
-            new_module.transfer_state_from(old_module.as_ref());
+            new_module.transfer_state_from(old_module.as_ref(), &SameIds);
         }
     }
     for module in new_patch.sampleables.values() {
@@ -1902,7 +1902,7 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
         .expect("C from_graph failed");
     for (id, new_module) in &ctrl_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
-            new_module.transfer_state_from(old_module.as_ref());
+            new_module.transfer_state_from(old_module.as_ref(), &SameIds);
         }
     }
     for module in ctrl_patch.sampleables.values() {
@@ -2500,7 +2500,7 @@ fn cycle_patch(pattern: Value, channels: Option<u64>, playhead: Option<f64>) -> 
 fn transfer_into(new_patch: &Patch, old_patch: &Patch) {
     for (id, m) in &new_patch.sampleables {
         if let Some(old) = old_patch.sampleables.get(id) {
-            m.transfer_state_from(old.as_ref());
+            m.transfer_state_from(old.as_ref(), &SameIds);
         }
     }
     for m in new_patch.sampleables.values() {
@@ -3175,7 +3175,7 @@ fn live_edit(old: &Patch, graph: &PatchGraph) -> Patch {
         .expect("from_graph failed");
     for (id, module) in &new.sampleables {
         if let Some(old_module) = old.sampleables.get(id) {
-            module.transfer_state_from(old_module.as_ref());
+            module.transfer_state_from(old_module.as_ref(), &SameIds);
         }
     }
     for module in new.sampleables.values() {
@@ -3694,13 +3694,13 @@ fn lpg_crossfades_into_and_out_of_bypass() {
     ));
 
     let gated = make_module("$lpg", "lpg", json!({ "input": 1.0, "level": 0.0 }));
-    gated.transfer_state_from(bypassed.as_ref());
+    gated.transfer_state_from(bypassed.as_ref(), &SameIds);
     let step = max_step(gated.as_ref(), 0, 480, 1.0);
     assert!(step < 0.01, "entering the gate jumped by {step}");
     assert!(settle_and_read(gated.as_ref(), 480).abs() < 1e-3);
 
     let reopened = make_module("$lpg", "lpg", json!({ "input": 1.0 }));
-    reopened.transfer_state_from(gated.as_ref());
+    reopened.transfer_state_from(gated.as_ref(), &SameIds);
     let step = max_step(reopened.as_ref(), 0, 480, 0.0);
     assert!(step < 0.01, "leaving the gate jumped by {step}");
     assert!(approx_eq(
@@ -3724,7 +3724,7 @@ fn lpg_added_channels_do_not_ping_on_a_held_trigger() {
         "lpg",
         json!({ "input": [1.0, 1.0, 1.0], "trigger": 5.0, "decay": 0.0 }),
     );
-    new.transfer_state_from(old.as_ref());
+    new.transfer_state_from(old.as_ref(), &SameIds);
     let (_, peak) = min_max(&collect_channel(new.as_ref(), 2, 4800));
     assert!(
         peak < 1e-3,

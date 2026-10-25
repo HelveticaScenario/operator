@@ -17,7 +17,7 @@ use crate::dsp::utils::dc_blocker::{DEFAULT_DC_BLOCK_FC_HZ, DcBlocker};
 use crate::dsp::utils::delay_line::DelayLine;
 use crate::dsp::utils::{map_range, sanitize};
 use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 // ─── Topology ────────────────────────────────────────────────────────────────
 
@@ -212,13 +212,13 @@ struct Reverb2State {
     dc_blocker_r: DcBlocker,
     dc_block_coeff: f32,
 
-    // Parameter smoothing — these all feed the recirculating loop.
-    smoothed_size: Clickless,
-    smoothed_predelay: Clickless,
-    smoothed_decay_k: Clickless,
-    smoothed_ratio: Clickless,
-    /// Smoothed cross-coupling angle (radians).
-    smoothed_width: Clickless,
+    // Patch-update glides — these all feed the recirculating loop.
+    smoothed_size: SwapGlide,
+    smoothed_predelay: SwapGlide,
+    smoothed_decay_k: SwapGlide,
+    smoothed_ratio: SwapGlide,
+    /// Glided cross-coupling angle (radians).
+    smoothed_width: SwapGlide,
 
     sample_rate: f32,
 
@@ -308,10 +308,10 @@ impl Reverb2 {
         self.state.dc_block_coeff = DcBlocker::coeff(DEFAULT_DC_BLOCK_FC_HZ, sample_rate);
     }
 
-    fn update(&mut self, _sample_rate: f32) {
+    fn update(&mut self, sample_rate: f32) {
         let num_input_channels = self.params.input.channels();
 
-        // ── Read and smooth parameters ───────────────────────────────────
+        // ── Read and glide parameters ────────────────────────────────────
 
         let size_raw = map_range(
             self.params.size.value_or(0.0),
@@ -321,7 +321,9 @@ impl Reverb2 {
             MAX_SIZE,
         )
         .clamp(MIN_SIZE, MAX_SIZE);
-        self.state.smoothed_size.update(size_raw);
+        self.state
+            .smoothed_size
+            .update(size_raw, self.params.size.glide_mark(), sample_rate);
         let size = *self.state.smoothed_size;
 
         let predelay_secs = self
@@ -329,9 +331,11 @@ impl Reverb2 {
             .predelay
             .value_or(0.0)
             .clamp(0.0, MAX_PREDELAY_SECS);
-        self.state
-            .smoothed_predelay
-            .update(predelay_secs * self.state.sample_rate);
+        self.state.smoothed_predelay.update(
+            predelay_secs * self.state.sample_rate,
+            self.params.predelay.glide_mark(),
+            sample_rate,
+        );
         let predelay_samples = *self.state.smoothed_predelay;
 
         // Low-band decay time → per-sample-length gain exponent.
@@ -340,7 +344,9 @@ impl Reverb2 {
             .exp()
             .clamp(MIN_T60, MAX_T60);
         let decay_k = -LN_1000 / (self.state.sample_rate * t60);
-        self.state.smoothed_decay_k.update(decay_k);
+        self.state
+            .smoothed_decay_k
+            .update(decay_k, self.params.decay.glide_mark(), sample_rate);
         let decay_k = *self.state.smoothed_decay_k;
 
         // Damping → the ratio of high-band to low-band decay time.
@@ -352,7 +358,9 @@ impl Reverb2 {
             MIN_DECAY_RATIO,
         )
         .clamp(MIN_DECAY_RATIO, 1.0);
-        self.state.smoothed_ratio.update(ratio_raw);
+        self.state
+            .smoothed_ratio
+            .update(ratio_raw, self.params.damping.glide_mark(), sample_rate);
         let ratio = *self.state.smoothed_ratio;
         // A high-band gain that is `ratio`-shorter in decay corresponds to this
         // extra exponent on each line's absorption pole.
@@ -365,7 +373,7 @@ impl Reverb2 {
         let tc_scale = 1.0 / (1.0 - tc_b);
 
         // Width sets the cross-coupling rotation between the two sub-networks.
-        // Smoothing the angle keeps `sin²+cos²=1` exact.
+        // Gliding the angle keeps `sin²+cos²=1` exact.
         let angle_raw = map_range(
             self.params.width.value_or(0.0),
             -5.0,
@@ -374,7 +382,9 @@ impl Reverb2 {
             WIDE_ANGLE,
         )
         .clamp(WIDE_ANGLE, NARROW_ANGLE);
-        self.state.smoothed_width.update(angle_raw);
+        self.state
+            .smoothed_width
+            .update(angle_raw, self.params.width.glide_mark(), sample_rate);
         let (cross_sin, cross_cos) = (*self.state.smoothed_width).sin_cos();
 
         let mod_depth = map_range(

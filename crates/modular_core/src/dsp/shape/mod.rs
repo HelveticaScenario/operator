@@ -67,7 +67,7 @@ macro_rules! shape_module {
                     <$Shaper as crate::dsp::shape::shape_core::Shaper>::prime();
                 }
 
-                fn update(&mut self, _sample_rate: f32) {
+                fn update(&mut self, sample_rate: f32) {
                     let channels = self.channel_count();
                     crate::dsp::shape::shape_core::run(
                         channels,
@@ -77,6 +77,7 @@ macro_rules! shape_module {
                         &self.state,
                         &mut self.channel_state,
                         &mut self.outputs.sample,
+                        sample_rate,
                     );
                 }
             }
@@ -125,7 +126,7 @@ macro_rules! shape_module {
                     <$Shaper as crate::dsp::shape::shape_core::Shaper>::prime();
                 }
 
-                fn update(&mut self, _sample_rate: f32) {
+                fn update(&mut self, sample_rate: f32) {
                     let channels = self.channel_count();
                     crate::dsp::shape::shape_core::run(
                         channels,
@@ -135,6 +136,7 @@ macro_rules! shape_module {
                         &self.state,
                         &mut self.channel_state,
                         &mut self.outputs.sample,
+                        sample_rate,
                     );
                 }
             }

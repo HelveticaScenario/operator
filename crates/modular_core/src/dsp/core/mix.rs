@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 
 use crate::{
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 
 /// Mixing mode for combining input signals.
@@ -87,7 +87,7 @@ pub fn mix_derive_channel_count(params: &MixParams) -> usize {
 pub struct Mix {
     outputs: MixOutputs,
     params: MixParams,
-    channel_state: Box<[Clickless]>,
+    channel_state: Box<[SwapGlide]>,
 }
 
 message_handlers!(impl Mix {});
@@ -103,7 +103,7 @@ pub fn __bench_make_mix(params: MixParams) -> Mix {
         outputs,
         _channel_count: channels,
         _block_index: Default::default(),
-        channel_state: vec![Clickless::default(); channels].into_boxed_slice(),
+        channel_state: vec![SwapGlide::default(); channels].into_boxed_slice(),
     }
 }
 
@@ -113,7 +113,7 @@ impl Mix {
         self.update(sample_rate);
     }
 
-    fn update(&mut self, _sample_rate: f32) {
+    fn update(&mut self, sample_rate: f32) {
         let inputs = &self.params.inputs;
         let gain = &self.params.gain;
 
@@ -224,7 +224,7 @@ impl Mix {
             let amp_val = gain.value_or(i, 5.0);
             let normalized = (amp_val.abs() * (1.0 / 5.0)).max(0.0);
             let curved = amp_val.signum() * (normalized * normalized * normalized);
-            self.channel_state[i].update(curved);
+            self.channel_state[i].update(curved, gain.glide_mark(i), sample_rate);
             let gain_value = *self.channel_state[i];
             self.outputs.sample.set(i, pre_gain_value * gain_value);
         }
@@ -247,7 +247,7 @@ mod tests {
             outputs,
             _channel_count: channels,
             _block_index: Default::default(),
-            channel_state: vec![Clickless::default(); channels].into_boxed_slice(),
+            channel_state: vec![SwapGlide::default(); channels].into_boxed_slice(),
         };
         mixer
     }

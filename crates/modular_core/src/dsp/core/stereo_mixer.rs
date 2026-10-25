@@ -1,6 +1,6 @@
 use crate::{
     poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 use deserr::Deserr;
 use schemars::JsonSchema;
@@ -32,7 +32,7 @@ struct StereoMixerOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    pan: Clickless,
+    pan: SwapGlide,
 }
 
 /// Pan and spread a signal into stereo.
@@ -53,24 +53,26 @@ pub struct StereoMixer {
 #[derive(Default)]
 struct StereoMixerState {
     /// Width buffer for stereo spread
-    width_buffer: Clickless,
+    width_buffer: SwapGlide,
 }
 
 impl StereoMixer {
     fn init(&mut self, _sample_rate: f32) {
-        // One pan smoother per input channel.
+        // One pan glide per input channel.
         let input_channels = self.params.input.channels().max(1);
         self.channel_state = vec![ChannelState::default(); input_channels].into_boxed_slice();
     }
 
-    pub fn update(&mut self, _sample_rate: f32) {
+    pub fn update(&mut self, sample_rate: f32) {
         let input_channels = self.params.input.channels();
 
         // Width: 0 = no spread, 5 = full ±5V spread across voices. Defaults to
         // 0 (no spread) when no width signal is connected.
-        self.state
-            .width_buffer
-            .update(self.params.width.value_or(0.0).clamp(0.0, 5.0));
+        self.state.width_buffer.update(
+            self.params.width.value_or(0.0).clamp(0.0, 5.0),
+            self.params.width.glide_mark(),
+            sample_rate,
+        );
         let width = *self.state.width_buffer;
 
         let mut left_sum = 0.0f32;
@@ -80,7 +82,13 @@ impl StereoMixer {
             let input = self.params.input.get_value(ch);
 
             // Base pan from cycling PolySignal (-5 to +5 range, 0 = center)
-            let base_pan = self.params.pan.value_or_zero(ch).clamp(-5.0, 5.0);
+            let pan_glide = &mut self.channel_state[ch].pan;
+            pan_glide.update(
+                self.params.pan.value_or_zero(ch).clamp(-5.0, 5.0),
+                self.params.pan.glide_mark(ch),
+                sample_rate,
+            );
+            let base_pan = **pan_glide;
 
             // Calculate width spread offset:
             // Voices spread from -width to +width relative to base pan
@@ -93,11 +101,7 @@ impl StereoMixer {
             };
 
             // Final pan position, clamped to valid range
-            let final_pan = (base_pan + spread_offset).clamp(-5.0, 5.0);
-
-            // Smooth pan changes to avoid clicks
-            self.channel_state[ch].pan.update(final_pan);
-            let pan = *self.channel_state[ch].pan;
+            let pan = (base_pan + spread_offset).clamp(-5.0, 5.0);
 
             // Convert -5..+5 to 0..1 (0 = full left, 1 = full right)
             let pan_norm = (pan + 5.0) / 10.0;
@@ -123,9 +127,9 @@ mod tests {
     use crate::types::{OutputStruct as _, Signal};
 
     /// Build a StereoMixer the way the module macro would: fixed 2-channel
-    /// stereo output, per-input-channel pan state sized by `init`. `Clickless`
-    /// snaps to its target on the first `update`, so a single call shows the
-    /// full pan/width.
+    /// stereo output, per-input-channel pan state sized by `init`. A fresh
+    /// `SwapGlide` starts on its input, so a single call shows the full
+    /// pan/width.
     fn make_stereo(input: PolySignal) -> StereoMixer {
         let mut outputs = StereoMixerOutputs::default();
         outputs.set_all_channels(2);

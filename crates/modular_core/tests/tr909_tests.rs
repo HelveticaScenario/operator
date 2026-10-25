@@ -316,7 +316,7 @@ fn channels_added_by_a_patch_update_get_their_own_noise() {
             old.ensure_processed();
         }
         let new = make(voice, json!({ "trigger": [5.0, 5.0, 5.0] }), SR);
-        new.transfer_state_from(old.as_ref());
+        new.transfer_state_from(old.as_ref(), &modular_core::types::SameIds);
         new.on_patch_update();
         let (mut a, mut b) = (Vec::new(), Vec::new());
         for _ in 0..(0.2 * SR) as usize {

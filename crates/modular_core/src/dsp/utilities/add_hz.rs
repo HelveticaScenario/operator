@@ -1,8 +1,12 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use std::ops::Range;
+
+use crate::block_input::{self, InputScratch};
 use crate::dsp::utils::{hz_to_voct, voct_to_hz};
 use crate::poly::{PolyOutput, PolySignal};
+use crate::types::SwapGlide;
 
 /// Lower bound for the post-offset frequency, keeping `hz_to_voct` away from log2(≤0).
 const MIN_HZ: f32 = 1e-4;
@@ -34,21 +38,59 @@ struct AddHzOutputs {
 /// // detune a saw by +0.5 Hz for slow beating
 /// $addHz($saw('C4'), 0.5)
 /// ```
-#[module(name = "$addHz", args(input, offset))]
+#[module(name = "$addHz", args(input, offset), block)]
 pub struct AddHz {
     outputs: AddHzOutputs,
     params: AddHzParams,
+    channel_state: Box<[SwapGlide]>,
+}
+
+/// The V/Oct pitch `voct` moved by `offset` Hz.
+#[inline(always)]
+fn add_hz(voct: f32, offset: f32) -> f32 {
+    hz_to_voct((voct_to_hz(voct) + offset).max(MIN_HZ))
 }
 
 impl AddHz {
-    fn update(&mut self, _sample_rate: f32) {
-        let channels = self.channel_count();
-
-        for i in 0..channels as usize {
-            let freq = voct_to_hz(self.params.input.get_value(i));
-            let result = (freq + self.params.offset.get_value(i)).max(MIN_HZ);
-            self.outputs.sample.set(i, hz_to_voct(result));
+    fn update(&mut self, sample_rate: f32) {
+        let offset = &self.params.offset;
+        for i in 0..self.channel_count() {
+            let offset_value = self.channel_state[i].follow(
+                offset.get_value(i),
+                offset.glide_mark(i),
+                sample_rate,
+            );
+            let value = add_hz(self.params.input.get_value(i), offset_value);
+            self.outputs.sample.set(i, value);
         }
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut AddHzBlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let glides = &mut self.channel_state[..channels];
+        let offset = &self.params.offset;
+        if offset.glides_pending(glides) {
+            return None;
+        }
+        let (mut s0, mut s1) = (InputScratch::new(), InputScratch::new());
+        let input = self
+            .params
+            .input
+            .block_input(range.clone(), channels, &mut s0)?;
+        let offset_input = offset.block_input(range.clone(), channels, &mut s1)?;
+        offset.settle_glides(glides, offset_input.row(range.end - 1));
+        block_input::map(
+            &mut outputs.sample,
+            range,
+            [input, offset_input],
+            |[x, offset]| add_hz(x, offset),
+        );
+        Some(())
     }
 }
 
@@ -71,6 +113,7 @@ mod tests {
             outputs,
             _channel_count: 1,
             _block_index: Default::default(),
+            channel_state: Box::new([SwapGlide::default()]),
         }
     }
 

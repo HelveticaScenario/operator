@@ -2,9 +2,9 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
+    dsp::filters::resonant_svf::{CutoffResonance, hand_over, params_mono},
     dsp::utils::{changed, sanitize, voct_to_hz},
-    poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    poly::{PolyOutput, PolySignal},
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -44,10 +44,7 @@ struct LadderState {
     last_cutoff: f32,
     /// Cached resonance for change detection
     last_resonance: f32,
-    /// Smoothed cutoff
-    smooth_cutoff: Clickless,
-    /// Smoothed resonance
-    smooth_resonance: Clickless,
+    glides: CutoffResonance,
     /// Cached tuning coefficient (g)
     g: f32,
     /// Cached resonance coefficient (k)
@@ -74,7 +71,7 @@ struct LadderState {
 /// let env = $adsr($pPulse($clock[0]), { attack: 0.4, decay: 0.6, sustain: 0.3, release: 1.0 })
 /// $jup6f($saw('c2'), env.range('200hz', '4000hz'), 2.5)
 /// ```
-#[module(name = "$jup6f", args(input, cutoff, resonance))]
+#[module(name = "$jup6f", patch_update, args(input, cutoff, resonance))]
 pub struct Jup6f {
     outputs: Jup6fOutputs,
     state: Jup6fState,
@@ -89,8 +86,9 @@ struct Jup6fState {
     mono_k: f32,
     last_cutoff_mono: f32,
     last_resonance_mono: f32,
-    smooth_cutoff_mono: Clickless,
-    smooth_resonance_mono: Clickless,
+    glides_mono: CutoffResonance,
+    /// Whether the current params use the mono coefficients.
+    mono_path: bool,
 }
 
 impl Default for Jup6fState {
@@ -100,8 +98,8 @@ impl Default for Jup6fState {
             mono_k: 0.0,
             last_cutoff_mono: f32::NAN, // Indicate that coefficients have never been calculated
             last_resonance_mono: f32::NAN, // Indicate that coefficients have never been calculated
-            smooth_cutoff_mono: Clickless::default(),
-            smooth_resonance_mono: Clickless::default(),
+            glides_mono: CutoffResonance::default(),
+            mono_path: false,
         }
     }
 }
@@ -194,25 +192,15 @@ impl Jup6f {
     fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count();
         let state = &mut self.state;
+        let is_mono = state.mono_path;
         let channel_state = &mut self.channel_state;
-        let cutoff_mono = self.params.cutoff.is_monophonic();
-        let resonance_mono = self
-            .params
-            .resonance
-            .as_ref()
-            .is_some_and(|s| s.is_monophonic());
-        let is_mono = cutoff_mono && resonance_mono;
+        let (cutoff, resonance) = (&self.params.cutoff, &self.params.resonance);
 
         // Update coefficients
         if is_mono {
-            state
-                .smooth_cutoff_mono
-                .update(self.params.cutoff.get_value(0));
-            state
-                .smooth_resonance_mono
-                .update(self.params.resonance.value_or(0, 0.0));
-            let c = *state.smooth_cutoff_mono;
-            let r = *state.smooth_resonance_mono;
+            let (c, r) = state
+                .glides_mono
+                .update(cutoff, resonance, 0.0, 0, sample_rate);
 
             if changed(c, state.last_cutoff_mono) || changed(r, state.last_resonance_mono) {
                 let (g, k) = compute_coeffs(c, r, sample_rate);
@@ -223,14 +211,9 @@ impl Jup6f {
             }
         } else {
             for i in 0..num_channels {
-                channel_state[i]
-                    .smooth_cutoff
-                    .update(self.params.cutoff.get_value(i));
-                channel_state[i]
-                    .smooth_resonance
-                    .update(self.params.resonance.value_or(i, 0.0));
-                let c = *channel_state[i].smooth_cutoff;
-                let r = *channel_state[i].smooth_resonance;
+                let (c, r) = channel_state[i]
+                    .glides
+                    .update(cutoff, resonance, 0.0, i, sample_rate);
 
                 if changed(c, channel_state[i].last_cutoff)
                     || changed(r, channel_state[i].last_resonance)
@@ -260,6 +243,19 @@ impl Jup6f {
             self.outputs.bp.set(i, bp * 5.0);
             self.outputs.hp.set(i, hp * 5.0);
         }
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Jup6f {
+    fn on_patch_update(&mut self) {
+        let mono = params_mono(&self.params.cutoff, &self.params.resonance);
+        hand_over(
+            mono,
+            self.state.mono_path,
+            &mut self.state.glides_mono,
+            self.channel_state.iter_mut().map(|cs| &mut cs.glides),
+        );
+        self.state.mono_path = mono;
     }
 }
 

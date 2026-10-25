@@ -43,7 +43,7 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::fmt::Debug;
-use std::ops::{Add, Deref, Div, Mul, Sub};
+use std::ops::Deref;
 use std::ptr::NonNull;
 use std::result::Result as StdResult;
 use std::{collections::HashMap, sync::Arc};
@@ -362,7 +362,11 @@ pub trait Sampleable: MessageHandler + Send {
     ///    replace removes `old` from the map before the call. The command-
     ///    processing phase is synchronous on the audio thread, so no `update()`
     ///    races the transfer on either module.
-    fn transfer_state_from(&self, _old: &dyn Sampleable) {}
+    ///
+    /// `ids` maps the incoming patch's module ids to the outgoing one's, so
+    /// params can tell which of their sources changed (see
+    /// [`Connect::mark_glides`]).
+    fn transfer_state_from(&self, _old: &dyn Sampleable, _ids: &dyn PreviousIds) {}
 }
 
 pub trait Module {
@@ -394,115 +398,148 @@ pub type SampleableMap = HashMap<String, Box<dyn Sampleable>>;
 /// audio-thread reads; callers must not hold or use it across another reconnect.
 pub type SampleablePtr = NonNull<dyn Sampleable>;
 
-/// One-pole lowpass filter for parameter smoothing to prevent clicking
-/// Coefficient of 0.99 gives roughly 5ms smoothing time at 48kHz
-const SMOOTHING_COEFF: f32 = 0.99;
+/// Default time constant of the [`SwapGlide`] offset decay.
+const SWAP_GLIDE_TAU_SECONDS: f32 = 0.002;
+/// Below this magnitude the offset snaps to zero and the input passes through.
+const SWAP_GLIDE_EPSILON: f32 = 1e-6;
 
-pub fn smooth_value(current: f32, target: f32) -> f32 {
-    current * SMOOTHING_COEFF + target * (1.0 - SMOOTHING_COEFF)
+/// Where a glided param stands relative to the patch swap that installed it:
+/// the swap's generation, and which of the param's channels read a different
+/// source than in the replaced module. Obtained per channel from the param
+/// signal; whether this channel changed is only worked out on a new
+/// generation, so the per-sample cost is one comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlideMark {
+    pub(crate) generation: u64,
+    /// Bit `i` set when the param's channel `i` changed.
+    pub(crate) changed: u64,
+    /// The channel read, before cycling over `channels`.
+    pub(crate) channel: usize,
+    pub(crate) channels: usize,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Clickless {
+impl GlideMark {
+    /// An absent optional param. Its default is a constant, so leaving it
+    /// absent across a swap never moves it, while it differs from every
+    /// present param's generation and so glides when a present param is
+    /// removed.
+    pub const ABSENT: GlideMark = GlideMark {
+        generation: u64::MAX,
+        changed: u64::MAX,
+        channel: 0,
+        channels: 1,
+    };
+
+    #[inline]
+    pub(crate) fn changed(&self) -> bool {
+        self.changed & (1 << (self.channel % self.channels)) != 0
+    }
+}
+
+/// Passes a control value through unchanged, except that the first
+/// [`update`](Self::update) after a patch swap that changed the param's source
+/// glides from the pre-swap value onto the new input with a decaying offset.
+/// The current value is read through `Deref`.
+#[derive(Debug, Clone, Copy)]
+pub struct SwapGlide {
+    /// Current value; `NaN` until the first `update`, so a freshly
+    /// constructed module starts on its input with no glide.
     value: f32,
-    initialized: bool,
-}
-impl Clickless {
-    pub fn update(&mut self, input: f32) {
-        if !self.initialized {
-            // On first call, snap to input — but guard against NaN/Inf
-            // so the smoother never starts in a corrupted state.
-            self.value = if input.is_finite() { input } else { 0.0 };
-            self.initialized = true;
-            return;
-        }
-        let smoothed = smooth_value(self.value, input);
-        if smoothed.is_finite() {
-            self.value = smoothed;
-        } else if input.is_finite() {
-            // Smoother corrupted but input is valid — snap to input to recover.
-            self.value = input;
-        }
-        // If neither is finite, hold previous value (best-effort freeze).
-    }
+    offset: f32,
+    coeff: f32,
+    /// Generation of the last mark seen; a different one means a swap happened.
+    generation: u64,
+    /// Offset decay time constant, in seconds.
+    tau: f32,
 }
 
-impl From<Clickless> for f32 {
-    fn from(clickless: Clickless) -> Self {
-        clickless.value
-    }
-}
-
-impl From<f32> for Clickless {
-    fn from(value: f32) -> Self {
-        Clickless {
-            value,
-            initialized: false,
+impl Default for SwapGlide {
+    fn default() -> Self {
+        Self {
+            value: f32::NAN,
+            offset: 0.0,
+            coeff: 0.0,
+            generation: 0,
+            tau: SWAP_GLIDE_TAU_SECONDS,
         }
     }
 }
 
-impl Deref for Clickless {
+impl SwapGlide {
+    pub fn with_time_constant(seconds: f32) -> Self {
+        Self {
+            tau: seconds,
+            ..Self::default()
+        }
+    }
+
+    /// Whether a patch-update glide is in progress.
+    pub fn gliding(&self) -> bool {
+        self.offset != 0.0
+    }
+
+    /// Whether the next `update` with `mark` starts a glide or continues one.
+    #[inline]
+    pub fn will_glide(&self, mark: GlideMark) -> bool {
+        self.offset != 0.0 || (mark.generation != self.generation && mark.changed())
+    }
+
+    /// Records `value` as the current input for a stretch a block path ran
+    /// without calling `update`. Only valid while
+    /// [`will_glide`](Self::will_glide)`(mark)` is false; a non-finite value
+    /// keeps the current one, as `update` would.
+    #[inline]
+    pub fn settle(&mut self, value: f32, mark: GlideMark) {
+        if value.is_finite() {
+            self.value = value;
+        }
+        self.generation = mark.generation;
+    }
+
+    /// Updates with `input` and returns the value to use: the glided one
+    /// mid-glide, `input` itself otherwise, so a per-sample path reads the
+    /// param exactly as a block path that skips idle glides does.
+    #[inline]
+    pub fn follow(&mut self, input: f32, mark: GlideMark, sample_rate: f32) -> f32 {
+        self.update(input, mark, sample_rate);
+        if self.gliding() { self.value } else { input }
+    }
+
+    /// A non-finite input holds the current value (0 before the first update).
+    #[inline]
+    pub fn update(&mut self, input: f32, mark: GlideMark, sample_rate: f32) {
+        let input = if input.is_finite() {
+            input
+        } else if self.value.is_finite() {
+            self.value
+        } else {
+            0.0
+        };
+        if mark.generation != self.generation {
+            self.generation = mark.generation;
+            if mark.changed() && self.value.is_finite() {
+                self.offset = self.value - input;
+                self.coeff = (-1.0 / (self.tau * sample_rate)).exp();
+            }
+        }
+        self.value = if self.offset == 0.0 {
+            input
+        } else {
+            let out = input + self.offset;
+            self.offset *= self.coeff;
+            if self.offset.abs() < SWAP_GLIDE_EPSILON {
+                self.offset = 0.0;
+            }
+            out
+        };
+    }
+}
+
+impl Deref for SwapGlide {
     type Target = f32;
 
     fn deref(&self) -> &Self::Target {
         &self.value
-    }
-}
-
-impl Add<f32> for Clickless {
-    type Output = f32;
-    fn add(self, rhs: f32) -> Self::Output {
-        self.value + rhs
-    }
-}
-
-impl Add for Clickless {
-    type Output = f32;
-    fn add(self, rhs: Self) -> Self::Output {
-        self.value + rhs.value
-    }
-}
-
-impl Sub<f32> for Clickless {
-    type Output = f32;
-    fn sub(self, rhs: f32) -> Self::Output {
-        self.value - rhs
-    }
-}
-
-impl Sub for Clickless {
-    type Output = f32;
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.value - rhs.value
-    }
-}
-
-impl Mul<f32> for Clickless {
-    type Output = f32;
-    fn mul(self, rhs: f32) -> Self::Output {
-        self.value * rhs
-    }
-}
-
-impl Mul for Clickless {
-    type Output = f32;
-    fn mul(self, rhs: Self) -> Self::Output {
-        self.value * rhs.value
-    }
-}
-
-impl Div<f32> for Clickless {
-    type Output = f32;
-    fn div(self, rhs: f32) -> Self::Output {
-        self.value / rhs
-    }
-}
-
-impl Div for Clickless {
-    type Output = f32;
-    fn div(self, rhs: Self) -> Self::Output {
-        self.value / rhs.value
     }
 }
 
@@ -534,6 +571,30 @@ pub trait Connect {
     /// their explicit impl. Every `Connect` impl must declare its behaviour
     /// — same contract as `collect_cables`.
     fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>);
+
+    /// Stamp every signal with `generation` and record which of its channels
+    /// differ from the matching signal in `old`, the params of the module this
+    /// one replaces (`None` when nothing matches, so every channel counts as
+    /// changed). A [`SwapGlide`] glides only across a changed channel. Runs on
+    /// the audio thread during the swap, so it must not allocate. Containers
+    /// pair items by position; leaf types are no-op.
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds);
+}
+
+/// Maps a module id in the incoming patch to the id the same module had in
+/// the outgoing one, so a cable whose upstream was renamed still counts as
+/// unchanged. `None` means the module has no predecessor.
+pub trait PreviousIds {
+    fn previous<'a>(&'a self, id: &'a str) -> Option<&'a str>;
+}
+
+/// Every module keeps its id.
+pub struct SameIds;
+
+impl PreviousIds for SameIds {
+    fn previous<'a>(&'a self, id: &'a str) -> Option<&'a str> {
+        Some(id)
+    }
 }
 
 // ============================================================================
@@ -547,6 +608,7 @@ macro_rules! impl_connect_noop {
             fn connect(&mut self, _patch: &Patch) {}
             fn collect_cables(&self, _sink: &mut Vec<String>) {}
             fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
+            fn mark_glides(&mut self, _old: Option<&Self>, _generation: u64, _ids: &dyn PreviousIds) {}
         })*
     };
 }
@@ -580,6 +642,11 @@ impl<T: Connect> Connect for Vec<T> {
             item.inject_index_ptr(ptr);
         }
     }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        for (i, item) in self.iter_mut().enumerate() {
+            item.mark_glides(old.and_then(|o| o.get(i)), generation, ids);
+        }
+    }
 }
 
 impl<T: Connect> Connect for Option<T> {
@@ -603,6 +670,11 @@ impl<T: Connect> Connect for Option<T> {
             inner.inject_index_ptr(ptr);
         }
     }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        if let Some(inner) = self {
+            inner.mark_glides(old.and_then(|o| o.as_ref()), generation, ids);
+        }
+    }
 }
 
 impl<T: Connect> Connect for Box<T> {
@@ -617,6 +689,9 @@ impl<T: Connect> Connect for Box<T> {
     }
     fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
         (**self).inject_index_ptr(ptr);
+    }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        (**self).mark_glides(old.map(|o| &**o), generation, ids);
     }
 }
 
@@ -639,6 +714,11 @@ impl<T: Connect, const N: usize> Connect for [T; N] {
     fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
         for item in self {
             item.inject_index_ptr(ptr);
+        }
+    }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        for (i, item) in self.iter_mut().enumerate() {
+            item.mark_glides(old.and_then(|o| o.get(i)), generation, ids);
         }
     }
 }
@@ -664,6 +744,11 @@ impl<V: Connect> Connect for std::collections::HashMap<String, V> {
             v.inject_index_ptr(ptr);
         }
     }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        for (k, v) in self.iter_mut() {
+            v.mark_glides(old.and_then(|o| o.get(k)), generation, ids);
+        }
+    }
 }
 
 impl<V: Connect> Connect for std::collections::BTreeMap<String, V> {
@@ -687,6 +772,11 @@ impl<V: Connect> Connect for std::collections::BTreeMap<String, V> {
             v.inject_index_ptr(ptr);
         }
     }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        for (k, v) in self.iter_mut() {
+            v.mark_glides(old.and_then(|o| o.get(k)), generation, ids);
+        }
+    }
 }
 
 // Tuples (arity 1-5)
@@ -702,6 +792,9 @@ impl<T1: Connect> Connect for (T1,) {
     }
     fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
         self.0.inject_index_ptr(ptr);
+    }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        self.0.mark_glides(old.map(|o| &o.0), generation, ids);
     }
 }
 
@@ -721,6 +814,10 @@ impl<T1: Connect, T2: Connect> Connect for (T1, T2) {
     fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
         self.0.inject_index_ptr(ptr);
         self.1.inject_index_ptr(ptr);
+    }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        self.0.mark_glides(old.map(|o| &o.0), generation, ids);
+        self.1.mark_glides(old.map(|o| &o.1), generation, ids);
     }
 }
 
@@ -744,6 +841,11 @@ impl<T1: Connect, T2: Connect, T3: Connect> Connect for (T1, T2, T3) {
         self.0.inject_index_ptr(ptr);
         self.1.inject_index_ptr(ptr);
         self.2.inject_index_ptr(ptr);
+    }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        self.0.mark_glides(old.map(|o| &o.0), generation, ids);
+        self.1.mark_glides(old.map(|o| &o.1), generation, ids);
+        self.2.mark_glides(old.map(|o| &o.2), generation, ids);
     }
 }
 
@@ -771,6 +873,12 @@ impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect> Connect for (T1, T2, T3
         self.1.inject_index_ptr(ptr);
         self.2.inject_index_ptr(ptr);
         self.3.inject_index_ptr(ptr);
+    }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        self.0.mark_glides(old.map(|o| &o.0), generation, ids);
+        self.1.mark_glides(old.map(|o| &o.1), generation, ids);
+        self.2.mark_glides(old.map(|o| &o.2), generation, ids);
+        self.3.mark_glides(old.map(|o| &o.3), generation, ids);
     }
 }
 
@@ -804,6 +912,13 @@ impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect, T5: Connect> Connect
         self.2.inject_index_ptr(ptr);
         self.3.inject_index_ptr(ptr);
         self.4.inject_index_ptr(ptr);
+    }
+    fn mark_glides(&mut self, old: Option<&Self>, generation: u64, ids: &dyn PreviousIds) {
+        self.0.mark_glides(old.map(|o| &o.0), generation, ids);
+        self.1.mark_glides(old.map(|o| &o.1), generation, ids);
+        self.2.mark_glides(old.map(|o| &o.2), generation, ids);
+        self.3.mark_glides(old.map(|o| &o.3), generation, ids);
+        self.4.mark_glides(old.map(|o| &o.4), generation, ids);
     }
 }
 
@@ -1217,6 +1332,7 @@ impl Connect for Wav {
     fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {
         // No cables — nothing to back-point.
     }
+    fn mark_glides(&mut self, _old: Option<&Self>, _generation: u64, _ids: &dyn PreviousIds) {}
 }
 
 impl std::fmt::Debug for Wav {
@@ -1812,6 +1928,7 @@ impl Connect for Buffer {
         // Buffer reads `BufferData` directly via cached pointer, not via a
         // sample-indexed cable. No back-pointer needed.
     }
+    fn mark_glides(&mut self, _old: Option<&Self>, _generation: u64, _ids: &dyn PreviousIds) {}
 }
 
 impl std::fmt::Debug for Buffer {
@@ -2648,11 +2765,42 @@ impl Connect for Signal {
             *index_ptr = ptr;
         }
     }
+    fn mark_glides(&mut self, _old: Option<&Self>, _generation: u64, _ids: &dyn PreviousIds) {}
 }
 
 impl PartialEq for Box<dyn Sampleable> {
     fn eq(&self, other: &Self) -> bool {
         self.get_id() == other.get_id()
+    }
+}
+
+impl Signal {
+    /// Whether this signal, in the incoming patch, reads the same source as
+    /// `old` did in the outgoing one: the same constant, or a cable from the
+    /// same module (across renames), port and channel.
+    pub(crate) fn same_source(&self, old: &Signal, ids: &dyn PreviousIds) -> bool {
+        match (self, old) {
+            (Signal::Volts(a), Signal::Volts(b)) => a.to_bits() == b.to_bits(),
+            (
+                Signal::Cable {
+                    module,
+                    port,
+                    channel,
+                    ..
+                },
+                Signal::Cable {
+                    module: old_module,
+                    port: old_port,
+                    channel: old_channel,
+                    ..
+                },
+            ) => {
+                channel == old_channel
+                    && port == old_port
+                    && ids.previous(module) == Some(old_module.as_str())
+            }
+            _ => false,
+        }
     }
 }
 
@@ -4184,5 +4332,93 @@ mod table_tests {
             }
             _ => panic!("expected Pipe"),
         }
+    }
+}
+
+#[cfg(test)]
+mod swap_glide_tests {
+    use super::{GlideMark, SwapGlide};
+
+    const SR: f32 = 48_000.0;
+
+    const fn mark(generation: u64, changed: bool) -> GlideMark {
+        GlideMark {
+            generation,
+            changed: if changed { u64::MAX } else { 0 },
+            channel: 0,
+            channels: 1,
+        }
+    }
+
+    fn step(g: &mut SwapGlide, x: f32, m: GlideMark) -> f32 {
+        g.update(x, m, SR);
+        **g
+    }
+
+    #[test]
+    fn passes_modulation_through_unfiltered() {
+        let mut g = SwapGlide::default();
+        for i in 0..1000 {
+            let x = if (i / 7) % 2 == 0 { -5.0 } else { 5.0 };
+            assert_eq!(step(&mut g, x, mark(0, true)), x);
+        }
+    }
+
+    #[test]
+    fn fresh_module_starts_on_input() {
+        let mut g = SwapGlide::default();
+        assert_eq!(step(&mut g, 3.0, mark(1, true)), 3.0);
+    }
+
+    #[test]
+    fn changed_swap_continues_from_last_value_and_converges() {
+        let mut g = SwapGlide::default();
+        step(&mut g, 0.0, mark(0, true));
+        assert!(g.will_glide(mark(1, true)));
+        let mut prev = step(&mut g, 4.0, mark(1, true));
+        assert_eq!(prev, 0.0);
+        assert!(g.gliding());
+        for _ in 0..(SR as usize / 20) {
+            let y = step(&mut g, 4.0, mark(1, true));
+            assert!(y >= prev && y <= 4.0);
+            prev = y;
+        }
+        assert_eq!(prev, 4.0);
+        assert!(!g.gliding());
+    }
+
+    #[test]
+    fn unchanged_swap_passes_the_jump_through() {
+        let mut g = SwapGlide::default();
+        step(&mut g, 0.0, mark(0, true));
+        assert!(!g.will_glide(mark(1, false)));
+        assert_eq!(step(&mut g, 4.0, mark(1, false)), 4.0);
+    }
+
+    #[test]
+    fn removing_a_param_glides_to_its_default() {
+        let mut g = SwapGlide::default();
+        step(&mut g, 3.0, mark(4, false));
+        assert_eq!(step(&mut g, 0.0, GlideMark::ABSENT), 3.0);
+        assert!(g.gliding());
+    }
+
+    #[test]
+    fn glide_preserves_modulation_on_top_of_offset() {
+        let mut g = SwapGlide::default();
+        step(&mut g, 0.0, mark(0, true));
+        let a = step(&mut g, 4.0, mark(1, true));
+        let b = step(&mut g, 5.0, mark(1, true));
+        let c = step(&mut g, 4.0, mark(1, true));
+        assert!(b - a > 0.9);
+        assert!(b - c > 0.9);
+    }
+
+    #[test]
+    fn non_finite_input_holds_the_current_value() {
+        let mut g = SwapGlide::default();
+        assert_eq!(step(&mut g, f32::NAN, mark(0, true)), 0.0);
+        step(&mut g, 2.0, mark(0, true));
+        assert_eq!(step(&mut g, f32::INFINITY, mark(0, true)), 2.0);
     }
 }

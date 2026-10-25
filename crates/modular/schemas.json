@@ -10191,7 +10191,7 @@
   },
   {
     "name": "$lpf",
-    "documentation": "Lowpass filter that attenuates frequencies above the cutoff point.\n\nUse it to tame bright timbres, create bass-heavy sounds, or build classic\nsubtractive synth patches. Sweeping the cutoff with an envelope or LFO\nproduces the familiar filter-sweep effect.\n\n- **cutoff** — set in V/Oct (0 V = C4). Accepts modulation for filter sweeps.\n- **resonance** — boosts frequencies near the cutoff (0–5). High values\n  produce a ringing peak; very high values cause self-oscillation.\n\n```js\n// subtractive bass: saw through a lowpass with envelope on cutoff\nlet env = $adsr($pPulse($clock[0]), { attack: 0.01, decay: 0.3, sustain: 1, release: 0.4 })\n$lpf($saw('c2'), env.range('200hz', '2000hz'))\n```",
+    "documentation": "Lowpass filter that attenuates frequencies above the cutoff point.\n\nUse it to tame bright timbres, create bass-heavy sounds, or build classic\nsubtractive synth patches. Sweeping the cutoff with an envelope or LFO\nproduces the familiar filter-sweep effect.\n\n- **cutoff** — set in V/Oct (0 V = C4). Accepts modulation for filter sweeps.\n- **resonance** — boosts frequencies near the cutoff (0–5). High values\n  produce a ringing peak, but the filter never self-oscillates; use\n  `$jup6f` for a filter that does.\n\n```js\n// subtractive bass: saw through a lowpass with envelope on cutoff\nlet env = $adsr($pPulse($clock[0]), { attack: 0.01, decay: 0.3, sustain: 1, release: 0.4 })\n$lpf($saw('c2'), env.range('200hz', '2000hz'))\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "LowpassFilterParams",

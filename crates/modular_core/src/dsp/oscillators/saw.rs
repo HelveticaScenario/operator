@@ -7,7 +7,7 @@ use crate::{
         utils::{SchmittTrigger, wrap_phase_f64},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -62,7 +62,7 @@ struct ChannelState {
     /// (which divides a difference of near-equal integral values by the phase
     /// increment) stays well-conditioned at low, LFO-rate frequencies.
     phase: f64,
-    shape: Clickless,
+    shape: SwapGlide,
     /// False until the voice has seeded its starting phase to a zero crossing
     /// (done on the first `update`). A voice whose state was carried over by
     /// `transfer_state_from` arrives with this already set, so it keeps its
@@ -119,9 +119,10 @@ impl SawOscillator {
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
-            // Update shape with smoothing - clamp to valid range
             let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
-            state.shape.update(shape_val);
+            state
+                .shape
+                .update(shape_val, self.params.shape.glide_mark(ch), sample_rate);
 
             let pitch = self.params.freq.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);

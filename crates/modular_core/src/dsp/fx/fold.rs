@@ -10,7 +10,7 @@ use crate::dsp::fx::enosc_tables::{aa_fold, lookup_fold};
 use crate::dsp::utils::fade::{DEFAULT_FADE_IN_SECS, FadeIn};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +36,7 @@ struct FoldOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    amount: Clickless,
+    amount: SwapGlide,
     /// Onset fade-in — suppresses the click when the module is first added
     /// (`amount` snaps to its full value on the first sample, so the output
     /// would otherwise jump from silence).
@@ -81,8 +81,9 @@ impl Fold {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.get_value(ch);
 
-            // Smooth amount parameter to avoid clicks
-            state.amount.update(amount_raw);
+            state
+                .amount
+                .update(amount_raw, self.params.amount.glide_mark(ch), sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1] for table lookup
@@ -117,7 +118,7 @@ message_handlers!(impl Fold {});
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{OutputStruct, Signal};
+    use crate::types::{Connect, OutputStruct, Signal};
 
     fn make(input: f32, amount: f32) -> Fold {
         let mut outputs = FoldOutputs::default();
@@ -143,14 +144,18 @@ mod tests {
     /// constant input means any jump is a transition artifact, not signal.
     fn max_step_through_threshold(input: f32, target_amount: f32) -> f32 {
         let mut fold = make(input, 0.0);
-        // Settle the amount smoother at 0.
+        // Settle at amount 0.
         for _ in 0..256 {
             fold.update(48000.0);
         }
         let mut prev = fold.outputs.sample.get(0);
         let mut max_step = 0.0_f32;
-        // Step the param; the Clickless smoother drives the transition.
+        // Step the param through a patch swap, whose glide drives the transition.
+        let before = fold.params.amount.clone();
         fold.params.amount = PolySignal::mono(Signal::Volts(target_amount));
+        fold.params
+            .amount
+            .mark_glides(Some(&before), 1, &crate::types::SameIds);
         for _ in 0..4000 {
             fold.update(48000.0);
             let cur = fold.outputs.sample.get(0);

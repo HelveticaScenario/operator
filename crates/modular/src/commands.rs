@@ -5,7 +5,7 @@
 
 use modular_core::patch::Patch;
 use modular_core::profiling::ModuleProfileAccum;
-use modular_core::types::{Message, ModuleIdRemap, Sampleable, ScopeBufferKey};
+use modular_core::types::{Message, ModuleIdRemap, PreviousIds, Sampleable, ScopeBufferKey};
 use napi::Error;
 use napi_derive::napi;
 use rtrb::PushError;
@@ -143,6 +143,21 @@ impl PatchUpdate {
             self.transfer_sources
                 .entry(remap.from.clone())
                 .or_insert(None);
+        }
+    }
+}
+
+/// [`PatchUpdate::transfer_sources`] read as a [`PreviousIds`]: each incoming
+/// module id resolves to the live module it takes state from — its remap
+/// source, nothing when flagged fresh, else itself.
+pub struct TransferSourceIds<'a>(pub &'a HashMap<String, Option<String>>);
+
+impl PreviousIds for TransferSourceIds<'_> {
+    fn previous<'b>(&'b self, id: &'b str) -> Option<&'b str> {
+        match self.0.get(id) {
+            Some(Some(old_id)) => Some(old_id.as_str()),
+            Some(None) => None,
+            None => Some(id),
         }
     }
 }

@@ -104,7 +104,16 @@ mod tests {
 
         for i in 0..4000 {
             let input = PolySignal::mono(Signal::Volts(sig(i)));
-            run::<FoldShaper>(1, &input, &drive, FoldMode::Dual, &state, &mut ch, &mut out);
+            run::<FoldShaper>(
+                1,
+                &input,
+                &drive,
+                FoldMode::Dual,
+                &state,
+                &mut ch,
+                &mut out,
+                sr,
+            );
         }
         for i in 0..256 {
             let input = PolySignal::mono(Signal::Volts(sig(4000 + i)));
@@ -116,6 +125,7 @@ mod tests {
                 &state,
                 &mut ch,
                 &mut out,
+                sr,
             );
             let y = out.get(0);
             assert!(

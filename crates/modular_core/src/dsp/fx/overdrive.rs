@@ -13,7 +13,7 @@ use crate::dsp::utils::dc_blocker::{DEFAULT_DC_BLOCK_FC_HZ, DcBlocker};
 use crate::dsp::utils::halfband::{Halfband2xDown, Halfband2xUp};
 use crate::dsp::utils::one_pole::OnePole;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 /// Saturation algorithm.
 #[derive(Clone, Copy, Debug, Default, Deserr, JsonSchema, PartialEq, Eq, Connect)]
@@ -58,8 +58,8 @@ struct OverdriveOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    drive: Clickless,
-    tone: Clickless,
+    drive: SwapGlide,
+    tone: SwapGlide,
     up: Halfband2xUp,
     down: Halfband2xDown,
     tilt_pre: OnePole,
@@ -119,7 +119,7 @@ impl Overdrive {
         }
     }
 
-    fn update(&mut self, _sample_rate: f32) {
+    fn update(&mut self, sample_rate: f32) {
         let dc_coeff = self.state.dc_block_coeff;
         let mode = self.params.mode.unwrap_or_default();
         let num_channels = self.channel_count();
@@ -131,8 +131,12 @@ impl Overdrive {
             let drive_raw = self.params.drive.get_value(ch);
             let tone_raw = self.params.tone.value_or(ch, 0.0);
 
-            state.drive.update(drive_raw);
-            state.tone.update(tone_raw);
+            state
+                .drive
+                .update(drive_raw, self.params.drive.glide_mark(ch), sample_rate);
+            state
+                .tone
+                .update(tone_raw, self.params.tone.glide_mark(ch), sample_rate);
             let drive = (*state.drive).clamp(0.0, 5.0);
             let tone = (*state.tone).clamp(-5.0, 5.0);
 

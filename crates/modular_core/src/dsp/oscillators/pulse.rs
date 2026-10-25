@@ -7,7 +7,7 @@ use crate::{
         utils::{SchmittTrigger, wrap_phase},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -51,7 +51,8 @@ struct PulseOscillatorOutputs {
 #[derive(Default, Clone, Copy)]
 struct PulseChannelState {
     phase: f32,
-    width: Clickless,
+    width: SwapGlide,
+    pwm: SwapGlide,
     /// Edge detector for the sync input.
     sync_schmitt: SchmittTrigger,
     /// Previous sync-input sample, for subsample edge interpolation.
@@ -88,9 +89,17 @@ impl PulseOscillator {
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
-            let base_width = self.params.width.value_or(ch, 2.5);
-            let pwm = self.params.pwm.value_or(ch, 0.0);
-            state.width.update((base_width + pwm).clamp(0.0, 5.0));
+            state.width.update(
+                self.params.width.value_or(ch, 2.5),
+                self.params.width.glide_mark(ch),
+                sample_rate,
+            );
+            state.pwm.update(
+                self.params.pwm.value_or(ch, 0.0),
+                self.params.pwm.glide_mark(ch),
+                sample_rate,
+            );
+            let width = (*state.width + *state.pwm).clamp(0.0, 5.0);
 
             let pitch = self.params.freq.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);
@@ -98,7 +107,7 @@ impl PulseOscillator {
             let phase_increment = frequency / sample_rate;
 
             // Pulse width (0.0 to 1.0, 0.5 is square wave)
-            let pulse_width = (*state.width / 5.0).clamp(0.01, 0.99);
+            let pulse_width = (width / 5.0).clamp(0.01, 0.99);
 
             state.phase = wrap_phase(state.phase + phase_increment);
 
