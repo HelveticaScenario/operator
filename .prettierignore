@@ -24,3 +24,7 @@ src/main/dsl/miniNotation/grammar.generated.ts
 crates/modular_core/src/pattern_system/__fixtures__/peggy_parser_parity.json
 # Tool state written by beads.
 .beads
+
+# Written verbatim by changie from .changes/; release notes are published as-is.
+CHANGELOG.md
+.changes

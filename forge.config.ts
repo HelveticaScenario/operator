@@ -265,7 +265,9 @@ const config: ForgeConfig = {
                 name: 'operator',
             },
             prerelease: false,
-            draft: false,
+            // The release workflow creates the draft and publishes it once
+            // every platform has uploaded.
+            draft: true,
         }),
     ],
     plugins: [

@@ -2035,6 +2035,7 @@ __metadata:
     "@types/react": "npm:^19.2.14"
     "@types/react-dom": "npm:^19.2.3"
     "@webgpu/types": "npm:^0.1.74"
+    changie: "npm:^1.26.0"
     cmdk: "npm:^1.1.1"
     concurrently: "npm:^9.2.1"
     electron: "npm:39.2.7"
@@ -5370,6 +5371,15 @@ __metadata:
   version: 5.6.2
   resolution: "chalk@npm:5.6.2"
   checksum: 10c0/99a4b0f0e7991796b1e7e3f52dceb9137cae2a9dfc8fc0784a550dc4c558e15ab32ed70b14b21b52beb2679b4892b41a0aa44249bcb996f01e125d58477c6976
+  languageName: node
+  linkType: hard
+
+"changie@npm:^1.26.0":
+  version: 1.26.0
+  resolution: "changie@npm:1.26.0"
+  bin:
+    changie: npm/changie.js
+  checksum: 10c0/b2ca06f09f3e049b2351cdf34a32fc6ef0c35063418f46db3315dab0047cc25963b8a923c82c4729de06ab18443eddc4518f5efeb8fa97c7343f05f7f161d206
   languageName: node
   linkType: hard
 
