@@ -170,5 +170,6 @@ Models to emulate: `crates/modular_core/src/types.rs` (safety invariants), `src/
 - **Node 24.12.0 / Yarn 4.12.0** pinned via Volta.
 - **Rust edition 2024**.
 - **Release targets**: macOS arm64 + x64, Windows x64, Linux x64. x86_64 builds assume `x86-64-v2` (root `.cargo/config.toml`), so benchmark that build, never `-C target-cpu=native`.
+- **sccache** (when it is the rustc wrapper) runs in client-side mode via `[env]` in the root `.cargo/config.toml`, so killing a build cannot drain the shared server's jobserver tokens. Keep that setting; sccache ignores it while `SCCACHE_ERROR_LOG` is set. If builds still sit at 0% CPU on every worktree, run `sccache --stop-server`, which restores the pool.
 - **Husky pre-commit hooks** run Prettier on `*.{ts,tsx,js,jsx,mjs,json,css,md}` and `cargo fmt` on Rust files.
 - **Vitest** for JS/TS tests, **Playwright** for E2E, **cargo test** for Rust.

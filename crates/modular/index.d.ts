@@ -512,6 +512,11 @@ export interface OutputSchema {
   minValue?: number
   /** The maximum value of the raw output range (before any remapping) */
   maxValue?: number
+  /**
+   * Fixed channel count of a polyphonic output; `None` follows the
+   * module's derived channel count.
+   */
+  channels?: number
 }
 
 export interface PatchGraph {
@@ -531,6 +536,8 @@ export interface Scope {
   triggerThreshold?: [number, ScopeMode]
   /** Voltage range for display (default [-5.0, 5.0]). The scope displays from range[0] to range[1]. */
   range: [number, number]
+  /** Draw each channel in its own scope instead of overlaying them. */
+  split?: ScopeSplit
 }
 
 export interface ScopeBufferKey {
@@ -550,12 +557,24 @@ export interface ScopeChannel {
 export type ScopeMode =  'Wait'|
 'Roll';
 
+/** How a split scope arranges its per-channel views. */
+export type ScopeSplit = /** Stacked top to bottom at full width. */
+'vertical'|
+/** Side by side in equal shares of the width. */
+'horizontal';
+
 /** Statistics computed from scope buffer data */
 export interface ScopeStats {
   min: number
   max: number
   peakToPeak: number
   readOffset: number
+  /**
+   * How far, in buffer samples, the trigger crossing lies before the first
+   * sample (0 to 1); 0 for an untriggered scope. Drawing each sample this
+   * much later pins the crossing to the same spot every frame.
+   */
+  triggerOffset: number
 }
 
 export interface SignalParamSchema {

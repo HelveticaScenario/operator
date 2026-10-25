@@ -112,6 +112,42 @@ fn lpf_chain(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
+/// `$saw` into a 50-stage `$apf` whose cutoff an audio-rate `$sine` sweeps,
+/// so its coefficients are recomputed every sample.
+fn apf_swept_modules(channels: usize) -> Vec<(String, &'static str, Value)> {
+    vec![
+        (
+            "src".to_string(),
+            "$saw",
+            json!({ "freq": poly(0.0, channels) }),
+        ),
+        (
+            "lfo".to_string(),
+            "$sine",
+            json!({ "freq": poly(-2.0, channels) }),
+        ),
+        (
+            "apf".to_string(),
+            "$apf",
+            json!({
+                "input": poly_cable("src", "output", channels),
+                "cutoff": poly_cable("lfo", "output", channels),
+                "stages": 50.0,
+                "resonance": 2.0,
+            }),
+        ),
+    ]
+}
+
+fn apf_swept(channels: usize) -> BenchPatch {
+    BenchPatch::new(apf_swept_modules(channels))
+}
+
+/// [`apf_swept`] in Sample mode, as in a feedback cycle.
+fn apf_swept_sample(channels: usize) -> BenchPatch {
+    BenchPatch::with_mode(apf_swept_modules(channels), ProcessingMode::Sample)
+}
+
 /// `$saw` into a chain of 32 `$scaleAndShift`s with constant scale and
 /// shift: almost no DSP, so this measures per-module engine overhead.
 fn scale_chain(channels: usize) -> BenchPatch {
@@ -286,7 +322,8 @@ fn comp_chain(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
-/// Two seconds of deterministic white noise at 48 kHz, for `$grains`.
+/// Two seconds of deterministic white noise at 48 kHz, for `$grains` and
+/// `$granularSampler`.
 fn noise_wav() -> Arc<WavData> {
     let mut state = 1u32;
     let samples = (0..96_000)
@@ -341,6 +378,28 @@ fn grains(channels: usize) -> BenchPatch {
                 "gate": poly_cable(&gate, "output", channels),
                 "density": density,
                 "length": length,
+            }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
+/// 4 `$granularSampler` clouds, triggered at 5, 20, 80 and 320 Hz.
+fn granular(channels: usize) -> BenchPatch {
+    let mut modules = Vec::new();
+    for (i, rate) in [5.0f32, 20.0, 80.0, 320.0].iter().enumerate() {
+        let trigger = format!("trigger{i}");
+        modules.push((
+            trigger.clone(),
+            "$pulse",
+            json!({ "freq": poly((rate / 261.625_58).log2(), channels) }),
+        ));
+        modules.push((
+            format!("grains{i}"),
+            "$granularSampler",
+            json!({
+                "wav": { "type": "wav_ref", "path": "noise", "channels": 1 },
+                "trigger": poly_cable(&trigger, "output", channels),
             }),
         ));
     }
@@ -430,20 +489,73 @@ fn video_taps(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
+/// `$saw` into a chain of 32 `_erratic`s. With `modulated`, speed follows an
+/// `$sine` and a `$pulse` triggers the hold; otherwise every setting is a
+/// constant.
+fn erratic_chain(channels: usize, modulated: bool) -> BenchPatch {
+    let mut modules = vec![
+        (
+            "src".to_string(),
+            "$saw",
+            json!({ "freq": poly(0.0, channels) }),
+        ),
+        (
+            "lfo".to_string(),
+            "$sine",
+            json!({ "freq": poly(-4.0, channels) }),
+        ),
+        (
+            "gate".to_string(),
+            "$pulse",
+            json!({ "freq": poly(-3.0, channels) }),
+        ),
+    ];
+    for i in 0..32 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("e{}", i - 1)
+        };
+        let mut params = json!({
+            "input": poly_cable(&prev, "output", channels),
+            "amount": 0.5, "speed": 2.5, "bias": 1.0, "clamp": true,
+        });
+        if modulated {
+            params["speed"] = poly_cable("lfo", "output", channels);
+            params["trigger"] = poly_cable("gate", "output", channels);
+        }
+        modules.push((format!("e{i}"), "_erratic", params));
+    }
+    BenchPatch::new(modules)
+}
+
+fn erratic_constant(channels: usize) -> BenchPatch {
+    erratic_chain(channels, false)
+}
+
+fn erratic_modulated(channels: usize) -> BenchPatch {
+    erratic_chain(channels, true)
+}
+
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 12] = [
+    let cases: [(&str, fn(usize) -> BenchPatch); 15] = [
         ("wide_mix_sample_160", wide_mix_sample),
         ("remap_chain_32", remap_chain),
         ("wide_mix_160", wide_mix),
         ("scale_fallback_32", scale_fallback),
         ("scale_chain_32", scale_chain),
         ("lpf_chain_32", lpf_chain),
+        ("apf_swept_50", apf_swept),
+        ("apf_swept_sample_50", apf_swept_sample),
         ("voices_8", voices),
         ("comp_chain_8", comp_chain),
         ("grains_4", grains),
+        ("granular_4", granular),
         ("wavetable_8", wavetables),
         ("eq_8", eqs),
         ("video_tap_16", video_taps),
+        ("erratic_constant_32", erratic_constant),
+        ("erratic_modulated_32", erratic_modulated),
     ];
     for (name, build) in cases {
         let mut group = c.benchmark_group(name);

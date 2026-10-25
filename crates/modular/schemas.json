@@ -176,6 +176,197 @@
     "positionalArgs": []
   },
   {
+    "name": "$swell",
+    "documentation": "Ocean swell as CV: the surface of a simulated sea, read at a fixed point.\n\nThe sea sums `waves` Gerstner waves. Each moves the water in circles rather\nthan just up and down, which bunches the surface into sharp crests between\nwide, flat troughs — the shape of real swell, set by `steepness`. The first\nwave rolls at `freq`; `chop` spreads the others above it, so their crests\ndrift in and out of line and the sea arrives in sets, with the occasional\nwave far bigger than the rest. `spread` scatters their directions.\n\n- **height** (default) — surface height, ±5V. It reaches ±5V only when\n  every wave lines up, so a sea with `chop` above 0 usually stays inside it.\n- **tilt** — how the surface leans along the swell, the way a moored boat\n  pitches: positive while the water rises, negative while it falls. A sine\n  at `steepness` 0; when steep, a sawtooth that snaps down at each crest.\n- **roll** — the sideways lean from waves arriving off-axis. Silent at\n  `spread` 0, and busier as `spread` and `chop` rise.\n\nEvery input can be modulated live: the waves bend to the new values without\nrestarting. Each channel is its own sea.\n\n## Example\n\n```js\n// A slow, steep swell sweeping a filter\n$lpf($saw('a1'), $swell('0.1hz', { steepness: 4 }).range('200hz', '2000hz')).out()\n\n// A choppy, confused sea: the swell's lean swaying a sine's level\nconst sea = $swell('0.2hz', { chop: 4, spread: 5, waves: 12 })\n$sine('c3').amp(sea.tilt.range(0, 5)).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SwellParams",
+      "type": "object",
+      "properties": {
+        "chop": {
+          "description": "spectral width: the other waves sit up to `chop / 2` octaves above `freq`.\n0 is one clean, periodic swell; higher values roll in sets and add chop",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "dominant swell frequency in V/Oct (use `$hz()` or a value like `'0.1hz'`)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "seed": {
+          "description": "picks the sea: each seed, and each channel, places the waves at\ndifferent frequencies and directions",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "spread": {
+          "description": "directional spread: 0 sends every wave the same way, 5 brings them from\nevery direction (a confused sea)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "steepness": {
+          "description": "crest sharpness: 0 rolls as a sine, 5 peaks into sharp crests over wide, flat troughs",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "waves": {
+          "description": "number of wave components (1–16); waves added or removed by a patch\nupdate fade over one swell period",
+          "type": "integer",
+          "format": "uint",
+          "default": 6,
+          "maximum": 16,
+          "minimum": 1
+        }
+      },
+      "required": [
+        "freq"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "height",
+        "description": "surface height at a fixed point, ±5V",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tilt",
+        "description": "lean along the swell: positive while the water rises, ±5V",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "roll",
+        "description": "lean across the swell from waves arriving off-axis, ±5V",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "freq",
+        "description": "dominant swell frequency in V/Oct (use `$hz()` or a value like `'0.1hz'`)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "steepness",
+        "description": "crest sharpness: 0 rolls as a sine, 5 peaks into sharp crests over wide, flat troughs",
+        "signalType": "control",
+        "defaultValue": 3.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "chop",
+        "description": "spectral width: the other waves sit up to `chop / 2` octaves above `freq`.\n0 is one clean, periodic swell; higher values roll in sets and add chop",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "spread",
+        "description": "directional spread: 0 sends every wave the same way, 5 brings them from\nevery direction (a confused sea)",
+        "signalType": "control",
+        "defaultValue": 1.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "freq"
+      }
+    ]
+  },
+  {
     "name": "$signal",
     "documentation": "Utility module for routing, naming, and exposing signals in a patch.",
     "paramsSchema": {
@@ -897,6 +1088,3666 @@
       }
     ],
     "channels": 2
+  },
+  {
+    "name": "$tr808.kick",
+    "documentation": "TR-808 bass drum.\n\nA circuit model of the 808's deep, booming kick: a low, round ring at ≈49.5\nHz with a click at the attack and a pitch that sighs down as it rings.\n**decay** sets how long it booms, **tone** how much click comes through,\n**freq** its pitch, and **accent** how hard it hits.\n\nAs on the 808, a hit that lands on a still-ringing one builds on it, so long\ndecays at fast tempos swing in level from hit to hit; **restart** starts\nevery hit from rest instead.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**. Near the top of the **freq** range the drum overdrives, so accent adds\nless there.\n\n```js\n$tr808.kick($clock.beatTrigger, { decay: 4 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Bd808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud, with more pitch sigh (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.09 s to\n≈3.8 s (default 2.5, ≈0.6 s)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈49.5 Hz (default -2.4035)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "tone": {
+          "description": "tone control, 0–5 V: from a dull thud to a bright click at the attack\n(default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud, with more pitch sigh (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "tone control, 0–5 V: from a dull thud to a bright click at the attack\n(default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.09 s to\n≈3.8 s (default 2.5, ≈0.6 s)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈49.5 Hz (default -2.4035)",
+        "signalType": "pitch",
+        "defaultValue": -2.4035,
+        "minValue": -3.5,
+        "maxValue": -1.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.snare",
+    "documentation": "TR-808 snare drum.\n\nA circuit model of the 808's snare: two drum tones near 250 and 500 Hz under\na burst of bright noise. **tone** blends from the low tone to the high one,\n**snappy** sets how much noise, **freq** the pitch, and **accent** how hard\nit hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.snare($clock.beatTrigger, { snappy: 4 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Sd808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch of the low tone in V/Oct, the high one following; stock is ≈250 Hz\n(default -0.0678)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "snappy": {
+          "description": "snappy control, 0–5 V: how loud and long the noise rattles over the\ntones (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "tone control, 0–5 V: blends from the low tone to the high one (default\n2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "tone control, 0–5 V: blends from the low tone to the high one (default\n2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "snappy",
+        "description": "snappy control, 0–5 V: how loud and long the noise rattles over the\ntones (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch of the low tone in V/Oct, the high one following; stock is ≈250 Hz\n(default -0.0678)",
+        "signalType": "pitch",
+        "defaultValue": -0.0678,
+        "minValue": -1.5,
+        "maxValue": 1.5
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.rimShot",
+    "documentation": "TR-808 rim shot.\n\nA circuit model of the 808's rim shot: a bright, woody crack, over in about\n10 ms, built from two tones near 1.8 kHz and 450 Hz. **freq** sets its pitch\nand **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.rimShot($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Rs808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch of the upper tone in V/Oct, the lower one following; stock is\n≈1.79 kHz (default 2.771)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch of the upper tone in V/Oct, the lower one following; stock is\n≈1.79 kHz (default 2.771)",
+        "signalType": "pitch",
+        "defaultValue": 2.771,
+        "minValue": 1.5,
+        "maxValue": 4.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.claves",
+    "documentation": "TR-808 claves.\n\nA circuit model of the 808's claves: a short, pure wooden click ringing at\n≈2.5 kHz. **decay** sets how long it rings, **freq** its pitch, and\n**accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.claves($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cl808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the claves ring, from ≈0.025 s to\n≈0.23 s (default 2.5, ≈0.075 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈2.53 kHz (default 3.273)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈2.53 kHz (default 3.273)",
+        "signalType": "pitch",
+        "defaultValue": 3.273,
+        "minValue": 1.5,
+        "maxValue": 4.5
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the claves ring, from ≈0.025 s to\n≈0.23 s (default 2.5, ≈0.075 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.cowbell",
+    "documentation": "TR-808 cowbell.\n\nA circuit model of the 808's cowbell: two square waves near 540 and 800 Hz\nthrough a band-pass filter, for its clanking, slightly sour clang. **freq**\nsets the pitch and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.cowbell($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cb808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch of the lower tone in V/Oct, the higher one following; stock is 540\nHz against 800 Hz (default 1.0454)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the bell",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the bell",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch of the lower tone in V/Oct, the higher one following; stock is 540\nHz against 800 Hz (default 1.0454)",
+        "signalType": "pitch",
+        "defaultValue": 1.0454,
+        "minValue": -0.5,
+        "maxValue": 2.5
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.clap",
+    "documentation": "TR-808 hand clap.\n\nA circuit model of the 808's hand clap: bursts of filtered noise in quick\nsuccession, like several hands clapping at once, over a softer noise tail.\n**accent** makes it louder and its tail longer.\n\nAn unaccented clap peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.clap($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cp808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a longer tail (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a clap still sounding over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise each clap runs into the last, as\non the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges clap",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges clap",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a longer tail (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.maracas",
+    "documentation": "TR-808 maracas.\n\nA circuit model of the 808's maracas: a short shake of high, hissing noise.\n**accent** makes it louder and draws it out.\n\nAn unaccented shake peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.maracas($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Ma808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the shake: up to\ntwice as loud, and drawn out (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a shake still sounding over 2 ms as the next one strikes, so\nevery shake starts from rest; otherwise each shake runs into the last,\nas on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges shake the maracas",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges shake the maracas",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the shake: up to\ntwice as loud, and drawn out (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.cymbal",
+    "documentation": "TR-808 cymbal.\n\nA circuit model of the 808's cymbal: six detuned square waves filtered into\na shimmering high band and a ringing lower one. **decay** sets how long the\nlower band rings, **tone** the balance from dark to bright, and **accent**\nhow hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr808.cymbal($clock.barTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cy808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the cymbal's lower band rings on (default\n2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "tone": {
+          "description": "tone control, 0–5 V: from dark, with the high band cut, to bright\n(default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the cymbal",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the cymbal",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the cymbal's lower band rings on (default\n2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "tone control, 0–5 V: from dark, with the high band cut, to bright\n(default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.hiHat",
+    "documentation": "TR-808 hi-hats, closed and open.\n\nA circuit model of the 808's hi-hats: the cymbal's six square waves filtered\nto a thin, bright band. **closed** strikes a short, tight hat and **open** a\nlonger one that rings for as long as **decay** sets; **accent** makes either\nhit harder.\n\nAs on the 808, a closed hit cuts off a ringing open hat. **cut** sets how\nhard: below 0 the open hat only ducks, and above 0 it stops dead.\n\nAn unaccented hit of either hat peaks near **±5 V** and a fully accented one\nnear **±10 V**.\n\n```js\n$tr808.hiHat($clock.beatTrigger, { open: $clock.barTrigger, cut: -2 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Hh808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike of either hat and held for the\nhit: up to twice as loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "closed": {
+          "description": "rising edges strike the closed hat, which also cuts off a ringing\nopen hat",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "cut": {
+          "description": "how hard a closed hit cuts off the open hat, −5 to 5 V: 0 is the 808's\nown cut, silencing it in about 100 ms; −5 lets it ring on, and 5\nsilences it in a few milliseconds (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the open hat rings (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike of either hat and hold them until\nthe next, as accent always is, so changes reach only the hits after\nthem (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "open": {
+          "description": "rising edges strike the open hat",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one on the same hat\nstrikes, so every hit starts from rest; otherwise each hit builds on the\nlast, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "closed"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "both hats",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "closed",
+        "description": "the closed hat alone",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "open",
+        "description": "the open hat alone",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "closed",
+        "description": "rising edges strike the closed hat, which also cuts off a ringing\nopen hat",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "open",
+        "description": "rising edges strike the open hat",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike of either hat and held for the\nhit: up to twice as loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the open hat rings (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cut",
+        "description": "how hard a closed hit cuts off the open hat, −5 to 5 V: 0 is the 808's\nown cut, silencing it in about 100 ms; −5 lets it ring on, and 5\nsilences it in a few milliseconds (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "closed"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.lowTom",
+    "documentation": "TR-808 low tom.\n\nA circuit model of the 808's low tom: a round, low ring at ≈87 Hz that\nstarts sharp and settles in pitch, over a soft puff of noise. **decay**\nsets how long it rings, **freq** its pitch, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Lt808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈87 Hz (default -1.5959)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈87 Hz (default -1.5959)",
+        "signalType": "pitch",
+        "defaultValue": -1.5959,
+        "minValue": -3.1,
+        "maxValue": -0.1
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.midTom",
+    "documentation": "TR-808 mid tom.\n\nA circuit model of the 808's mid tom: a round ring at ≈134 Hz that\nstarts sharp and settles in pitch, over a soft puff of noise. **decay**\nsets how long it rings, **freq** its pitch, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Mt808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.13 s to ≈1.2 s (default 2.5, ≈0.4 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈134 Hz (default -0.9623)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈134 Hz (default -0.9623)",
+        "signalType": "pitch",
+        "defaultValue": -0.9623,
+        "minValue": -2.46,
+        "maxValue": 0.54
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.13 s to ≈1.2 s (default 2.5, ≈0.4 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.highTom",
+    "documentation": "TR-808 high tom.\n\nA circuit model of the 808's high tom: a round ring at ≈182 Hz that\nstarts sharp and settles in pitch, over a soft puff of noise. **decay**\nsets how long it rings, **freq** its pitch, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Ht808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈182 Hz (default -0.5216)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈182 Hz (default -0.5216)",
+        "signalType": "pitch",
+        "defaultValue": -0.5216,
+        "minValue": -2.02,
+        "maxValue": 0.98
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.lowConga",
+    "documentation": "TR-808 low conga.\n\nA circuit model of the 808's low conga: a bright, hollow ring at ≈192 Hz\nthat starts sharp and settles in pitch. **decay** sets how long it\nrings, **freq** its pitch, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.lowConga($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Lc808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈192 Hz (default -0.4471)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈192 Hz (default -0.4471)",
+        "signalType": "pitch",
+        "defaultValue": -0.4471,
+        "minValue": -1.95,
+        "maxValue": 1.05
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.21 s to ≈1.9 s (default 2.5, ≈0.63 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.midConga",
+    "documentation": "TR-808 mid conga.\n\nA circuit model of the 808's mid conga: a bright, hollow ring at ≈276 Hz\nthat starts sharp and settles in pitch. **decay** sets how long it\nrings, **freq** its pitch, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.midConga($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Mc808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈276 Hz (default 0.0792)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈276 Hz (default 0.0792)",
+        "signalType": "pitch",
+        "defaultValue": 0.0792,
+        "minValue": -1.42,
+        "maxValue": 1.58
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr808.highConga",
+    "documentation": "TR-808 high conga.\n\nA circuit model of the 808's high conga: a bright, hollow ring at ≈405\nHz that starts sharp and settles in pitch. **decay** sets how long it\nrings, **freq** its pitch, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr808.highConga($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Hc808Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈405 Hz (default 0.629)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 808 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud, starting sharper (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈405 Hz (default 0.629)",
+        "signalType": "pitch",
+        "defaultValue": 0.629,
+        "minValue": -0.87,
+        "maxValue": 2.13
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings, from ≈0.1 s to ≈0.92 s (default 2.5, ≈0.31 s as on the 808)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.kick",
+    "documentation": "TR-909 bass drum.\n\nA circuit model of the 909's punchy kick: a rounded tone that sweeps down\nfrom about 300 Hz to rest near 56 Hz, with a click and a puff of noise at\nthe attack. **freq** sets the resting pitch, **sweep** how long the fall\ntakes, **attack** how loud the click is, **decay** how long it booms, and\n**accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.kick($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Bd909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attack": {
+          "description": "attack control, 0–5 V: how loud the click is (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum booms (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "resting pitch in V/Oct, the sweep following; stock is ≈56 Hz (default\n-2.2235)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "sweep": {
+          "description": "sweep control, 0–5 V: how long the pitch takes to fall to rest, the\n909's tune knob (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "resting pitch in V/Oct, the sweep following; stock is ≈56 Hz (default\n-2.2235)",
+        "signalType": "pitch",
+        "defaultValue": -2.2235,
+        "minValue": -3.7,
+        "maxValue": -0.7
+      },
+      {
+        "name": "sweep",
+        "description": "sweep control, 0–5 V: how long the pitch takes to fall to rest, the\n909's tune knob (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "attack",
+        "description": "attack control, 0–5 V: how loud the click is (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum booms (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.snare",
+    "documentation": "TR-909 snare drum.\n\nA circuit model of the 909's snare: a drum tone that bends up at the strike,\nunder a burst of noise. **freq** sets the pitch, **snappy** how loud the\nnoise is, **tone** how long it rings on, and **accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.snare($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Sd909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈148 Hz (default -0.8243)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the next, as\naccent always is, so changes reach only the hits after them (default\nfalse)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "snappy": {
+          "description": "snappy control, 0–5 V: how loud the noise is (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "tone control, 0–5 V: how long the noise rings on, from a short snap to a\nlong hiss (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈148 Hz (default -0.8243)",
+        "signalType": "pitch",
+        "defaultValue": -0.8243,
+        "minValue": -2.3,
+        "maxValue": 0.7
+      },
+      {
+        "name": "tone",
+        "description": "tone control, 0–5 V: how long the noise rings on, from a short snap to a\nlong hiss (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "snappy",
+        "description": "snappy control, 0–5 V: how loud the noise is (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.rimShot",
+    "documentation": "TR-909 rim shot.\n\nA circuit model of the 909's rim shot: a short, sharp, metallic click from\nthree tones rung together and clipped. **accent** makes it hit harder.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.rimShot($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Rs909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one strikes, so\nevery hit starts from rest; otherwise each hit builds on the last, as on\nthe 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the rim",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the rim",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit: up to twice\nas loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.clap",
+    "documentation": "TR-909 hand clap.\n\nA circuit model of the 909's hand clap: bursts of filtered noise in quick\nsuccession, like several hands clapping at once, over a swelling noise tail.\n**accent** makes it louder and swells the tail.\n\nAn unaccented clap peaks near **±5 V** and a fully accented one near **±10\nV**.\n\n```js\n$tr909.clap($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Cp909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a fuller tail (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart": {
+          "description": "fade out a clap still sounding over 2 ms as the next one strikes, so\nevery clap starts from rest; otherwise each clap runs into the last, as\non the 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges clap",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges clap",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the clap: up to twice\nas loud, with a fuller tail (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.lowTom",
+    "documentation": "TR-909 low tom.\n\nA circuit model of the 909's low tom: a deep tone that bends down from\nthe strike and grows gritty as it fades, over a puff of noise. **freq**\nsets the pitch, **decay** how long it rings, and **accent** how hard it\nhits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr909.lowTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Lt909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈61 Hz (default -2.0993)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈61 Hz (default -2.0993)",
+        "signalType": "pitch",
+        "defaultValue": -2.0993,
+        "minValue": -3.6,
+        "maxValue": -0.6
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.midTom",
+    "documentation": "TR-909 mid tom.\n\nThe 909's mid tom: the low tom's sound, pitched higher and shorter.\n**freq** sets the pitch, **decay** how long it rings, and **accent** how\nhard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr909.midTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Mt909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈75 Hz (default -1.8098)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈75 Hz (default -1.8098)",
+        "signalType": "pitch",
+        "defaultValue": -1.8098,
+        "minValue": -3.3,
+        "maxValue": -0.3
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tr909.highTom",
+    "documentation": "TR-909 high tom.\n\nThe 909's high tom: the low tom's sound, the highest and shortest of the\nthree. **freq** sets the pitch, **decay** how long it rings, and\n**accent** how hard it hits.\n\nAn unaccented hit peaks near **±5 V** and a fully accented one near\n**±10 V**.\n\n```js\n$tr909.highTom($clock.beatTrigger).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Ht909Params",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct; stock is ≈92 Hz (default -1.5143)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "sample the controls on each strike and hold them until the\nnext, as accent always is, so changes reach only the hits\nafter them (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "restart": {
+          "description": "fade out a hit still sounding over 2 ms as the next one\nstrikes, so every hit starts from rest; otherwise each hit\nbuilds on the last, as on the 909 (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "accent, 0–5 V, sampled at each strike and held for the hit:\nup to twice as loud (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct; stock is ≈92 Hz (default -1.5143)",
+        "signalType": "pitch",
+        "defaultValue": -1.5143,
+        "minValue": -3.0,
+        "maxValue": 0.0
+      },
+      {
+        "name": "decay",
+        "description": "decay control, 0–5 V: how long the drum rings (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
   },
   {
     "name": "$comp",
@@ -3086,6 +6937,1028 @@
     ]
   },
   {
+    "name": "$reverb",
+    "documentation": "Reverb from Mutable Instruments Beads, with a stereo output.\n\n`amount` sets both how much reverb you hear and how long it rings; at 0\nthe input passes through untouched. `size` makes the space bigger and\n`tone` makes the tail darken faster as it fades. Beads' own settings are\n`size` 0 and `tone` 1 for digital, 0 and 2 for clean tape, 2.5 and 2 for\nvintage, and 5 and 2 for dirty tape. The input passes through clean, so\nput `$granular` or `$wowFlutter` before it for their colour. Peaks above\n±5 V are limited.\n\n```js\n$reverb($saw('c3'), 4, { size: 5, tone: 2 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "BeadsReverbParams",
+      "type": "object",
+      "properties": {
+        "amount": {
+          "description": "how much reverb, and how long it rings (0–5, default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "audio input; even channels feed the left side and odd channels the\nright",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "size": {
+          "description": "room size; moving it while the reverb rings bends the tail's pitch\n(0–5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "how quickly the tail darkens, from bright at 0 to muffled at 5\n(default 1)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo output (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio input; even channels feed the left side and odd channels the\nright",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "amount",
+        "description": "how much reverb, and how long it rings (0–5, default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "size",
+        "description": "room size; moving it while the reverb rings bends the tail's pitch\n(0–5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "how quickly the tail darkens, from bright at 0 to muffled at 5\n(default 1)",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "amount"
+      }
+    ],
+    "channels": 2
+  },
+  {
+    "name": "$granular",
+    "documentation": "Granular processor from Mutable Instruments Beads: it records `input` and\nplays it back as grains, starting one on each rising edge at `trigger`.\n\nEach grain takes `time`, `size`, `shape`, `freq` and `spread` when it\nstarts, so for grain-to-grain variation modulate them with something\nsampled on the same trigger, such as `$sah`. Set `rootFreq` to the\npitch of the input and `freq` plays notes. `freeze` holds the recording\nso the grains keep replaying it.\n\nEach input channel gets its own voice. `output` is a stereo mix of every\nvoice, and `voices` gives each voice its own channel. Follow it with\n`$wowFlutter` and `$reverb` for the rest of Beads' sound.\n\n```js\nconst grains = $pulse('8hz')\n$granular($saw('a3'), grains, {\n  time: $sah($noise('white').range(0, 2), grains),\n  freq: $cycle($p('[c4, e4, g4] [b3, d4, g4]')),\n  rootFreq: 'a3',\n  width: 4,\n  spread: 2,\n  mix: 4,\n}).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GranularParams",
+      "type": "object",
+      "properties": {
+        "feedback": {
+          "description": "feeds the grains back into the recording, building up dense washes\n(0–5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freeze": {
+          "description": "while high, recording stops and grains keep playing the audio already\nheld",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "grain pitch; grains play at the input's own pitch when `freq` equals\n`rootFreq` (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "audio to record; each channel gets its own voice",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mix": {
+          "description": "dry/wet: 0 = input only, 5 = grains only (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "description": "recording character: digital, vintage, cleanTape or dirtyTape\n(default digital)",
+          "$ref": "#/$defs/GranularQuality"
+        },
+        "rootFreq": {
+          "description": "pitch of the input, so `freq` plays in tune (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shape": {
+          "description": "grain envelope: 0 = square, 1.67 = sharp attack, 3.33 = smooth,\n5 = reverse swell (default 3.33)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "grain length: 0 = shortest, 5 = longest; negative values play the\ngrains backwards (−5 to 5, default 2.75)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spread": {
+          "description": "random stereo position for each grain (0–5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "time": {
+          "description": "where grains start: 0 = the most recent audio, 5 = the oldest\n(default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "starts a grain on each rising edge",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "description": "spreads the voices across the stereo field: 0 = all centred, 5 =\nfirst voice hard left to last hard right (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "GranularQuality": {
+          "description": "Sound character, after Beads' four quality settings. Lower qualities\nsound darker and grittier and hold more audio.",
+          "oneOf": [
+            {
+              "description": "Clean, with 4 s of audio.",
+              "type": "string",
+              "const": "digital"
+            },
+            {
+              "description": "Slightly gritty early digital, with 8 s of audio.",
+              "type": "string",
+              "const": "vintage"
+            },
+            {
+              "description": "Darker, softer grains, with 10.7 s of audio.",
+              "type": "string",
+              "const": "cleanTape"
+            },
+            {
+              "description": "Lo-fi and noisy, with 16 s of audio.",
+              "type": "string",
+              "const": "dirtyTape"
+            }
+          ]
+        },
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo mix of every voice (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0,
+        "channels": 2
+      },
+      {
+        "name": "voices",
+        "description": "one channel per voice",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio to record; each channel gets its own voice",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "starts a grain on each rising edge",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freeze",
+        "description": "while high, recording stops and grains keep playing the audio already\nheld",
+        "signalType": "gate",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "time",
+        "description": "where grains start: 0 = the most recent audio, 5 = the oldest\n(default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "size",
+        "description": "grain length: 0 = shortest, 5 = longest; negative values play the\ngrains backwards (−5 to 5, default 2.75)",
+        "signalType": "control",
+        "defaultValue": 2.75,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "shape",
+        "description": "grain envelope: 0 = square, 1.67 = sharp attack, 3.33 = smooth,\n5 = reverse swell (default 3.33)",
+        "signalType": "control",
+        "defaultValue": 3.33,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "grain pitch; grains play at the input's own pitch when `freq` equals\n`rootFreq` (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "rootFreq",
+        "description": "pitch of the input, so `freq` plays in tune (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "spread",
+        "description": "random stereo position for each grain (0–5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "width",
+        "description": "spreads the voices across the stereo field: 0 = all centred, 5 =\nfirst voice hard left to last hard right (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "feedback",
+        "description": "feeds the grains back into the recording, building up dense washes\n(0–5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "mix",
+        "description": "dry/wet: 0 = input only, 5 = grains only (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$granularSampler",
+    "documentation": "`$granular` playing a WAV file instead of a live input: it plays grains\nfrom `wav`, starting one on each rising edge at `trigger`.\n\nEach grain takes `time`, `size`, `shape`, `freq` and `spread` when it\nstarts, so for grain-to-grain variation modulate them with something\nsampled on the same trigger, such as `$sah`. Set `rootFreq` to the pitch\nof the file and `freq` plays notes.\n\nEach channel of the file gets its own voice. `output` is a stereo mix of\nevery voice, and `voices` gives each voice its own channel. `quality`\ncolours the file as `$granular` colours its recording.\n\n```js\nconst grains = $pulse('8hz')\n$granularSampler($wavs().pad, grains, {\n  time: $sah($noise('white').range(0, 5), grains),\n  width: 4,\n  spread: 2,\n}).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GranularSamplerParams",
+      "type": "object",
+      "properties": {
+        "freq": {
+          "description": "grain pitch; grains play at the file's own pitch when `freq` equals\n`rootFreq` (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "description": "sound character: digital, vintage, cleanTape or dirtyTape (default\ndigital)",
+          "$ref": "#/$defs/GranularQuality"
+        },
+        "rootFreq": {
+          "description": "pitch of the file, so `freq` plays in tune (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shape": {
+          "description": "grain envelope: 0 = square, 1.67 = sharp attack, 3.33 = smooth,\n5 = reverse swell (default 3.33)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "grain length: 0 = shortest, 5 = longest; negative values play the\ngrains backwards (−5 to 5, default 2.75)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spread": {
+          "description": "random stereo position for each grain (0–5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "time": {
+          "description": "where grains start: 0 = the start of the file, 5 = its end\n(default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "starts a grain on each rising edge",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wav": {
+          "description": "the file to play; each of its channels gets its own voice",
+          "$ref": "#/$defs/Wav"
+        },
+        "width": {
+          "description": "spreads the voices across the stereo field: 0 = all centred, 5 =\nfirst voice hard left to last hard right (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "wav"
+      ],
+      "$defs": {
+        "GranularQuality": {
+          "description": "Sound character, after Beads' four quality settings. Lower qualities\nsound darker and grittier and hold more audio.",
+          "oneOf": [
+            {
+              "description": "Clean, with 4 s of audio.",
+              "type": "string",
+              "const": "digital"
+            },
+            {
+              "description": "Slightly gritty early digital, with 8 s of audio.",
+              "type": "string",
+              "const": "vintage"
+            },
+            {
+              "description": "Darker, softer grains, with 10.7 s of audio.",
+              "type": "string",
+              "const": "cleanTape"
+            },
+            {
+              "description": "Lo-fi and noisy, with 16 s of audio.",
+              "type": "string",
+              "const": "dirtyTape"
+            }
+          ]
+        },
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "Wav": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "wav_ref"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "channels"
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo mix of every voice (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0,
+        "channels": 2
+      },
+      {
+        "name": "voices",
+        "description": "one channel per voice",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "starts a grain on each rising edge",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "time",
+        "description": "where grains start: 0 = the start of the file, 5 = its end\n(default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "size",
+        "description": "grain length: 0 = shortest, 5 = longest; negative values play the\ngrains backwards (−5 to 5, default 2.75)",
+        "signalType": "control",
+        "defaultValue": 2.75,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "shape",
+        "description": "grain envelope: 0 = square, 1.67 = sharp attack, 3.33 = smooth,\n5 = reverse swell (default 3.33)",
+        "signalType": "control",
+        "defaultValue": 3.33,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "grain pitch; grains play at the file's own pitch when `freq` equals\n`rootFreq` (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "rootFreq",
+        "description": "pitch of the file, so `freq` plays in tune (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "spread",
+        "description": "random stereo position for each grain (0–5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "width",
+        "description": "spreads the voices across the stereo field: 0 = all centred, 5 =\nfirst voice hard left to last hard right (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "wav"
+      },
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$wowFlutter",
+    "documentation": "Tape wow and flutter from Mutable Instruments Beads' dirty tape setting:\nslow, drifting pitch wobble with a slight softening of the highs. Every\nchannel wobbles together, like one tape carrying them all.\n\n`speed` and `intensity` set how fast and how deep the wobble is; their\ndefaults are Beads'. Faster and deeper both bend the pitch further.\n\n```js\nconst grains = $pulse('8hz')\nconst cloud = $granular($saw('a3'), grains, { mix: 4, quality: 'dirtyTape' })\n$reverb($wowFlutter(cloud), 3, { size: 5, tone: 2 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "WowFlutterParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "audio input",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "intensity": {
+          "description": "how deep the wobble is: 0 = none, 2.5 = Beads' dirty tape, 5 = twice\nas deep (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "description": "how fast the tape wobbles; each volt doubles it, and 2.5 is Beads'\ndirty tape (0–5, default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "the input with wow and flutter",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio input",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "speed",
+        "description": "how fast the tape wobbles; each volt doubles it, and 2.5 is Beads'\ndirty tape (0–5, default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "intensity",
+        "description": "how deep the wobble is: 0 = none, 2.5 = Beads' dirty tape, 5 = twice\nas deep (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ]
+  },
+  {
     "name": "$sine",
     "documentation": "A sine wave oscillator.\n\n## Example\n\n```js\n$sine('c4').out()\n```",
     "paramsSchema": {
@@ -4070,25 +8943,59 @@
   },
   {
     "name": "$noise",
-    "documentation": "Polyphonic noise generator with selectable color.\n\nGenerates random noise in one of three spectral colors:\n- **White**: equal energy across all frequencies (bright, hissy)\n- **Pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **Brown**: steep low-frequency emphasis (deep, rumbling)\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n```",
+    "documentation": "Polyphonic noise generator with selectable color and clock rate.\n\nSpectral colors:\n- **white**: equal energy across all frequencies (bright, hissy)\n- **pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **brown**: steep low-frequency emphasis (deep, rumbling)\n- **blue** / **violet**: high-frequency emphasis (+3 / +6 dB/octave), for hats and air\n\nDistributions and digital noise:\n- **binary**: only −5V or +5V — at the same peak it is louder than white\n- **gaussian**: values cluster near 0V with occasional large excursions\n- **lfsr** / **lfsrShort**: NES-style shift-register noise; lfsr repeats every 32767 ticks,\n  lfsrShort every 93, which sounds pitched and metallic — its `rate` sets that pitch\n\nImpulse and switching noise:\n- **velvet**: exactly one ±5V impulse per tick, at a random moment within it\n- **telegraph**: ±5V that flips at random moments, on average `rate` times per second\n- **dust**: rests at −5V with single-sample +5V triggers at random moments, on average `rate` per second\n\n`rate` clocks the generator: the color is computed at that rate, so slow\nrates give random CV (a slow brown is a drunk walk) and audio rates give\nlo-fi, band-limited noise. `interp` shapes the output between ticks;\n`linear` and `smooth` turn any color into a smooth random LFO. Unconnected,\nthe generator draws a new value every sample, and telegraph and dust switch\non half of all samples.\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n$noise(\"lfsrShort\", { rate: \"c3\" }).out()\n$sine($noise(\"brown\", { rate: $hz(4), interp: \"smooth\" })).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "NoiseParams",
       "type": "object",
       "properties": {
         "channels": {
-          "description": "number of independent noise channels (1–64), each a different sequence",
+          "description": "number of independent noise channels (1–64), each a different sequence;\na polyphonic `rate` raises it to that many channels",
           "type": "integer",
           "format": "uint",
           "default": 1,
           "minimum": 0
         },
         "color": {
-          "description": "color of the noise: white, pink, brown",
+          "description": "kind of noise: white, pink, brown, blue, violet, binary, gaussian,\nlfsr, lfsrShort, velvet, telegraph, dust",
           "$ref": "#/$defs/NoiseKind"
+        },
+        "interp": {
+          "description": "how the output moves between ticks: step, linear, smooth",
+          "$ref": "#/$defs/NoiseInterp"
+        },
+        "rate": {
+          "description": "generator clock in V/Oct (use `$hz()` or a note name); a new value is drawn\neach tick. For telegraph and dust it is the average events per second,\nand for lfsrShort the pitch of its 93-step loop.\nUnconnected, the generator runs at the sample rate.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "$defs": {
+        "NoiseInterp": {
+          "oneOf": [
+            {
+              "description": "hold each value until the next tick",
+              "type": "string",
+              "const": "step"
+            },
+            {
+              "description": "ramp straight from one value to the next",
+              "type": "string",
+              "const": "linear"
+            },
+            {
+              "description": "curve through the values with no corners",
+              "type": "string",
+              "const": "smooth"
+            }
+          ]
+        },
         "NoiseKind": {
           "oneOf": [
             {
@@ -4105,6 +9012,108 @@
               "description": "deep rumble (−6 dB/octave)",
               "type": "string",
               "const": "brown"
+            },
+            {
+              "description": "boosted highs (+3 dB/octave)",
+              "type": "string",
+              "const": "blue"
+            },
+            {
+              "description": "strongly boosted highs (+6 dB/octave), thin and airy",
+              "type": "string",
+              "const": "violet"
+            },
+            {
+              "description": "only −5V or +5V, a coin flip each tick",
+              "type": "string",
+              "const": "binary"
+            },
+            {
+              "description": "bell-curve values clustered around 0V (σ ≈ 1.67V)",
+              "type": "string",
+              "const": "gaussian"
+            },
+            {
+              "description": "15-bit shift-register noise (NES-style), ±5V",
+              "type": "string",
+              "const": "lfsr"
+            },
+            {
+              "description": "93-step shift-register loop: pitched, metallic, ±5V",
+              "type": "string",
+              "const": "lfsrShort"
+            },
+            {
+              "description": "one ±5V impulse at a random point in every tick",
+              "type": "string",
+              "const": "velvet"
+            },
+            {
+              "description": "±5V that flips sign at random moments, `rate` times per second on average",
+              "type": "string",
+              "const": "telegraph"
+            },
+            {
+              "description": "rests at −5V with single-sample +5V triggers at random moments, `rate`\nper second on average",
+              "type": "string",
+              "const": "dust"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
             }
           ]
         }
@@ -4121,13 +9130,21 @@
       }
     ],
     "bufferOutputs": [],
-    "signalParams": [],
+    "signalParams": [
+      {
+        "name": "rate",
+        "description": "generator clock in V/Oct (use `$hz()` or a note name); a new value is drawn\neach tick. For telegraph and dust it is the average events per second,\nand for lfsrShort the pitch of its 93-step loop.\nUnconnected, the generator runs at the sample rate.",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
     "positionalArgs": [
       {
         "name": "color"
       }
-    ],
-    "channelsParam": "channels"
+    ]
   },
   {
     "name": "$macro",
@@ -5312,6 +10329,187 @@
     ]
   },
   {
+    "name": "$apf",
+    "documentation": "Stacked allpass filter: 1 to 50 two-pole stages, with resonance and\nfeedback. Smears transients into chirps around the cutoff; mixed with the\ndry signal, it notches like a phaser.\n\n- **cutoff** — V/Oct, the frequency delayed most.\n- **stages** — 1–50. More stages, longer smear. A fractional count fades\n  the next stage in smoothly.\n- **resonance** — 0–5. Makes the smear ring at the cutoff's pitch.\n- **feedback** — −5 to 5. Repeats the smear; rings get longer toward ±5,\n  where they never fade. Up to ±6 the filter self-oscillates. Negative\n  values flip the sign of every other repeat.\n- **fadeStep** — 0–49. Above 0, `stages` crossfades between chains this\n  many stages apart instead, giving notches.\n\n```js\n// smear a click on every beat into a chirp around C3\n$pPulse($clock[0]).$.apf('c3', { stages: 50 }).out()\n// ringing, pitched smear with repeats\n$pPulse($clock[0]).$.apf('g3', { stages: 32, resonance: 3, feedback: 3 }).out()\n// self-oscillating: no input, just the loop\n$apf(0, 'c3', { stages: 20, resonance: 2, feedback: 5.5 }).out()\n// notches: crossfading between chains 8 stages apart\n$noise('white').$.apf('c4', { stages: $sine('0.05hz').range(9, 25), resonance: 2, fadeStep: 8 }).out()\n// four-stage phaser: swept allpass mixed equally with the dry saw\n$saw('c2').$m.apf(2.5, $sine('0.2hz').range(-1, 3), { stages: 4, resonance: 2, feedback: 3 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AllpassParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "frequency in V/Oct (0V = C4) the stages delay most",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "fadeStep": {
+          "description": "stages between crossfaded chains (0-49); 0 glides instead",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "feedback": {
+          "description": "output fed back into the input (-5 to 5, up to ±6 to self-oscillate)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "signal input",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "how sharply the stages ring at the cutoff (0-5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of two-pole stages (1-50): how much smear",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "phase-shifted signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "frequency in V/Oct (0V = C4) the stages delay most",
+        "signalType": "frequency",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "stages",
+        "description": "number of two-pole stages (1-50): how much smear",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 1.0,
+        "maxValue": 50.0
+      },
+      {
+        "name": "resonance",
+        "description": "how sharply the stages ring at the cutoff (0-5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "feedback",
+        "description": "output fed back into the input (-5 to 5, up to ±6 to self-oscillate)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      }
+    ]
+  },
+  {
     "name": "$hpf",
     "documentation": "Highpass filter that attenuates frequencies below the cutoff point.\n\nUse it to remove low-end rumble, thin out a sound, or create rising\nfilter effects. Pairs well with lowpass filters for isolating a\nfrequency band.\n\n- **cutoff** — set in V/Oct (0 V = C4). Accepts modulation for filter sweeps.\n- **resonance** — boosts frequencies near the cutoff (0–5). High values\n  produce a ringing peak.\n\n```js\n// remove low end from a noise source\n$hpf($noise(\"white\"), 'a3', 1)\n```",
     "paramsSchema": {
@@ -5751,6 +10949,416 @@
       },
       {
         "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$lpg",
+    "documentation": "Vactrol low pass gate modeled on the one built into Mutable Instruments Plaits.\n\nThe gate is a filter and VCA driven together by a simulated vactrol: as it\nopens, the signal gets both louder and brighter, and it closes with the\nslow, non-linear tail that gives plucked and struck sounds their bounce.\n\n- **trigger** — each rising edge pings the vactrol fully open, then it\n  decays back to **level**.\n- **level** — the floor the vactrol rests at, 0–5 V on Plaits' compressing\n  curve: about 0.9 V opens it halfway, 2.5 V about 80%, 5 V fully. With no\n  trigger it works as a CV-controlled gate; with a trigger, each ping\n  swings the gate from the floor to fully open and back.\n- **color** — low values close the filter as the gate closes (mellow,\n  woody); high values let highs through, approaching a plain VCA.\n- **decay** — length of the vactrol's release.\n\nWith neither **trigger** nor **level** patched the gate is bypassed and\nthe input passes through unchanged; patching or unpatching them\ncrossfades over 5 ms.\n\n```js\n// plucked saw pinged on every beat\n$lpg($saw('c3'), $clock.beatTrigger, { color: 1.5, decay: 2 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "LpgParams",
+      "type": "object",
+      "properties": {
+        "color": {
+          "description": "filter response (0-5) - low = mellow lowpass gate, high = bright, VCA-like",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "vactrol decay (0-5) - low = short pluck, high = long ring",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "signal input",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "level": {
+          "description": "level CV (0-5V) - the floor pings rise from and decay back to, on Plaits' compressing curve; 5V fully open",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "trigger input (rising edge pings the vactrol fully open)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "gated signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "trigger input (rising edge pings the vactrol fully open)",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "level",
+        "description": "level CV (0-5V) - the floor pings rise from and decay back to, on Plaits' compressing curve; 5V fully open",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "color",
+        "description": "filter response (0-5) - low = mellow lowpass gate, high = bright, VCA-like",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "vactrol decay (0-5) - low = short pluck, high = long ring",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$multimode",
+    "documentation": "Mutable Instruments Blades–style multimode filter with drive and wavefolder.\n\nA circuit model of one channel of Blades: a 2164 VCA state-variable filter\nthat morphs continuously from lowpass through bandpass to highpass, preceded\nby a drive VCA into a zener soft clipper and a two-stage diode wavefolder.\nThe signal path is DC-coupled, so it can process CVs too.\n\n- **cutoff** — V/Oct. Tracks exactly at low cutoffs and runs progressively\n  flat in the top octaves (−15 cents at 1 kHz, about half a semitone at\n  5 kHz), topping out near 21 kHz, as the circuit does. Responds at audio\n  rate, so an oscillator patched in gives exponential FM.\n- **resonance** — 0–5. Self-oscillates above ~4.3; the bandpass is then\n  held near ±4 V by the soft knee of the integrator's zeners. With no input,\n  `mode` shifts the phase of the sine.\n- **mode** — 0 lowpass, 2.5 bandpass, 5 highpass; values between crossfade.\n- **drive** — input gain ahead of everything else: 0 is unity, 5 is about\n  +18 dB. The zeners' soft knee already rounds a ±5 V input at 0.\n- **fold** — 0 soft clipping only, 5 the two-stage wavefolder.\n- **highRes** — on by default. Off runs the circuit at the engine rate for\n  less CPU, with more aliasing from hot drive, folding and self-oscillation,\n  and a highpass that attenuates more below the cutoff once the cutoff is\n  above ~8 kHz (about 2 dB more at 15 kHz).\n\nPassband gain in lowpass mode is about +2.8 dB at unity drive, rolling off\nabove ~20 kHz at the output amp, whose zeners compress the output softly\nabove about 6 V.\n\n```js\n// resonant sweep that morphs from lowpass to highpass\n$multimode($saw('c2'), $sine('0.1hz').range(-1, 2), 3.8, $sine('0.07hz').range(0, 5)).out()\n// wavefolded sine through a gentle lowpass\n$multimode($sine('c3'), 'c6', 1, 0, { drive: 3, fold: 3 }).out()\n// no input: a self-oscillating sine at A3\n$multimode(0, 'a3', 5).out()\n// without oversampling, for less CPU\n$multimode($saw('c2'), 'c5', 2, 0, { highRes: false }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MultimodeParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4), capped at ~21 kHz",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "input drive (0 = unity, 5 = +18 dB), cubic response",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fold": {
+          "description": "drive response (0 = soft clipping, 5 = two-stage wavefolder)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "highRes": {
+          "description": "when true (default), the circuit runs at twice the engine rate, which\nreduces aliasing from the clipper, wavefolder and self-oscillation and\nkeeps the highpass accurate at high cutoffs; false costs less CPU",
+          "type": "boolean",
+          "default": true
+        },
+        "input": {
+          "description": "signal input (DC-coupled)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "response: 0 = lowpass, 2.5 = bandpass, 5 = highpass, crossfading between",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resonance": {
+          "description": "resonance (0-5). Self-oscillates from ~4.3.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "response selected by mode",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "lp",
+        "description": "lowpass (the output at mode 0)",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "bp",
+        "description": "bandpass (the output near mode 2.5)",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "hp",
+        "description": "highpass (the output at mode 5)",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (DC-coupled)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4), capped at ~21 kHz",
+        "signalType": "frequency",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "resonance (0-5). Self-oscillates from ~4.3.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "mode",
+        "description": "response: 0 = lowpass, 2.5 = bandpass, 5 = highpass, crossfading between",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "input drive (0 = unity, 5 = +18 dB), cubic response",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "fold",
+        "description": "drive response (0 = soft clipping, 5 = two-stage wavefolder)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      },
+      {
+        "name": "mode"
       }
     ]
   },
@@ -12564,6 +18172,163 @@
     ]
   },
   {
+    "name": "$scan",
+    "documentation": "Steps a counter by `distance` on each trigger, wrapping it within 0 to\n`length`.\n\nA step past `length` wraps around by the overshoot, as many times as it\ntakes, and so does a step below 0. With `snapOnWrap`, a step past\n`length` lands on 0 and a step below 0 lands on `length`. A counter\nexactly at `length` stays there. `reset` sets the counter to 0, and wins\nover a trigger in the same sample. Lengths are read at each trigger, so a\nshorter `length` takes effect on the next step.\n\n```js\n// Pitch steps of a quarter octave, wrapping within an octave:\n$sine($scan(1, 0.25, $pulse('4hz'))).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ScanParams",
+      "type": "object",
+      "properties": {
+        "distance": {
+          "description": "amount added to the counter on each trigger; negative steps backwards",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "length": {
+          "description": "span the counter wraps within; must be above 0",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "reset": {
+          "description": "rising edges set the counter to 0",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapOnWrap": {
+          "description": "a step past either end lands on the opposite end instead of wrapping\nby the overshoot (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "trigger": {
+          "description": "rising edges step the counter by `distance`",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "length",
+        "distance",
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "the counter, from 0 to length",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "length",
+        "description": "span the counter wraps within; must be above 0",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "distance",
+        "description": "amount added to the counter on each trigger; negative steps backwards",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "rising edges step the counter by `distance`",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "reset",
+        "description": "rising edges set the counter to 0",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "length"
+      },
+      {
+        "name": "distance"
+      },
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
     "name": "$curve",
     "documentation": "Applies a power curve to a signal, normalised at ±5 V.\n\nFormula: `sign(x) × 5 × (|x| / 5) ^ exp`\n\n- **exp = 1** — linear pass-through\n- **exp > 1** — pushes midrange toward zero (audio taper)\n- **0 < exp < 1** — pushes midrange toward ±5 V\n- **exp = 0** — step function (any nonzero → ±5 V)\n\n```js\n$curve($sine('1hz'), 2)   // quadratic curve\n$curve($saw('c3'), 3)     // cubic curve (audio taper)\n```",
     "paramsSchema": {
@@ -12811,6 +18576,223 @@
       },
       {
         "name": "time"
+      }
+    ]
+  },
+  {
+    "name": "_erratic",
+    "documentation": "Applies a wandering random shift to a signal.\n\nThe shift spans ±**amount** scaled to the width of [**min**, **max**]: an\namount of 5 moves the signal by up to half the range either way. **bias**\nshrinks one side of that span — at +5 the shift is only upward, at -5 only\ndownward. **speed** sets how quickly the shift changes, from frozen at 0\nthrough smooth drift to white noise at 5. A **trigger** samples and holds\nthe shift on each rising edge.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ErraticParams",
+      "type": "object",
+      "properties": {
+        "amount": {
+          "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "bias": {
+          "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clamp": {
+          "description": "clamp the output to [min, max]",
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "description": "signal to shift",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "max": {
+          "description": "maximum of the input's range",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min": {
+          "description": "minimum of the input's range",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edge samples and holds the current random shift",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "amount"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "randomly shifted signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal to shift",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "amount",
+        "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "rising edge samples and holds the current random shift",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "speed",
+        "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+        "signalType": "control",
+        "defaultValue": 2.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "bias",
+        "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "min",
+        "description": "minimum of the input's range",
+        "signalType": "control",
+        "defaultValue": -5.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "max",
+        "description": "maximum of the input's range",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "amount"
       }
     ]
   },

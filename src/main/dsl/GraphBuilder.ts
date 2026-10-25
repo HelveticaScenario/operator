@@ -5,6 +5,7 @@ import type {
     Scope,
     ScopeChannel,
     ScopeMode,
+    ScopeSplit,
 } from '@modular/core';
 import type { VuMeterDef } from '../../shared/dsl/vuMeterTypes';
 import {
@@ -47,6 +48,15 @@ export type ScopeWithLocation = Scope & {
     headless?: boolean;
 };
 
+/** Options accepted by `.scope()`. */
+export interface ScopeConfig {
+    msPerFrame?: number;
+    triggerThreshold?: number;
+    triggerWaitToRender?: boolean;
+    range?: [number, number];
+    split?: ScopeSplit;
+}
+
 // Extended OutputSchema interface that includes optional range
 export interface OutputSchemaWithRange {
     name: string;
@@ -54,6 +64,8 @@ export interface OutputSchemaWithRange {
     polyphonic?: boolean;
     minValue?: number;
     maxValue?: number;
+    /** Fixed channel count; absent outputs follow the module's channel count. */
+    channels?: number;
 }
 
 const ResolvedModuleOutput = z.object({
@@ -171,6 +183,22 @@ export interface MonoOutOptions {
     mute?: boolean;
     /** When any output is soloed, only soloed outputs are audible */
     solo?: boolean;
+}
+
+/** Options for `.erratic()` on a signal without a known range */
+export interface ErraticOptions {
+    /** Rising edge samples and holds the current random shift */
+    trigger?: PolySignal;
+    /** How fast the shift wanders: 0 = frozen, 5 = white noise (default 2) */
+    speed?: PolySignal;
+    /** Skews the shift upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
+    bias?: PolySignal;
+}
+
+/** Options for `.erratic()` on a ranged signal */
+export interface RangedErraticOptions extends ErraticOptions {
+    /** Clamp the output to the signal's range (default true) */
+    clamp?: boolean;
 }
 
 /** VU meter / mute / solo state shared by both out group kinds */
@@ -499,14 +527,20 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
     }
 
     /**
+     * Apply a wandering random shift of up to ±`amount` (0–5) to all outputs,
+     * where 5 shifts by up to ±5 V.
+     */
+    erratic(amount: PolySignal, options: ErraticOptions = {}): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        return erratic(this.items[0].builder, this.items, amount, options);
+    }
+
+    /**
      * Add scope visualization for all outputs in the collection
      */
-    scope(config?: {
-        msPerFrame?: number;
-        triggerThreshold?: number;
-        triggerWaitToRender?: boolean;
-        range?: [number, number];
-    }): this {
+    scope(config?: ScopeConfig): this {
         if (this.items.length > 0) {
             const loc = captureSourceLocation();
             this.items[0].builder.addScope(this.items, config, loc);
@@ -684,6 +718,34 @@ function playPattern(builder: GraphBuilder, value: PolySignal): PolySignal {
 }
 
 /**
+ * Apply an `_erratic` random shift to `input`. With a `range`, the shift scales
+ * to the range's width, the output clamps to it unless `clamp` is false, and
+ * the result carries it; without one, the shift scales to ±5 V and is unclamped.
+ */
+function erratic(
+    builder: GraphBuilder,
+    input: ModuleOutput | ModuleOutput[],
+    amount: PolySignal,
+    { trigger, speed, bias, clamp = true }: RangedErraticOptions,
+    range?: { min: PolySignal; max: PolySignal },
+): Collection {
+    const factory = builder.getFactory('_erratic');
+    if (!range) {
+        return factory(input, amount, { trigger, speed, bias }) as Collection;
+    }
+    return (
+        factory(input, amount, {
+            trigger,
+            speed,
+            bias,
+            clamp,
+            min: range.min,
+            max: range.max,
+        }) as Collection
+    ).withRange(range.min, range.max);
+}
+
+/**
  * Collection of ModuleOutput instances.
  * Use .range(outMin, outMax, inMin, inMax) to remap with explicit input range.
  */
@@ -748,6 +810,24 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
                 this.items.map((o) => o.maxValue),
             ) as Collection
         ).withRange(outMin, outMax);
+    }
+
+    /**
+     * Apply a wandering random shift to all outputs, scaled to each output's
+     * range: `amount` 5 shifts by up to half the range either way. Clamps to
+     * the range unless `clamp` is false.
+     */
+    erratic(
+        amount: PolySignal,
+        options: RangedErraticOptions = {},
+    ): CollectionWithRange {
+        if (this.items.length === 0) {
+            return new CollectionWithRange();
+        }
+        return erratic(this.items[0].builder, this.items, amount, options, {
+            min: this.items.map((o) => o.minValue),
+            max: this.items.map((o) => o.maxValue),
+        }) as CollectionWithRange;
     }
 }
 
@@ -1959,15 +2039,24 @@ export class GraphBuilder {
 
     addScope(
         value: ModuleOutput | ModuleOutput[],
-        config: {
-            msPerFrame?: number;
-            triggerThreshold?: number;
-            triggerWaitToRender?: boolean;
-            range?: [number, number];
-        } = {},
+        config: ScopeConfig = {},
         sourceLocation?: { line: number; column: number },
     ) {
-        const { msPerFrame = 500, triggerThreshold, range = [-5, 5] } = config;
+        const {
+            msPerFrame = 500,
+            triggerThreshold,
+            range = [-5, 5],
+            split,
+        } = config;
+        if (
+            split !== undefined &&
+            split !== 'vertical' &&
+            split !== 'horizontal'
+        ) {
+            throw new Error(
+                `scope split must be 'vertical' or 'horizontal', got ${JSON.stringify(split)}`,
+            );
+        }
         const realTriggerThreshold: number | undefined =
             triggerThreshold !== undefined
                 ? triggerThreshold * 1000
@@ -1993,6 +2082,7 @@ export class GraphBuilder {
             msPerFrame,
             range,
             sourceLocation,
+            split,
             triggerThreshold: thresh,
         });
     }
@@ -2116,10 +2206,11 @@ export class ModuleNode {
             outputSchema.maxValue !== undefined;
 
         if (polyphonic) {
-            // Return Collection(WithRange) for each channel (based on derived channel count)
+            // Return Collection(WithRange) for each channel of the output
+            const channels = outputSchema.channels ?? this.channelCount;
             if (hasRange) {
                 const outputs: ModuleOutputWithRange[] = [];
-                for (let i = 0; i < this.channelCount; i++) {
+                for (let i = 0; i < channels; i++) {
                     outputs.push(
                         new ModuleOutputWithRange(
                             this.builder,
@@ -2134,7 +2225,7 @@ export class ModuleNode {
                 return new CollectionWithRange(...outputs);
             }
             const outputs: ModuleOutput[] = [];
-            for (let i = 0; i < this.channelCount; i++) {
+            for (let i = 0; i < channels; i++) {
                 outputs.push(
                     new ModuleOutput(this.builder, this.id, portName, i),
                 );
@@ -2243,12 +2334,15 @@ export class ModuleOutput {
         return factory(this, factor) as Collection;
     }
 
-    scope(config?: {
-        msPerFrame?: number;
-        triggerThreshold?: number;
-        triggerWaitToRender?: boolean;
-        range?: [number, number];
-    }): this {
+    /**
+     * Apply a wandering random shift of up to ±`amount` (0–5), where 5 shifts
+     * by up to ±5 V.
+     */
+    erratic(amount: PolySignal, options: ErraticOptions = {}): Collection {
+        return erratic(this.builder, this, amount, options);
+    }
+
+    scope(config?: Omit<ScopeConfig, 'split'>): this {
         const loc = captureSourceLocation();
         this.builder.addScope(this, config, loc);
         return this;
@@ -2454,6 +2548,21 @@ export class ModuleOutputWithRange extends ModuleOutput {
                 this.maxValue,
             ) as Collection
         ).withRange(outMin, outMax);
+    }
+
+    /**
+     * Apply a wandering random shift scaled to this output's range: `amount` 5
+     * shifts by up to half the range either way. Clamps to the range unless
+     * `clamp` is false.
+     */
+    erratic(
+        amount: PolySignal,
+        options: RangedErraticOptions = {},
+    ): CollectionWithRange {
+        return erratic(this.builder, this, amount, options, {
+            min: this.minValue,
+            max: this.maxValue,
+        }) as CollectionWithRange;
     }
 }
 

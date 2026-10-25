@@ -12,6 +12,7 @@ pub mod clamp;
 pub mod clock_divider;
 pub mod curve;
 pub mod delay;
+pub mod erratic;
 pub mod hold;
 pub mod lag;
 pub mod logic;
@@ -25,6 +26,7 @@ pub mod sample_and_hold;
 pub mod scale;
 pub mod scale_and_shift;
 pub mod scale_names;
+pub mod scan;
 pub mod smooth_control;
 pub mod spread;
 pub mod unison;
@@ -43,8 +45,10 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     chord::Chord::install_constructor(map);
     clamp::Clamp::install_constructor(map);
     clock_divider::ClockDivider::install_constructor(map);
+    scan::Scan::install_constructor(map);
     curve::Curve::install_constructor(map);
     delay::DelayRead::install_constructor(map);
+    erratic::Erratic::install_constructor(map);
     hold::Hold::install_constructor(map);
     lag::LagProcessor::install_constructor(map);
     logic::RisingEdgeDetector::install_constructor(map);
@@ -73,8 +77,10 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     chord::Chord::install_params_deserializer(map);
     clamp::Clamp::install_params_deserializer(map);
     clock_divider::ClockDivider::install_params_deserializer(map);
+    scan::Scan::install_params_deserializer(map);
     curve::Curve::install_params_deserializer(map);
     delay::DelayRead::install_params_deserializer(map);
+    erratic::Erratic::install_params_deserializer(map);
     hold::Hold::install_params_deserializer(map);
     lag::LagProcessor::install_params_deserializer(map);
     logic::RisingEdgeDetector::install_params_deserializer(map);
@@ -104,8 +110,10 @@ pub fn schemas() -> Vec<ModuleSchema> {
         chord::Chord::get_schema(),
         clamp::Clamp::get_schema(),
         clock_divider::ClockDivider::get_schema(),
+        scan::Scan::get_schema(),
         curve::Curve::get_schema(),
         delay::DelayRead::get_schema(),
+        erratic::Erratic::get_schema(),
         hold::Hold::get_schema(),
         lag::LagProcessor::get_schema(),
         logic::RisingEdgeDetector::get_schema(),

@@ -222,6 +222,22 @@ describe('polyphony', () => {
         expect(findModules(patch, '$lpf').length).toBe(1);
         expect(findModules(patch, '$saw').length).toBe(1);
     });
+
+    test('an output with fixed channels keeps them on a wider module', () => {
+        const patch = execPatch(`
+            const cloud = $granular(0, 0, { freq: ['c4', 'e4', 'g4'] })
+            $sine(cloud.voices).out()
+            $saw(cloud).out()
+        `);
+        const perVoice = findModules(patch, '$sine')[0].params.freq;
+        const stereo = findModules(patch, '$saw')[0].params.freq;
+        expect(perVoice).toHaveLength(3);
+        expect(stereo).toHaveLength(2);
+        expect(stereo.map((s: { port: string }) => s.port)).toEqual([
+            'output',
+            'output',
+        ]);
+    });
 });
 
 // ─── Collections ─────────────────────────────────────────────────────────────
@@ -359,6 +375,21 @@ describe('chaining methods', () => {
         expect(patch.scopes[0].channels.length).toBe(2);
         expect(patch.scopes[0].channels[0].channel).toBe(0);
         expect(patch.scopes[0].channels[1].channel).toBe(1);
+    });
+
+    test('.scope() split mode is carried on the scope entry', () => {
+        const patch = execPatch(
+            '$sine(["C4", "E4"]).scope({ split: "horizontal" }).out()',
+        );
+        expect(patch.scopes).toHaveLength(1);
+        expect(patch.scopes[0].split).toBe('horizontal');
+        expect(patch.scopes[0].channels).toHaveLength(2);
+        expect(execPatch('$sine("C4").scope().out()').scopes[0].split).toBe(
+            undefined,
+        );
+        expect(() =>
+            execPatch('$sine("C4").scope({ split: "diagonal" }).out()'),
+        ).toThrow(/split/);
     });
 
     test('.scope() on indexed output captures single channel', () => {

@@ -24,7 +24,6 @@
  * This applies to both interpolated and non-interpolated spans.
  */
 
-import type React from 'react';
 import type { editor } from 'monaco-editor';
 import type { Monaco } from '../../hooks/useCustomMonaco';
 import type {
@@ -426,11 +425,13 @@ function clearTrackedDecorations(
  * Parameters for starting module state polling
  */
 export interface ModuleStatePollingParams {
-    editor: editor.IStandaloneCodeEditor;
     monaco: Monaco;
-    currentFile?: string;
-    runningBufferId?: string | null;
-    activeDecorationRef: React.MutableRefObject<editor.IEditorDecorationsCollection | null>;
+    /**
+     * The model of the buffer whose patch is running, read on each poll; null
+     * while it has none. Highlights go on this model whether or not an editor
+     * shows it.
+     */
+    getModel: () => editor.ITextModel | null;
     getModuleStates: () => Promise<Record<string, unknown>>;
     /** CSS class for active spans (default: 'active-seq-step') */
     activeClassName?: string;
@@ -454,34 +455,35 @@ export interface ModuleStatePollingParams {
  * then during polling we use model.getDecorationRange() to get current positions.
  */
 export function startModuleStatePolling({
-    editor,
     monaco,
-    currentFile,
-    runningBufferId,
-    activeDecorationRef,
+    getModel,
     getModuleStates,
     activeClassName = 'active-seq-step',
     pollInterval = 50,
 }: ModuleStatePollingParams): () => void {
-    // The active-highlight collection is bound to a single editor instance,
-    // and this session may target a recreated editor. Drop any collection
-    // from a previous session so the first poll creates one on this editor.
-    if (activeDecorationRef.current) {
-        activeDecorationRef.current.clear();
-        activeDecorationRef.current = null;
-    }
-
-    // Only track if viewing the running buffer
-    if (currentFile !== runningBufferId) {
-        return () => {};
-    }
+    // This session's highlights, on the model they were drawn on.
+    let active: { model: editor.ITextModel; ids: string[] } | null = null;
+    // A poll in flight when the session stops must not draw afterwards.
+    let stopped = false;
+    const clearActive = () => {
+        if (active !== null && !active.model.isDisposed()) {
+            active.model.deltaDecorations(active.ids, []);
+        }
+        active = null;
+    };
 
     const interval = setInterval(async () => {
         try {
             const states = await getModuleStates();
+            if (stopped) {
+                return;
+            }
             const newDecorations: editor.IModelDeltaDecoration[] = [];
-            const model = editor.getModel();
-            if (!model) {
+            const model = getModel();
+            if (active !== null && active.model !== model) {
+                clearActive();
+            }
+            if (!model || model.isDisposed()) {
                 return;
             }
 
@@ -875,12 +877,10 @@ export function startModuleStatePolling({
             }
 
             // Update active decorations (the visual highlighting)
-            if (activeDecorationRef.current) {
-                activeDecorationRef.current.set(newDecorations);
-            } else {
-                activeDecorationRef.current =
-                    editor.createDecorationsCollection(newDecorations);
-            }
+            active = {
+                ids: model.deltaDecorations(active?.ids ?? [], newDecorations),
+                model,
+            };
         } catch {
             // Ignore polling errors
         }
@@ -890,6 +890,8 @@ export function startModuleStatePolling({
     // so a later session reuses their live (edit-tracked) ranges;
     // evaluation-time offsets are stale after any edit.
     return () => {
+        stopped = true;
         clearInterval(interval);
+        clearActive();
     };
 }
