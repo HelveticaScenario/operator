@@ -316,6 +316,16 @@ export interface ElectronAPI {
         onDownloaded: (callback: () => void) => () => void;
         onError: (callback: (message: string) => void) => () => void;
     };
+
+    releaseNotes: {
+        whatsNew: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.RELEASE_NOTES_WHATS_NEW]
+        >;
+        getAll: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.RELEASE_NOTES_GET_ALL]
+        >;
+        onMenuShow: (callback: () => void) => () => void;
+    };
 }
 
 const electronAPI: ElectronAPI = {
@@ -603,6 +613,12 @@ const electronAPI: ElectronAPI = {
         onDownloading: menuEventHandler(IPC_CHANNELS.UPDATE_DOWNLOADING),
         onPreparing: menuEventHandler(IPC_CHANNELS.UPDATE_PREPARING),
         onError: menuEventHandler<[string]>(IPC_CHANNELS.UPDATE_ERROR),
+    },
+
+    releaseNotes: {
+        whatsNew: () => invokeIPC('RELEASE_NOTES_WHATS_NEW'),
+        getAll: () => invokeIPC('RELEASE_NOTES_GET_ALL'),
+        onMenuShow: menuEventHandler(MENU_CHANNELS.SHOW_RELEASE_NOTES),
     },
 };
 

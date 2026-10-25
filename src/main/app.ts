@@ -44,6 +44,15 @@ import { isBufferSwitch } from './bufferSwitch';
 import { createConfigStore, type AppConfig } from './appConfig';
 import { createFallbackWarningChannel } from './fallbackWarning';
 import { sendNavigateToSymbol } from './helpNavigation';
+import { bundledChangelog, fetchPublishedReleases } from './releaseNotesSource';
+import {
+    isNewerVersion,
+    mergeReleaseNotes,
+    releasesInRange,
+    updateHasBreakingChanges,
+    whatsNewSince,
+    type ReleaseNotes,
+} from '../shared/releaseNotes';
 import {
     handleMediaProtocol,
     mediaFileExists,
@@ -346,8 +355,8 @@ console.debug = createLogInterceptor('debug');
 // ========================================================================
 
 const GITHUB_REPO = 'HelveticaScenario/operator';
+const FULL_CHANGELOG_URL = `https://github.com/${GITHUB_REPO}/blob/master/CHANGELOG.md`;
 const UPDATE_FEED_URL = `https://update.electronjs.org/${GITHUB_REPO}`;
-const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 
 /** True on platforms where autoUpdater (Squirrel) is supported */
 const supportsAutoUpdater =
@@ -366,58 +375,45 @@ function sendUpdateEvent(channel: string, ...args: unknown[]) {
 }
 
 /**
- * Fetches the latest release from GitHub API and pushes UPDATE_AVAILABLE
- * to the renderer if a newer version is available and not skipped.
- * Does NOT trigger any download.
+ * Fetches the published releases from the GitHub API and pushes
+ * UPDATE_AVAILABLE to the renderer if a newer version is available and not
+ * skipped, with the notes of every release between the running version and
+ * the latest. Does NOT trigger any download.
  */
 async function checkForUpdateAvailability(): Promise<void> {
     try {
-        const response = await fetch(GITHUB_API_URL, {
-            headers: { 'User-Agent': GITHUB_REPO },
-        });
-        if (!response.ok) {
-            console.warn('[update] GitHub API returned', response.status);
+        const releases = await fetchPublishedReleases(GITHUB_REPO);
+        const latest = releases?.[0];
+        if (!latest) {
             return;
         }
-        const ReleaseSchema = z.object({
-            html_url: z.string(),
-            tag_name: z.string(),
-        });
-        const parsed = ReleaseSchema.safeParse(await response.json());
-        if (!parsed.success) {
-            console.warn('[update] Unexpected GitHub API response shape');
-            return;
-        }
-        const latestVersion = parsed.data.tag_name.replace(/^v/, '');
+        const latestVersion = latest.notes.version;
         const currentVersion = app.getVersion();
-        if (latestVersion === currentVersion) {
+        if (!isNewerVersion(latestVersion, currentVersion)) {
             return;
         }
 
-        // Compare semver — only notify if latest is strictly newer
-        const [lMaj, lMin, lPat] = latestVersion.split('.').map(Number);
-        const [cMaj, cMin, cPat] = currentVersion.split('.').map(Number);
-        // NaN from non-numeric components (e.g. pre-release tags like "1.0.0-beta.1")
-        // Causes all comparisons to be false — pre-releases are silently ignored.
-        const isNewer =
-            lMaj > cMaj ||
-            (lMaj === cMaj && lMin > cMin) ||
-            (lMaj === cMaj && lMin === cMin && lPat > cPat);
-
-        if (!isNewer) {
-            return;
-        }
-
-        // Check if this version was skipped
         const config = configStore.load();
         if (config.skippedUpdateVersion === latestVersion) {
             return;
         }
 
-        latestReleaseUrl = parsed.data.html_url;
+        latestReleaseUrl = latest.url;
 
+        const releaseNotes = releasesInRange(
+            releases.map((release) => release.notes),
+            currentVersion,
+            latestVersion,
+        );
         const info: UpdateAvailableInfo = {
-            releaseUrl: parsed.data.html_url,
+            currentVersion,
+            hasBreakingChanges: updateHasBreakingChanges(
+                releaseNotes,
+                currentVersion,
+                latestVersion,
+            ),
+            releaseNotes,
+            releaseUrl: latest.url,
             supportsInAppUpdate: supportsAutoUpdater,
             version: latestVersion,
         };
@@ -2067,6 +2063,38 @@ ipcMain.handle(IPC_CHANNELS.UPDATE_DOWNLOAD, () => {
     autoUpdater.checkForUpdates();
 });
 
+registerIPCHandler('RELEASE_NOTES_WHATS_NEW', () => {
+    const currentVersion = app.getVersion();
+    const { lastSeenVersion } = configStore.load();
+    if (lastSeenVersion === currentVersion) {
+        return { currentVersion, releaseNotes: [] };
+    }
+    const releaseNotes = whatsNewSince(
+        bundledChangelog(),
+        lastSeenVersion,
+        currentVersion,
+    );
+    configStore.update((config) => {
+        config.lastSeenVersion = currentVersion;
+    });
+    return { currentVersion, releaseNotes };
+});
+
+registerIPCHandler('RELEASE_NOTES_GET_ALL', async () => {
+    let published: ReleaseNotes[] = [];
+    try {
+        const releases = await fetchPublishedReleases(GITHUB_REPO);
+        published = releases?.map((release) => release.notes) ?? [];
+    } catch (err) {
+        console.warn('[release-notes] Fetching releases failed:', err);
+    }
+    return {
+        currentVersion: app.getVersion(),
+        fullChangelogUrl: FULL_CHANGELOG_URL,
+        releaseNotes: mergeReleaseNotes(published, bundledChangelog()),
+    };
+});
+
 ipcMain.handle(IPC_CHANNELS.UPDATE_INSTALL, () => {
     if (!supportsAutoUpdater) {
         return;
@@ -2538,11 +2566,28 @@ const createMenu = (): void => {
         {
             role: 'windowMenu',
         },
-        // Help menu — Migrate is cross-platform; Check for Updates is
-        // already in the App menu on macOS, so only add it elsewhere.
+        // Help menu — Release Notes and Migrate are cross-platform; Check for
+        // Updates is already in the App menu on macOS, so only add it elsewhere.
         {
             role: 'help',
             submenu: [
+                {
+                    click: () => {
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.SHOW_RELEASE_NOTES,
+                            );
+                        }
+                    },
+                    label: 'Release Notes',
+                },
+                {
+                    click: () => {
+                        void shell.openExternal(FULL_CHANGELOG_URL);
+                    },
+                    label: 'Full Changelog on GitHub',
+                },
+                { type: 'separator' },
                 {
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {

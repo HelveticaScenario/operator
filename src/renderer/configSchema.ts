@@ -210,6 +210,11 @@ export const configSchema = {
             },
             type: 'object',
         },
+        lastSeenVersion: {
+            description:
+                'App version whose release notes were last shown (managed automatically)',
+            type: 'string',
+        },
         skippedUpdateVersion: {
             description:
                 'Release version whose update prompt was dismissed (managed automatically)',

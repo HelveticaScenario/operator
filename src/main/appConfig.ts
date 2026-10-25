@@ -29,6 +29,7 @@ export const AppConfigSchema = z.object({
     fontLigatures: z.boolean().optional(),
     fontSize: z.number().min(8).max(72).optional(),
     lastOpenedFolder: z.string().optional(),
+    lastSeenVersion: z.string().optional(),
     prettier: z.record(z.string(), z.unknown()).optional(),
     skippedUpdateVersion: z.string().optional(),
     theme: z.string().optional(),
