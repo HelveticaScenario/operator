@@ -64,16 +64,26 @@ pub(super) fn coin(rng: &mut LcgRng) -> f32 {
     rail(rng.next_unit() >= 0.5)
 }
 
-/// Mean of `x(1 + x(1/2 + x(1/3 + x/4)))` for `x` uniform in `[0.1, 1]`.
-const DUST_MEAN_GAP: f32 = 0.883_138_3;
+/// Mutable Instruments Beads' gap between random grain triggers, in clock
+/// periods: a truncated series for `−ln(1 − x)`, drawn with `x` uniform in
+/// `[DUST_X_MIN, 1]`.
+pub(super) fn beads_gap(x: f32) -> f32 {
+    x * (1.0 + x * (0.5 + x * (1.0 / 3.0 + x * 0.25)))
+}
 
-/// Gap to the next dust trigger, in average gaps. Mutable Instruments Beads
-/// spaces its random grain triggers this way: a truncated series for
-/// `−ln(1 − x)`, so gaps fall between about 0.12× and 2.36× the average and
-/// short gaps are more likely than long ones.
+pub(super) const DUST_X_MIN: f32 = 0.1;
+
+/// Mean of [`beads_gap`] over its draws.
+pub(super) const DUST_MEAN_GAP: f32 = 0.883_138_3;
+
+const INV_DUST_MEAN_GAP: f32 = 1.0 / DUST_MEAN_GAP;
+
+/// Gap to the next dust trigger, in average gaps: Beads' spacing, so gaps fall
+/// between about 0.12× and 2.36× the average and short gaps are more likely
+/// than long ones.
 pub(super) fn dust_gap(rng: &mut LcgRng) -> f32 {
-    let x = 0.1 + 0.9 * rng.next_unit();
-    x * (1.0 + x * (0.5 + x * (1.0 / 3.0 + x * 0.25))) / DUST_MEAN_GAP
+    let x = DUST_X_MIN + (1.0 - DUST_X_MIN) * rng.next_unit();
+    beads_gap(x) * INV_DUST_MEAN_GAP
 }
 
 /// Standard deviation of a sum of four uniform `[-1, 1)` draws.
@@ -299,6 +309,24 @@ impl Lfsr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dust_mean_gap_is_the_mean_of_beads_gap() {
+        let steps = 100_000;
+        let width = (1.0 - f64::from(DUST_X_MIN)) / f64::from(steps);
+        let mean = (0..steps)
+            .map(|i| {
+                f64::from(beads_gap(
+                    (f64::from(DUST_X_MIN) + (f64::from(i) + 0.5) * width) as f32,
+                ))
+            })
+            .sum::<f64>()
+            / f64::from(steps);
+        assert!(
+            (mean - f64::from(DUST_MEAN_GAP)).abs() < 1e-6,
+            "mean {mean}"
+        );
+    }
 
     /// Every long-mode phase starts at the state that many ticks from state 1,
     /// and stepping keeps the phase in step with the state.

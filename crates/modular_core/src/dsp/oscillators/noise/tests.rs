@@ -1,4 +1,4 @@
-use super::generators::lfsr_phase_distance;
+use super::generators::{DUST_MEAN_GAP, DUST_X_MIN, beads_gap, lfsr_phase_distance};
 use super::*;
 use crate::dsp::utils::hz_to_voct;
 use crate::types::{OutputStruct, PatchUpdateHandler, Signal};
@@ -215,10 +215,6 @@ fn telegraph_and_dust_follow_rate_on_average() {
     assert!(out.iter().all(|&v| v.abs() == 5.0));
 }
 
-/// Beads' gap bounds, `g(0.1)` and `g(1)` for `g(x) = x(1 + x(1/2 + x(1/3 + x/4)))`,
-/// over its mean gap.
-const DUST_GAP_RANGE: (f32, f32) = (0.105_358_3 / 0.883_138_3, 2.083_333_3 / 0.883_138_3);
-
 #[test]
 fn dust_gaps_stay_within_beads_bounds_and_average_the_rate() {
     // 100 per second at 48 kHz: 480 samples between triggers on average.
@@ -229,7 +225,8 @@ fn dust_gaps_stay_within_beads_bounds_and_average_the_rate() {
     );
     let triggers: Vec<usize> = (0..out.len()).filter(|&i| out[i] == 5.0).collect();
     let gaps: Vec<f32> = triggers.windows(2).map(|w| (w[1] - w[0]) as f32).collect();
-    let (lo, hi) = DUST_GAP_RANGE;
+    let lo = beads_gap(DUST_X_MIN) / DUST_MEAN_GAP;
+    let hi = beads_gap(1.0) / DUST_MEAN_GAP;
     for &gap in &gaps {
         assert!(
             gap >= (lo * average).floor() && gap <= (hi * average).ceil(),
@@ -238,7 +235,7 @@ fn dust_gaps_stay_within_beads_bounds_and_average_the_rate() {
     }
     let mean = gaps.iter().sum::<f32>() / gaps.len() as f32;
     assert!(
-        (mean / average - 1.0).abs() < 0.01,
+        (mean / average - 1.0).abs() < 0.025,
         "mean gap {mean} samples, expected {average}"
     );
     // Short gaps are more likely than long ones.

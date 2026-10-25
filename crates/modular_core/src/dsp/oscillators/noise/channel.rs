@@ -91,7 +91,12 @@ impl NoiseChannelState {
         self.schedule_impulse();
 
         match kind {
-            NoiseKind::Dust => self.dust_wait = f64::from(dust_gap(&mut self.generator)),
+            // A random fraction of a gap, so the first trigger can come at any
+            // moment.
+            NoiseKind::Dust => {
+                self.dust_wait =
+                    f64::from(dust_gap(&mut self.generator) * self.generator.next_unit());
+            }
             NoiseKind::Velvet | NoiseKind::Telegraph => {}
             _ => {
                 if matches!(kind, NoiseKind::Pink | NoiseKind::Blue) {
