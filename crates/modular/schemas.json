@@ -176,6 +176,197 @@
     "positionalArgs": []
   },
   {
+    "name": "$swell",
+    "documentation": "Ocean swell as CV: the surface of a simulated sea, read at a fixed point.\n\nThe sea sums `waves` Gerstner waves. Each moves the water in circles rather\nthan just up and down, which bunches the surface into sharp crests between\nwide, flat troughs — the shape of real swell, set by `steepness`. The first\nwave rolls at `freq`; `chop` spreads the others above it, so their crests\ndrift in and out of line and the sea arrives in sets, with the occasional\nwave far bigger than the rest. `spread` scatters their directions.\n\n- **height** (default) — surface height, ±5V. It reaches ±5V only when\n  every wave lines up, so a sea with `chop` above 0 usually stays inside it.\n- **tilt** — how the surface leans along the swell, the way a moored boat\n  pitches: positive while the water rises, negative while it falls. A sine\n  at `steepness` 0; when steep, a sawtooth that snaps down at each crest.\n- **roll** — the sideways lean from waves arriving off-axis. Silent at\n  `spread` 0, and busier as `spread` and `chop` rise.\n\nEvery input can be modulated live: the waves bend to the new values without\nrestarting. Each channel is its own sea.\n\n## Example\n\n```js\n// A slow, steep swell sweeping a filter\n$lpf($saw('a1'), $swell('0.1hz', { steepness: 4 }).range('200hz', '2000hz')).out()\n\n// A choppy, confused sea: the swell's lean swaying a sine's level\nconst sea = $swell('0.2hz', { chop: 4, spread: 5, waves: 12 })\n$sine('c3').amp(sea.tilt.range(0, 5)).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SwellParams",
+      "type": "object",
+      "properties": {
+        "chop": {
+          "description": "spectral width: the other waves sit up to `chop / 2` octaves above `freq`.\n0 is one clean, periodic swell; higher values roll in sets and add chop",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "dominant swell frequency in V/Oct (use `$hz()` or a value like `'0.1hz'`)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "seed": {
+          "description": "picks the sea: each seed, and each channel, places the waves at\ndifferent frequencies and directions",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "spread": {
+          "description": "directional spread: 0 sends every wave the same way, 5 brings them from\nevery direction (a confused sea)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "steepness": {
+          "description": "crest sharpness: 0 rolls as a sine, 5 peaks into sharp crests over wide, flat troughs",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "waves": {
+          "description": "number of wave components (1–16); waves added or removed by a patch\nupdate fade over one swell period",
+          "type": "integer",
+          "format": "uint",
+          "default": 6,
+          "maximum": 16,
+          "minimum": 1
+        }
+      },
+      "required": [
+        "freq"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "height",
+        "description": "surface height at a fixed point, ±5V",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tilt",
+        "description": "lean along the swell: positive while the water rises, ±5V",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "roll",
+        "description": "lean across the swell from waves arriving off-axis, ±5V",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "freq",
+        "description": "dominant swell frequency in V/Oct (use `$hz()` or a value like `'0.1hz'`)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "steepness",
+        "description": "crest sharpness: 0 rolls as a sine, 5 peaks into sharp crests over wide, flat troughs",
+        "signalType": "control",
+        "defaultValue": 3.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "chop",
+        "description": "spectral width: the other waves sit up to `chop / 2` octaves above `freq`.\n0 is one clean, periodic swell; higher values roll in sets and add chop",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "spread",
+        "description": "directional spread: 0 sends every wave the same way, 5 brings them from\nevery direction (a confused sea)",
+        "signalType": "control",
+        "defaultValue": 1.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "freq"
+      }
+    ]
+  },
+  {
     "name": "$signal",
     "documentation": "Utility module for routing, naming, and exposing signals in a patch.",
     "paramsSchema": {
