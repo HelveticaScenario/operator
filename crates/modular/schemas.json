@@ -18581,14 +18581,14 @@
   },
   {
     "name": "_erratic",
-    "documentation": "Applies a wandering random shift to a signal.\n\nThe shift spans ±**amount** scaled to the width of [**min**, **max**]: an\namount of 5 moves the signal by up to half the range either way. **bias**\nshrinks one side of that span — at +5 the shift is only upward, at -5 only\ndownward. **speed** sets how quickly the shift changes, from frozen at 0\nthrough smooth drift to white noise at 5. A **trigger** samples and holds\nthe shift on each rising edge.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
+    "documentation": "Applies a wandering random variation to a signal.\n\n**shift** mode adds an offset of up to ±**amount**, scaled to the width of\n[**min**, **max**]: 5 moves up to half the range either way. **blend** mode\nmoves toward a random value in [**min**, **max**] by **amount** / 5, so it\nnever leaves the range. **bias** makes the variation lean upward (+) or\ndownward (−); ±5 makes it one-sided. **sparse** keeps most values close to\nthe input, with occasional big jumps. **speed** runs from frozen at 0 to a\nfresh random value every sample at 5. A **trigger** holds the variation\nbetween rising edges.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "ErraticParams",
       "type": "object",
       "properties": {
         "amount": {
-          "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+          "description": "depth (0–5); at 5, shift moves up to half the range either way and\nblend jumps all the way to the random value",
           "$ref": "#/$defs/PolySignal"
         },
         "bias": {
@@ -18633,6 +18633,15 @@
             }
           ]
         },
+        "mode": {
+          "description": "shift adds a random offset; blend moves toward a random value in the range",
+          "$ref": "#/$defs/ErraticMode"
+        },
+        "sparse": {
+          "description": "mostly stay close to the input, with occasional big jumps",
+          "type": "boolean",
+          "default": false
+        },
         "speed": {
           "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
           "anyOf": [
@@ -18661,6 +18670,21 @@
         "amount"
       ],
       "$defs": {
+        "ErraticMode": {
+          "description": "How the random value moves the input.",
+          "oneOf": [
+            {
+              "description": "Add a random offset.",
+              "type": "string",
+              "const": "shift"
+            },
+            {
+              "description": "Move toward a random value in the range.",
+              "type": "string",
+              "const": "blend"
+            }
+          ]
+        },
         "PolySignal": {
           "anyOf": [
             {
@@ -18740,7 +18764,7 @@
       },
       {
         "name": "amount",
-        "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+        "description": "depth (0–5); at 5, shift moves up to half the range either way and\nblend jumps all the way to the random value",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,

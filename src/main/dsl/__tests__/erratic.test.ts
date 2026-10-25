@@ -84,6 +84,24 @@ describe('.erratic()', () => {
         expect(params.clamp).toBeUndefined();
     });
 
+    test('mode and sparse pass through on a ranged signal', () => {
+        (builder.getFactory('$sine')('1hz') as CollectionWithRange)
+            .range(0, 5)
+            .erratic(5, { mode: 'blend', sparse: true });
+        expect(erraticParams()).toMatchObject({
+            mode: 'blend',
+            sparse: true,
+            clamp: true,
+        });
+    });
+
+    test('sparse passes through on an unranged signal', () => {
+        builder.$c('c3').erratic(1, { sparse: true });
+        const params = erraticParams();
+        expect(params.sparse).toBe(true);
+        expect(params.mode).toBeUndefined();
+    });
+
     test('_erratic is not a global or a .$ method', () => {
         const run = (src: string) =>
             executePatchScript(src, schemas, {

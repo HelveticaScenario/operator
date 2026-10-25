@@ -7,23 +7,46 @@ use crate::dsp::utils::rng::{LcgRng, seed_base};
 use crate::dsp::utils::{CatmullRom, SchmittState, SchmittTrigger};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
-/// Rate of new random points at `speed = 5`, in Hz. At or above the engine
-/// rate every sample draws a fresh point, so the shift is white noise.
+/// Rate of new random points at `speed = 5`, in Hz, unless the engine rate is
+/// higher. At `speed = 5` every sample draws a fresh point, so the output is
+/// white noise and held values are uniform.
 const MAX_RATE_HZ: f32 = 48_000.0;
 
 /// Octaves spanned by the speed curve: `speed` 0–5 sweeps the point rate
-/// exponentially across this many octaves below [`MAX_RATE_HZ`], reaching
+/// exponentially across this many octaves below the top rate, reaching
 /// exactly 0 Hz at `speed = 0`.
 const SPEED_OCTAVES: f32 = 24.0;
 
 /// Width of the default ±5 V range. `amount = 5` spans this full width.
 const NOMINAL_WIDTH: f32 = 10.0;
 
-/// Shift-point rate for a `speed` in 0–5, in Hz.
+/// In sparse mode, the depth drawn for a point is `min(1, SPARSE_SCALE · a · u)`
+/// with `a = amount / 5` and `u` uniform in [0, 1), so past `a = 1/3` a share
+/// `1 − 1/(3a)` of the draws reach full depth.
+const SPARSE_SCALE: f32 = 3.0;
+
+/// Points per sample for a `speed` in 0–5. Reaches exactly 1 at `speed = 5`
+/// whatever the sample rate.
 #[inline]
-fn speed_to_hz(speed: f32) -> f32 {
+fn speed_to_increment(speed: f32, sample_rate: f32) -> f32 {
     let s = speed.clamp(0.0, 5.0) / 5.0;
-    MAX_RATE_HZ * ((SPEED_OCTAVES * s).exp2() - 1.0) / (SPEED_OCTAVES.exp2() - 1.0)
+    if s >= 1.0 {
+        return 1.0;
+    }
+    let curve = ((SPEED_OCTAVES * s).exp2() - 1.0) / (SPEED_OCTAVES.exp2() - 1.0);
+    (curve * MAX_RATE_HZ.max(sample_rate) / sample_rate).min(1.0)
+}
+
+/// How the random value moves the input.
+#[derive(Clone, Copy, Debug, Default, Deserr, JsonSchema, PartialEq, Eq, Connect)]
+#[serde(rename_all = "camelCase")]
+#[deserr(rename_all = camelCase)]
+enum ErraticMode {
+    /// Add a random offset.
+    #[default]
+    Shift,
+    /// Move toward a random value in the range.
+    Blend,
 }
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
@@ -32,7 +55,8 @@ fn speed_to_hz(speed: f32) -> f32 {
 struct ErraticParams {
     /// signal to shift
     input: PolySignal,
-    /// shift depth (0–5); 5 shifts by up to half the range in each direction
+    /// depth (0–5); at 5, shift moves up to half the range either way and
+    /// blend jumps all the way to the random value
     #[signal(range = (0.0, 5.0))]
     amount: PolySignal,
     /// rising edge samples and holds the current random shift
@@ -60,6 +84,14 @@ struct ErraticParams {
     #[serde(default)]
     #[deserr(default)]
     clamp: bool,
+    /// shift adds a random offset; blend moves toward a random value in the range
+    #[serde(default)]
+    #[deserr(default)]
+    mode: ErraticMode,
+    /// mostly stay close to the input, with occasional big jumps
+    #[serde(default)]
+    #[deserr(default)]
+    sparse: bool,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -80,8 +112,12 @@ struct ErraticChannelState {
     points: [f32; 4],
     /// The curve through `points`, from the second toward the third.
     curve: CatmullRom,
+    /// The last four sparse-depth draws in [0, 1], drawn alongside `points`.
+    sparse_points: [f32; 4],
+    sparse_curve: CatmullRom,
     trigger: SchmittTrigger,
-    held: f32,
+    /// The held point and sparse draw.
+    held: (f32, f32),
 }
 
 /// One channel's inputs for one sample.
@@ -101,32 +137,41 @@ impl ErraticChannelState {
     /// draw its first four points.
     fn seed(&mut self, base: u64, channel: usize) {
         self.rng.seed(base, channel);
-        self.points = std::array::from_fn(|_| self.rng.next_bipolar());
+        for i in 0..4 {
+            self.points[i] = self.rng.next_bipolar();
+            self.sparse_points[i] = self.rng.next_unit();
+        }
         self.curve = CatmullRom::new(self.points);
+        self.sparse_curve = CatmullRom::new(self.sparse_points);
         self.seeded = true;
     }
 
-    /// Advance one sample and return the shifted input.
+    /// Advance one sample and return the randomised input.
     #[inline(always)]
-    fn step(&mut self, f: ChannelInputs, clamp: bool, sample_rate: f32) -> f32 {
-        let inc = (speed_to_hz(f.speed) / sample_rate).min(1.0);
+    fn step(&mut self, f: ChannelInputs, p: &ErraticParams, sample_rate: f32) -> f32 {
+        let inc = speed_to_increment(f.speed, sample_rate);
         self.phase += f64::from(inc);
         if self.phase >= 1.0 {
-            self.phase -= 1.0;
-            self.points = [
-                self.points[1],
-                self.points[2],
-                self.points[3],
-                self.rng.next_bipolar(),
-            ];
+            // A point per sample stays on the fresh point itself, so the
+            // output is the uniform draws rather than a curve between them.
+            self.phase = if inc >= 1.0 { 0.0 } else { self.phase - 1.0 };
+            let [_, a, b, c] = self.points;
+            self.points = [a, b, c, self.rng.next_bipolar()];
             self.curve = CatmullRom::new(self.points);
+            let [_, a, b, c] = self.sparse_points;
+            self.sparse_points = [a, b, c, self.rng.next_unit()];
+            self.sparse_curve = CatmullRom::new(self.sparse_points);
         }
-        let wander = self.curve.at(self.phase as f32).clamp(-1.0, 1.0);
+        let t = self.phase as f32;
+        let wander = (
+            self.curve.at(t).clamp(-1.0, 1.0),
+            self.sparse_curve.at(t).clamp(0.0, 1.0),
+        );
 
-        let r = match f.trigger {
+        let (r, u) = match f.trigger {
             Some(trig) => {
                 // The first sample latches too, so the hold starts at a random
-                // shift rather than at zero.
+                // value rather than at the input.
                 let uninit = self.trigger.state == SchmittState::Uninitialized;
                 if self.trigger.process(trig) || uninit {
                     self.held = wander;
@@ -141,14 +186,31 @@ impl ErraticChannelState {
         } else {
             (f.min, f.max)
         };
-        let half = f.amount.max(0.0) * (hi_bound - lo_bound) / NOMINAL_WIDTH;
+        let depth = f.amount.max(0.0) / 5.0;
+        let depth = if p.sparse {
+            (SPARSE_SCALE * depth * u).min(1.0)
+        } else {
+            depth
+        };
         let bias = f.bias.clamp(-5.0, 5.0) / 5.0;
-        let lo = -half * (1.0 - bias.max(0.0));
-        let hi = half * (1.0 + bias.min(0.0));
-        let shift = lo + (hi - lo) * (r + 1.0) * 0.5;
 
-        let out = f.input + shift;
-        if clamp {
+        let out = match p.mode {
+            ErraticMode::Shift => {
+                let half = depth * 5.0 * (hi_bound - lo_bound) / NOMINAL_WIDTH;
+                let lo = -half * (1.0 - bias.max(0.0));
+                let hi = half * (1.0 + bias.min(0.0));
+                f.input + lo + (hi - lo) * (r + 1.0) * 0.5
+            }
+            ErraticMode::Blend => {
+                // Bias narrows the target span toward the input from one side.
+                let anchor = f.input.clamp(lo_bound, hi_bound);
+                let lo = lo_bound + (anchor - lo_bound) * bias.max(0.0);
+                let hi = hi_bound - (hi_bound - anchor) * (-bias).max(0.0);
+                let target = lo + (hi - lo) * (r + 1.0) * 0.5;
+                f.input + (target - f.input) * depth.min(1.0)
+            }
+        };
+        if p.clamp {
             out.clamp(lo_bound, hi_bound)
         } else {
             out
@@ -156,14 +218,16 @@ impl ErraticChannelState {
     }
 }
 
-/// Applies a wandering random shift to a signal.
+/// Applies a wandering random variation to a signal.
 ///
-/// The shift spans ±**amount** scaled to the width of [**min**, **max**]: an
-/// amount of 5 moves the signal by up to half the range either way. **bias**
-/// shrinks one side of that span — at +5 the shift is only upward, at -5 only
-/// downward. **speed** sets how quickly the shift changes, from frozen at 0
-/// through smooth drift to white noise at 5. A **trigger** samples and holds
-/// the shift on each rising edge.
+/// **shift** mode adds an offset of up to ±**amount**, scaled to the width of
+/// [**min**, **max**]: 5 moves up to half the range either way. **blend** mode
+/// moves toward a random value in [**min**, **max**] by **amount** / 5, so it
+/// never leaves the range. **bias** makes the variation lean upward (+) or
+/// downward (−); ±5 makes it one-sided. **sparse** keeps most values close to
+/// the input, with occasional big jumps. **speed** runs from frozen at 0 to a
+/// fresh random value every sample at 5. A **trigger** holds the variation
+/// between rising edges.
 ///
 /// Backs the DSL's `.erratic()` signal method, which fills **min**/**max**
 /// from a ranged signal's range.
@@ -187,7 +251,7 @@ impl Erratic {
                 min: p.min.value_or(ch, ErraticParams::MIN_DEFAULT),
                 max: p.max.value_or(ch, ErraticParams::MAX_DEFAULT),
             };
-            let value = self.channel_state[ch].step(frame, p.clamp, sample_rate);
+            let value = self.channel_state[ch].step(frame, p, sample_rate);
             self.outputs.sample.set(ch, value);
         }
     }
@@ -224,7 +288,7 @@ impl Erratic {
                     min: min[ch],
                     max: max[ch],
                 };
-                *value = self.channel_state[ch].step(frame, self.params.clamp, sample_rate);
+                *value = self.channel_state[ch].step(frame, &self.params, sample_rate);
             }
         }
         Some(())
@@ -270,6 +334,8 @@ mod tests {
             min: None,
             max: None,
             clamp: false,
+            mode: ErraticMode::Shift,
+            sparse: false,
         }
     }
 
@@ -289,11 +355,28 @@ mod tests {
     }
 
     fn run(m: &mut Erratic, n: usize) -> Vec<f32> {
+        run_at(m, n, SR)
+    }
+
+    fn run_at(m: &mut Erratic, n: usize, sample_rate: f32) -> Vec<f32> {
         (0..n)
             .map(|_| {
-                m.update(SR);
+                m.update(sample_rate);
                 m.outputs.sample.get(0)
             })
+            .collect()
+    }
+
+    /// Share of `xs` in each of `bins` equal bins across [lo, hi].
+    fn histogram(xs: &[f32], lo: f32, hi: f32, bins: usize) -> Vec<f32> {
+        let mut counts = vec![0usize; bins];
+        for &x in xs {
+            let i = ((x - lo) / (hi - lo) * bins as f32) as usize;
+            counts[i.min(bins - 1)] += 1;
+        }
+        counts
+            .into_iter()
+            .map(|c| c as f32 / xs.len() as f32)
             .collect()
     }
 
@@ -393,9 +476,16 @@ mod tests {
         p.min = Some(poly(&[-5.0, 0.0, -3.0, 0.0]));
         p.max = Some(poly(&[5.0, 1.0, -1.0, 5.0]));
         p.clamp = true;
-        for trigger in [false, true] {
+        let cases = [false, true].into_iter().flat_map(|trigger| {
+            [ErraticMode::Shift, ErraticMode::Blend]
+                .into_iter()
+                .flat_map(move |mode| [false, true].map(|sparse| (trigger, mode, sparse)))
+        });
+        for (trigger, mode, sparse) in cases {
             let mut p = p.clone();
             p.trigger = trigger.then(|| volts(0.0));
+            p.mode = mode;
+            p.sparse = sparse;
             let mut sample = make(p.clone());
             let mut block = make(p);
             block.channel_state.copy_from_slice(&sample.channel_state);
@@ -422,7 +512,10 @@ mod tests {
                     .extend((start..start + len).flat_map(|i| outputs.sample.slot_mut(i).to_vec()));
             }
             assert!(expected.windows(2).any(|w| w[0] != w[1]));
-            assert_eq!(actual, expected, "trigger connected: {trigger}");
+            assert_eq!(
+                actual, expected,
+                "trigger connected: {trigger}, {mode:?}, sparse: {sparse}"
+            );
         }
     }
 
@@ -435,13 +528,112 @@ mod tests {
         m.channel_state[0].phase = 0.75;
         let samples = 48_000;
         run(&mut m, samples);
-        let expected = 0.75 + f64::from(speed_to_hz(speed) / SR) * samples as f64;
+        let expected = 0.75 + f64::from(speed_to_increment(speed, SR)) * samples as f64;
         assert!((m.channel_state[0].phase - expected).abs() < 1e-9);
     }
 
     #[test]
     fn speed_curve_endpoints() {
-        assert_eq!(speed_to_hz(0.0), 0.0);
-        assert!((speed_to_hz(5.0) - MAX_RATE_HZ).abs() < 1.0);
+        for sample_rate in [44_100.0, SR, 96_000.0] {
+            assert_eq!(speed_to_increment(0.0, sample_rate), 0.0);
+            assert_eq!(speed_to_increment(5.0, sample_rate), 1.0);
+        }
+        let near_top = speed_to_increment(4.9, SR) * SR;
+        assert!(near_top < MAX_RATE_HZ && near_top > MAX_RATE_HZ / 2.0);
+    }
+
+    /// At an engine rate above [`MAX_RATE_HZ`], speed 5 still draws a fresh
+    /// point every sample, even when the phase sat mid-curve beforehand.
+    #[test]
+    fn full_speed_draws_fresh_points_at_high_sample_rates() {
+        let mut m = make(params(0.0, 5.0, 5.0, 0.0));
+        m.channel_state[0].phase = 0.4;
+        run_at(&mut m, 4, 96_000.0);
+        let state = m.channel_state[0];
+        assert_eq!(state.phase, 0.0);
+        assert!((m.outputs.sample.get(0) - 5.0 * state.points[1]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn blend_pulls_toward_a_uniform_point_in_range() {
+        let mut p = params(4.0, 5.0, 5.0, 0.0);
+        p.mode = ErraticMode::Blend;
+        p.min = Some(volts(0.0));
+        p.max = Some(volts(5.0));
+        let xs = run(&mut make(p.clone()), 100_000);
+        let (lo, hi) = bounds(&xs);
+        assert!(lo >= 0.0 && hi <= 5.0, "{lo}..{hi}");
+        for share in histogram(&xs, 0.0, 5.0, 10) {
+            assert!((share - 0.1).abs() < 0.01, "not uniform: {share}");
+        }
+
+        p.amount = volts(2.5);
+        let (lo, hi) = bounds(&run(&mut make(p), 100_000));
+        assert!(
+            (lo - 2.0).abs() < 0.01 && (hi - 4.5).abs() < 0.01,
+            "{lo}..{hi}"
+        );
+    }
+
+    #[test]
+    fn blend_bias_targets_one_side_of_the_input() {
+        let mut p = params(1.0, 5.0, 5.0, 5.0);
+        p.mode = ErraticMode::Blend;
+        let (lo, hi) = bounds(&run(&mut make(p.clone()), 10_000));
+        assert!(lo >= 1.0 && lo < 1.1 && hi > 4.9, "{lo}..{hi}");
+
+        p.bias = Some(volts(-5.0));
+        let (lo, hi) = bounds(&run(&mut make(p), 10_000));
+        assert!(lo < -4.9 && hi <= 1.0 && hi > 0.9, "{lo}..{hi}");
+    }
+
+    /// Sparse depth is `min(1, 3a·u)`: at full amount two thirds of the draws
+    /// land at full depth and the rest spread evenly below it.
+    #[test]
+    fn sparse_draws_full_depth_for_a_share_of_points() {
+        let mut p = params(0.0, 5.0, 5.0, 5.0);
+        p.mode = ErraticMode::Blend;
+        p.min = Some(volts(0.0));
+        p.max = Some(volts(1.0));
+        p.sparse = true;
+        let mut m = make(p);
+        let n = 100_000;
+        let mut full = 0;
+        for _ in 0..n {
+            m.update(SR);
+            let state = m.channel_state[0];
+            let target = (state.points[1] + 1.0) * 0.5;
+            let out = m.outputs.sample.get(0);
+            if (out - target).abs() < 1e-6 {
+                full += 1;
+            }
+        }
+        let share = full as f32 / n as f32;
+        assert!((share - 2.0 / 3.0).abs() < 0.01, "{share}");
+    }
+
+    /// Sparse amount 1 peaks at ±3 V, like dense amount 3, but concentrates
+    /// near the input: within 0.5 V for a share `c(1 − ln c)` with `c = 1/6`,
+    /// against 1/6 for the dense shift.
+    #[test]
+    fn sparse_shift_mostly_stays_near_the_input() {
+        let mut p = params(0.0, 1.0, 5.0, 0.0);
+        p.sparse = true;
+        let sparse = run(&mut make(p), 100_000);
+        let dense = run(&mut make(params(0.0, 3.0, 5.0, 0.0)), 100_000);
+        let near =
+            |xs: &[f32]| xs.iter().filter(|x| x.abs() < 0.5).count() as f32 / xs.len() as f32;
+        let c: f32 = 1.0 / 6.0;
+        assert!((near(&dense) - c).abs() < 0.01, "{}", near(&dense));
+        assert!(
+            (near(&sparse) - c * (1.0 - c.ln())).abs() < 0.01,
+            "{}",
+            near(&sparse)
+        );
+        let (lo, hi) = bounds(&sparse);
+        assert!(
+            lo < -2.9 && hi > 2.9 && lo >= -3.0 && hi <= 3.0,
+            "{lo}..{hi}"
+        );
     }
 }
