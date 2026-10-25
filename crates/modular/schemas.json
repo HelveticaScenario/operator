@@ -6447,6 +6447,10 @@
       },
       {
         "name": "trigger"
+      }
+    ]
+  },
+  {
     "name": "$multimode",
     "documentation": "Mutable Instruments Blades–style multimode filter with drive and wavefolder.\n\nA circuit model of one channel of Blades: a 2164 VCA state-variable filter\nthat morphs continuously from lowpass through bandpass to highpass, preceded\nby a drive VCA into a zener soft clipper and a two-stage diode wavefolder.\nThe signal path is DC-coupled, so it can process CVs too.\n\n- **cutoff** — V/Oct. Tracks exactly at low cutoffs and runs progressively\n  flat in the top octaves (−15 cents at 1 kHz, about half a semitone at\n  5 kHz), topping out near 21 kHz, as the circuit does. Responds at audio\n  rate, so an oscillator patched in gives exponential FM.\n- **resonance** — 0–5. Self-oscillates above ~4.3; the bandpass is then\n  held near ±4 V by the soft knee of the integrator's zeners. With no input,\n  `mode` shifts the phase of the sine.\n- **mode** — 0 lowpass, 2.5 bandpass, 5 highpass; values between crossfade.\n- **drive** — input gain ahead of everything else: 0 is unity, 5 is about\n  +18 dB. The zeners' soft knee already rounds a ±5 V input at 0.\n- **fold** — 0 soft clipping only, 5 the two-stage wavefolder.\n- **highRes** — on by default. Off runs the circuit at the engine rate for\n  less CPU, with more aliasing from hot drive, folding and self-oscillation,\n  and a highpass that attenuates more below the cutoff once the cutoff is\n  above ~8 kHz (about 2 dB more at 15 kHz).\n\nPassband gain in lowpass mode is about +2.8 dB at unity drive, rolling off\nabove ~20 kHz at the output amp, whose zeners compress the output softly\nabove about 6 V.\n\n```js\n// resonant sweep that morphs from lowpass to highpass\n$multimode($saw('c2'), $sine('0.1hz').range(-1, 2), 3.8, $sine('0.07hz').range(0, 5)).out()\n// wavefolded sine through a gentle lowpass\n$multimode($sine('c3'), 'c6', 1, 0, { drive: 3, fold: 3 }).out()\n// no input: a self-oscillating sine at A3\n$multimode(0, 'a3', 5).out()\n// without oversampling, for less CPU\n$multimode($saw('c2'), 'c5', 2, 0, { highRes: false }).out()\n```",
     "paramsSchema": {
