@@ -10,10 +10,20 @@ struct HoldParams {
     /// gate/trigger input — a rising edge opens the output
     #[signal(type = gate, range = (0.0, 5.0))]
     input: PolySignal,
-    /// hold time in seconds; a rising edge mid-hold retriggers the gate (default 0.05)
+    /// hold time in seconds (default 0.05)
     #[signal(default = 0.05, range = (0.0, 10.0))]
     #[deserr(default)]
     time: Option<PolySignal>,
+    /// when true, a rising edge mid-hold restarts the gate; when false, it is
+    /// ignored and the gate closes `time` after the edge that opened it
+    /// (default true)
+    #[serde(default = "default_true")]
+    #[deserr(default = default_true())]
+    retrigger: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -44,12 +54,22 @@ struct HoldChannelState {
 /// downstream envelopes see a new rising edge, and the gate closes `time`
 /// after the new edge.
 ///
+/// With `retrigger: false`, edges are ignored while the output is high, so
+/// the gate re-opens on the first edge after it closes. Fed a steady pulse
+/// train, it fires once every `ceil(time / period)` pulses: a hold longer
+/// than the period divides the rate into subharmonics.
+///
 /// ## Example
 ///
 /// ```js
 /// // stretch short clock pulses into 100 ms gates
 /// const env = $adsr($hold($clock.beatTrigger, 0.1))
 /// $sine('c4').amplitude(env).out()
+/// ```
+///
+/// ```js
+/// // a 12 ms hold on a 200 Hz pulse train fires every third pulse
+/// $hold($pulse('200hz'), 0.012, { retrigger: false }).out()
 /// ```
 #[module(name = "$hold", args(input, time))]
 pub struct Hold {
@@ -68,7 +88,8 @@ impl Hold {
             let (_, edge) = state
                 .schmitt
                 .process_with_edge(self.params.input.get_value(ch));
-            if edge.is_rising() {
+            let holding = state.active && state.elapsed < time;
+            if edge.is_rising() && (self.params.retrigger || !holding) {
                 if state.output_high {
                     state.gap_remaining = retrigger_gap;
                 }
@@ -113,6 +134,7 @@ mod tests {
             params: HoldParams {
                 input: PolySignal::mono(Signal::Volts(input_volts)),
                 time: time_secs.map(|t| PolySignal::mono(Signal::Volts(t))),
+                retrigger: true,
             },
             outputs,
             _channel_count: 1,
@@ -240,5 +262,70 @@ mod tests {
         let mut hold = make(0.0, None);
         set_input(&mut hold, 5.0);
         assert_close(count_high(&mut hold, 5000), 2400);
+    }
+
+    /// Rising edges of the output while `hold` is fed a pulse train with
+    /// `period` samples and a 1-sample high, over `n` samples.
+    fn output_edges(hold: &mut Hold, period: usize, n: usize) -> usize {
+        let mut edges = 0;
+        let mut prev = 0.0;
+        for i in 0..n {
+            set_input(hold, if i % period == 0 { 5.0 } else { 0.0 });
+            hold.update(SR);
+            let v = hold.outputs.sample.get(0);
+            if v > prev {
+                edges += 1;
+            }
+            prev = v;
+        }
+        edges
+    }
+
+    #[test]
+    fn without_retrigger_a_mid_hold_edge_is_ignored() {
+        let mut hold = make(0.0, Some(0.01));
+        hold.params.retrigger = false;
+        set_input(&mut hold, 5.0);
+        count_high(&mut hold, 100);
+        set_input(&mut hold, 0.0);
+        count_high(&mut hold, 10);
+        set_input(&mut hold, 5.0);
+        let out = outputs(&mut hold, 1000);
+        // No gap, and the gate closes `time` after the first edge.
+        let high = out.iter().take_while(|&&v| v == GATE_HIGH_VOLTAGE).count();
+        assert_close(high, 480 - 110);
+        assert!(out[high..].iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn without_retrigger_a_hold_longer_than_the_period_divides_the_rate() {
+        // 100-sample period; the gate re-opens on the first pulse after it
+        // closes, so a hold of k periods plus a bit fires every k + 1 pulses.
+        for (time_samples, division) in [(50.0, 1), (150.0, 2), (250.0, 3), (390.0, 4)] {
+            let mut hold = make(0.0, Some(time_samples / SR));
+            hold.params.retrigger = false;
+            let edges = output_edges(&mut hold, 100, 100 * 120);
+            assert_eq!(edges, 120 / division, "time {time_samples} samples");
+        }
+    }
+
+    #[test]
+    fn without_retrigger_an_edge_on_the_closing_sample_reopens_after_a_gap() {
+        let (_, out) = pulse_then_low(1000);
+        let gate_len = out.iter().take_while(|&&v| v == GATE_HIGH_VOLTAGE).count();
+
+        let (mut hold, _) = pulse_then_low(gate_len - 1);
+        hold.params.retrigger = false;
+        set_input(&mut hold, 5.0);
+        let gap = min_gate_samples(SR) as usize;
+        let after = outputs(&mut hold, gap + 1);
+        assert!(after[..gap].iter().all(|&v| v == 0.0), "{after:?}");
+        assert_eq!(after[gap], GATE_HIGH_VOLTAGE);
+    }
+
+    #[test]
+    fn with_retrigger_a_hold_longer_than_the_period_keeps_every_pulse() {
+        let mut hold = make(0.0, Some(250.0 / SR));
+        assert_eq!(output_edges(&mut hold, 100, 100 * 120), 120);
     }
 }
