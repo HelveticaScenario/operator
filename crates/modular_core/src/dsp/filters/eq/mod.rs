@@ -1,10 +1,13 @@
 //! `$eq`: serial parametric EQ of trapezoidal state-variable filter
 //! sections.
 
+use std::ops::Range;
+
 use schemars::JsonSchema;
 
+use crate::block_input::{BlockInput, InputScratch};
 use crate::dsp::utils::sanitize;
-use crate::poly::PolyOutput;
+use crate::poly::{MonoSignal, PolyOutput};
 
 mod live;
 mod params;
@@ -12,7 +15,7 @@ mod svf;
 
 pub use live::eq_state_builder;
 
-use params::{EqSections, MAX_EQ_SECTIONS, ParametricEqParams, eq_derive_channel_count};
+use params::{DEFAULT_Q, EqSections, MAX_EQ_SECTIONS, ParametricEqParams, eq_derive_channel_count};
 use svf::SectionRuntime;
 
 #[derive(Outputs, JsonSchema)]
@@ -123,7 +126,7 @@ impl Default for ParametricEqState {
 /// // Start empty and build the EQ in the editor
 /// $eq($saw('c2'), { ui: true })
 /// ```
-#[module(name = "$eq", channels_derive = eq_derive_channel_count, patch_update, stateful, args(input))]
+#[module(name = "$eq", channels_derive = eq_derive_channel_count, patch_update, stateful, args(input), block)]
 pub struct ParametricEq {
     outputs: ParametricEqOutputs,
     state: ParametricEqState,
@@ -178,6 +181,122 @@ impl ParametricEq {
                     self.outputs.sample.set(ch, x);
                 }
             }
+        }
+    }
+    fn process_block(
+        &mut self,
+        outputs: &mut ParametricEqBlockOutputs,
+        range: Range<usize>,
+        sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let adaptive_q = self.params.adaptive_q;
+        let shared = matches!(self.params.sections, EqSections::Shared(_));
+        let (lists, num_lists) = match &self.params.sections {
+            EqSections::Shared(list) => (std::slice::from_ref(list), 1),
+            EqSections::PerChannel(lists) => (&lists[..], lists.len().min(channels)),
+        };
+        let mut s_in = InputScratch::new();
+        let input = self
+            .params
+            .input
+            .block_input(range.clone(), channels, &mut s_in)?;
+
+        // The params of every section still smoothing, in `update`'s refresh
+        // order; more such sections than fit decline the range.
+        let mut pool: [InputScratch; 3 * MAX_EQ_SECTIONS] =
+            std::array::from_fn(|_| InputScratch::new());
+        let mut free = pool.iter_mut();
+        let mut moving = [None; MAX_EQ_SECTIONS];
+        let mut count = 0;
+        for (l, list) in lists.iter().take(num_lists).enumerate() {
+            let n = list.len().min(MAX_EQ_SECTIONS);
+            for (s, sec) in list[..n].iter().enumerate() {
+                let rt = if shared {
+                    &self.state.mono[s]
+                } else {
+                    &self.channel_state[l].per[s]
+                };
+                if rt.is_settled() {
+                    continue;
+                }
+                let targets = [
+                    Target::resolve(Some(&sec.freq), 0.0, &range, free.next()?)?,
+                    Target::resolve(sec.gain.as_ref(), 0.0, &range, free.next()?)?,
+                    Target::resolve(sec.q.as_ref(), DEFAULT_Q, &range, free.next()?)?,
+                ];
+                *moving.get_mut(count)? = Some((l, s, targets));
+                count += 1;
+            }
+        }
+
+        for i in range {
+            for &(l, s, [f, g, q]) in moving[..count].iter().flatten() {
+                let rt = if shared {
+                    &mut self.state.mono[s]
+                } else {
+                    &mut self.channel_state[l].per[s]
+                };
+                if !rt.is_settled() {
+                    rt.advance(
+                        &lists[l][s],
+                        [f.at(i), g.at(i), q.at(i)],
+                        sample_rate,
+                        adaptive_q,
+                    );
+                }
+            }
+            let row = input.row(i);
+            let slot = outputs.sample.slot_mut(i);
+            for (ch, (out, &x)) in slot.iter_mut().zip(row).enumerate() {
+                let l = ch % num_lists;
+                let n = lists[l].len().min(MAX_EQ_SECTIONS);
+                let mut x = sanitize(x);
+                for s in 0..n {
+                    let c = if shared {
+                        self.state.mono[s].coeffs
+                    } else {
+                        self.channel_state[l].per[s].coeffs
+                    };
+                    let cs = &mut self.channel_state[ch];
+                    x = svf::process(&c, &mut cs.ic1[s], &mut cs.ic2[s], x);
+                }
+                *out = sanitize(x);
+            }
+        }
+        Some(())
+    }
+}
+
+/// A section param resolved for a block range: the channels it sums, or its
+/// default when absent.
+#[derive(Clone, Copy)]
+enum Target<'a> {
+    Summed(BlockInput<'a>),
+    Default(f32),
+}
+
+impl<'a> Target<'a> {
+    fn resolve(
+        signal: Option<&'a MonoSignal>,
+        default: f32,
+        range: &Range<usize>,
+        scratch: &'a mut InputScratch,
+    ) -> Option<Self> {
+        let Some(signal) = signal else {
+            return Some(Target::Default(default));
+        };
+        let poly = signal.poly();
+        poly.block_input(range.clone(), poly.channels(), scratch)
+            .map(Target::Summed)
+    }
+
+    /// Slot `i`'s value, summed as [`MonoSignal::get_value`] sums.
+    #[inline(always)]
+    fn at(&self, i: usize) -> f32 {
+        match self {
+            Target::Summed(rows) => rows.row(i).iter().sum(),
+            Target::Default(value) => *value,
         }
     }
 }
