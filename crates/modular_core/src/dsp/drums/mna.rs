@@ -14,8 +14,6 @@ use super::lanes::{Lanes, Lanewise, Mask, Mono, Real, c};
 /// Ground, as a node index.
 pub const GROUND: usize = usize::MAX;
 
-/// A switched conductance `g` from `node` to `other` (which may be
-/// [`GROUND`]) in series with a source of `volts`, positive toward `node`.
 /// A time step long enough that every capacitor carries no current: a
 /// network discretised at it solves for its circuit at DC.
 pub const DC_STEP: f32 = 1.0e3;
@@ -25,6 +23,8 @@ pub const STIFF: f32 = 10.0;
 /// Steps of [`DC_STEP`] that settle a linear network at DC.
 const SETTLE_STEPS: usize = 4;
 
+/// A switched conductance `g` from `node` to `other` (which may be
+/// [`GROUND`]) in series with a source of `volts`, positive toward `node`.
 #[derive(Clone, Copy)]
 pub struct Switch {
     pub node: usize,
@@ -218,9 +218,6 @@ fn invert<const N: usize>(mut m: [[f64; N]; N]) -> [[f32; N]; N] {
 }
 
 impl<const N: usize, const C: usize, const S: usize, const K: usize> Mna<N, C, S, K> {
-    /// Solves one sample with switch `s` closed where bit `s` of `closed` is
-    /// set, plus current `injected[n]` driven into each node `n`, returning
-    /// every unknown and advancing the capacitors' history.
     /// The state a network discretised at [`DC_STEP`] settles to with
     /// switches `closed` and `injected` held: its circuit at DC.
     pub fn settle(&self, closed: usize, injected: &[f32; N]) -> MnaState<C> {
@@ -231,6 +228,9 @@ impl<const N: usize, const C: usize, const S: usize, const K: usize> Mna<N, C, S
         state
     }
 
+    /// Solves one sample with switch `s` closed where bit `s` of `closed` is
+    /// set, plus current `injected[n]` driven into each node `n`, returning
+    /// every unknown and advancing the capacitors' history.
     #[inline]
     pub fn step<L: Lanes>(
         &self,
