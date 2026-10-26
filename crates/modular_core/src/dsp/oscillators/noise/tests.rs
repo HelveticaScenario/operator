@@ -1,4 +1,4 @@
-use super::generators::lfsr_phase_distance;
+use super::generators::{DUST_MEAN_GAP, DUST_X_MIN, beads_gap, lfsr_phase_distance};
 use super::*;
 use crate::dsp::utils::hz_to_voct;
 use crate::types::{OutputStruct, PatchUpdateHandler, Signal};
@@ -75,6 +75,22 @@ fn render_from(mut n: Noise, samples: usize) -> Vec<f32> {
             n.outputs.sample.get(0)
         })
         .collect()
+}
+
+/// The pulses in `out` away from `rest`, as `(start, length)`. A change of
+/// level starts a new pulse.
+fn pulses(out: &[f32], rest: f32) -> Vec<(usize, usize)> {
+    let mut found: Vec<(usize, usize)> = Vec::new();
+    for (i, &v) in out.iter().enumerate() {
+        if v == rest {
+            continue;
+        }
+        match found.last_mut() {
+            Some((start, len)) if *start + *len == i && out[i - 1] == v => *len += 1,
+            _ => found.push((i, 1)),
+        }
+    }
+    found
 }
 
 const ALL_KINDS: [NoiseKind; 12] = [
@@ -182,13 +198,51 @@ fn linear_and_smooth_have_no_jumps() {
 
 #[test]
 fn velvet_fires_once_per_tick() {
-    let out = render(
+    let out = render_seeded(
         with_rate(NoiseKind::Velvet, 480.0, NoiseInterp::Step),
         48_000,
     );
-    let impulses = out.iter().filter(|v| v.abs() == 5.0).count();
+    let impulses = pulses(&out, 0.0).len();
     assert!((480..=481).contains(&impulses), "{impulses} impulses");
     assert!(out.iter().all(|&v| v == 0.0 || v.abs() == 5.0));
+}
+
+#[test]
+fn slow_pulses_last_the_standard_trigger_length() {
+    let hold = crate::dsp::utils::min_gate_samples(SR) as usize;
+    for (kind, rest) in [(NoiseKind::Dust, -5.0), (NoiseKind::Velvet, 0.0)] {
+        let out = render_seeded(with_rate(kind, 10.0, NoiseInterp::Step), 96_000);
+        let found = pulses(&out, rest);
+        assert!(found.len() > 10, "{kind:?}: {} pulses", found.len());
+        for (start, len) in found {
+            assert_eq!(len, hold, "{kind:?} pulse at {start}");
+        }
+    }
+}
+
+#[test]
+fn fast_dust_shortens_triggers_and_keeps_them_distinct() {
+    let hold = crate::dsp::utils::min_gate_samples(SR) as usize;
+    // 2000 per second: 24 samples apart on average, as close as about 3.
+    let out = render_seeded(
+        with_rate(NoiseKind::Dust, 2000.0, NoiseInterp::Step),
+        48_000,
+    );
+    let found = pulses(&out, -5.0);
+    assert!(
+        (1900..2100).contains(&found.len()),
+        "{} triggers",
+        found.len()
+    );
+    for w in found.windows(2) {
+        let ((start, len), (next, _)) = (w[0], w[1]);
+        assert!(len <= hold, "trigger at {start} lasts {len}");
+        assert!(
+            len <= next - start - len,
+            "trigger at {start} rests less than it lasts"
+        );
+    }
+    assert!(found.iter().any(|&(_, len)| len < hold));
 }
 
 #[test]
@@ -207,12 +261,57 @@ fn telegraph_and_dust_follow_rate_on_average() {
         with_rate(NoiseKind::Dust, 100.0, NoiseInterp::Step),
         480_000,
     );
-    let triggers = out.iter().filter(|&&v| v == 5.0).count();
+    let triggers = pulses(&out, -5.0).len();
     assert!(
         (900..1100).contains(&triggers),
         "{triggers} triggers in 10s at 100/s"
     );
     assert!(out.iter().all(|&v| v.abs() == 5.0));
+}
+
+#[test]
+fn dust_gaps_stay_within_beads_bounds_and_average_the_rate() {
+    // 100 per second at 48 kHz: 480 samples between triggers on average.
+    let average = 480.0;
+    let out = render_seeded(
+        with_rate(NoiseKind::Dust, 100.0, NoiseInterp::Step),
+        4_800_000,
+    );
+    let triggers = pulses(&out, -5.0);
+    let gaps: Vec<f32> = triggers
+        .windows(2)
+        .map(|w| (w[1].0 - w[0].0) as f32)
+        .collect();
+    let lo = beads_gap(DUST_X_MIN) / DUST_MEAN_GAP;
+    let hi = beads_gap(1.0) / DUST_MEAN_GAP;
+    for &gap in &gaps {
+        assert!(
+            gap >= (lo * average).floor() && gap <= (hi * average).ceil(),
+            "gap of {gap} samples outside [{lo}, {hi}] × {average}"
+        );
+    }
+    let mean = gaps.iter().sum::<f32>() / gaps.len() as f32;
+    assert!(
+        (mean / average - 1.0).abs() < 0.025,
+        "mean gap {mean} samples, expected {average}"
+    );
+    // Short gaps are more likely than long ones.
+    let short = gaps.iter().filter(|&&g| g < average).count();
+    assert!(
+        short * 2 > gaps.len(),
+        "{short} of {} gaps short",
+        gaps.len()
+    );
+}
+
+#[test]
+fn dust_without_rate_fires_every_two_samples_on_average() {
+    let out = render_seeded(params(NoiseKind::Dust, 1), 100_000);
+    let high = out.iter().filter(|&&v| v == 5.0).count();
+    assert!(
+        (40_000..=50_000).contains(&high),
+        "{high} high samples in 100000"
+    );
 }
 
 #[test]
