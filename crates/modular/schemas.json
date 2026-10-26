@@ -8943,7 +8943,7 @@
   },
   {
     "name": "$noise",
-    "documentation": "Polyphonic noise generator with selectable color and clock rate.\n\nSpectral colors:\n- **white**: equal energy across all frequencies (bright, hissy)\n- **pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **brown**: steep low-frequency emphasis (deep, rumbling)\n- **blue** / **violet**: high-frequency emphasis (+3 / +6 dB/octave), for hats and air\n\nDistributions and digital noise:\n- **binary**: only −5V or +5V — at the same peak it is louder than white\n- **gaussian**: values cluster near 0V with occasional large excursions\n- **lfsr** / **lfsrShort**: NES-style shift-register noise; lfsr repeats every 32767 ticks,\n  lfsrShort every 93, which sounds pitched and metallic — its `rate` sets that pitch\n\nImpulse and switching noise:\n- **velvet**: exactly one ±5V impulse per tick, at a random moment within it\n- **telegraph**: ±5V that flips at random moments, on average `rate` times per second\n- **dust**: rests at −5V with single-sample +5V triggers, on average `rate` per second; like\n  Mutable Instruments Beads' random grain triggers, each gap is 0.12–2.36× the average, so\n  triggers are loosely irregular with no long silences\n\n`rate` clocks the generator: the color is computed at that rate, so slow\nrates give random CV (a slow brown is a drunk walk) and audio rates give\nlo-fi, band-limited noise. `interp` shapes the output between ticks;\n`linear` and `smooth` turn any color into a smooth random LFO. Unconnected,\nthe generator draws a new value every sample, telegraph flips on half of all\nsamples, and dust fires on a little under half of them.\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n$noise(\"lfsrShort\", { rate: \"c3\" }).out()\n$sine($noise(\"brown\", { rate: $hz(4), interp: \"smooth\" })).out()\n```",
+    "documentation": "Polyphonic noise generator with selectable color and clock rate.\n\nSpectral colors:\n- **white**: equal energy across all frequencies (bright, hissy)\n- **pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **brown**: steep low-frequency emphasis (deep, rumbling)\n- **blue** / **violet**: high-frequency emphasis (+3 / +6 dB/octave), for hats and air\n\nDistributions and digital noise:\n- **binary**: only −5V or +5V — at the same peak it is louder than white\n- **gaussian**: values cluster near 0V with occasional large excursions\n- **lfsr** / **lfsrShort**: NES-style shift-register noise; lfsr repeats every 32767 ticks,\n  lfsrShort every 93, which sounds pitched and metallic — its `rate` sets that pitch\n\nImpulse and switching noise:\n- **velvet**: exactly one ±5V trigger per tick, at a random moment within it, resting at 0V\n- **telegraph**: ±5V that flips at random moments, on average `rate` times per second\n- **dust**: rests at −5V with +5V triggers, on average `rate` per second; like\n  Mutable Instruments Beads' random grain triggers, each gap is 0.12–2.36× the average, so\n  triggers are loosely irregular with no long silences\n\nVelvet and dust triggers last the standard trigger length (about 0.33 ms),\nshortened toward a single sample when the next trigger comes sooner, so\nevery trigger stays distinct.\n\n`rate` clocks the generator: the color is computed at that rate, so slow\nrates give random CV (a slow brown is a drunk walk) and audio rates give\nlo-fi, band-limited noise. `interp` shapes the output between ticks;\n`linear` and `smooth` turn any color into a smooth random LFO. Unconnected,\nthe generator draws a new value every sample, telegraph flips on half of all\nsamples, and dust triggers every two samples on average.\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n$noise(\"lfsrShort\", { rate: \"c3\" }).out()\n$sine($noise(\"brown\", { rate: $hz(4), interp: \"smooth\" })).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "NoiseParams",
@@ -9044,7 +9044,7 @@
               "const": "lfsrShort"
             },
             {
-              "description": "one ±5V impulse at a random point in every tick",
+              "description": "one ±5V trigger at a random point in every tick",
               "type": "string",
               "const": "velvet"
             },
@@ -9054,7 +9054,7 @@
               "const": "telegraph"
             },
             {
-              "description": "rests at −5V with single-sample +5V triggers, `rate` per second on\naverage, at loosely irregular moments with no long silences",
+              "description": "rests at −5V with +5V triggers, `rate` per second on average, at\nloosely irregular moments with no long silences",
               "type": "string",
               "const": "dust"
             }
