@@ -40,6 +40,14 @@ impl Connect for ScaleSignal {
     fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
         self.0.inject_index_ptr(ptr);
     }
+    fn mark_glides(
+        &mut self,
+        old: Option<&Self>,
+        generation: u64,
+        ids: &dyn crate::types::PreviousIds,
+    ) {
+        self.0.mark_glides(old.map(|o| &o.0), generation, ids);
+    }
 }
 
 impl JsonSchema for ScaleSignal {

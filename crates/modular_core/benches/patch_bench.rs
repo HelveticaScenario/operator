@@ -566,7 +566,7 @@ fn erratic_modulated(channels: usize) -> BenchPatch {
 }
 
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 18] = [
+    let cases: &[(&str, fn(usize) -> BenchPatch)] = &[
         ("wide_mix_sample_160", wide_mix_sample),
         ("remap_chain_32", remap_chain),
         ("wide_mix_160", wide_mix),
@@ -586,7 +586,7 @@ fn bench_patches(c: &mut Criterion) {
         ("erratic_constant_32", erratic_constant),
         ("erratic_modulated_32", erratic_modulated),
     ];
-    for (name, build) in cases {
+    for &(name, build) in cases {
         let mut group = c.benchmark_group(name);
         for channels in CHANNELS {
             let patch = build(channels);

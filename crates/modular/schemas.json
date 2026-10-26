@@ -9271,7 +9271,7 @@
   },
   {
     "name": "$noise",
-    "documentation": "Polyphonic noise generator with selectable color and clock rate.\n\nSpectral colors:\n- **white**: equal energy across all frequencies (bright, hissy)\n- **pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **brown**: steep low-frequency emphasis (deep, rumbling)\n- **blue** / **violet**: high-frequency emphasis (+3 / +6 dB/octave), for hats and air\n\nDistributions and digital noise:\n- **binary**: only −5V or +5V — at the same peak it is louder than white\n- **gaussian**: values cluster near 0V with occasional large excursions\n- **lfsr** / **lfsrShort**: NES-style shift-register noise; lfsr repeats every 32767 ticks,\n  lfsrShort every 93, which sounds pitched and metallic — its `rate` sets that pitch\n\nImpulse and switching noise:\n- **velvet**: exactly one ±5V impulse per tick, at a random moment within it\n- **telegraph**: ±5V that flips at random moments, on average `rate` times per second\n- **dust**: rests at −5V with single-sample +5V triggers at random moments, on average `rate` per second\n\n`rate` clocks the generator: the color is computed at that rate, so slow\nrates give random CV (a slow brown is a drunk walk) and audio rates give\nlo-fi, band-limited noise. `interp` shapes the output between ticks;\n`linear` and `smooth` turn any color into a smooth random LFO. Unconnected,\nthe generator draws a new value every sample, and telegraph and dust switch\non half of all samples.\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n$noise(\"lfsrShort\", { rate: \"c3\" }).out()\n$sine($noise(\"brown\", { rate: $hz(4), interp: \"smooth\" })).out()\n```",
+    "documentation": "Polyphonic noise generator with selectable color and clock rate.\n\nSpectral colors:\n- **white**: equal energy across all frequencies (bright, hissy)\n- **pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **brown**: steep low-frequency emphasis (deep, rumbling)\n- **blue** / **violet**: high-frequency emphasis (+3 / +6 dB/octave), for hats and air\n\nDistributions and digital noise:\n- **binary**: only −5V or +5V — at the same peak it is louder than white\n- **gaussian**: values cluster near 0V with occasional large excursions\n- **lfsr** / **lfsrShort**: NES-style shift-register noise; lfsr repeats every 32767 ticks,\n  lfsrShort every 93, which sounds pitched and metallic — its `rate` sets that pitch\n\nImpulse and switching noise:\n- **velvet**: exactly one ±5V trigger per tick, at a random moment within it, resting at 0V\n- **telegraph**: ±5V that flips at random moments, on average `rate` times per second\n- **dust**: rests at −5V with +5V triggers, on average `rate` per second; like\n  Mutable Instruments Beads' random grain triggers, each gap is 0.12–2.36× the average, so\n  triggers are loosely irregular with no long silences\n\nVelvet and dust triggers last the standard trigger length (about 0.33 ms),\nshortened toward a single sample when the next trigger comes sooner, so\nevery trigger stays distinct.\n\n`rate` clocks the generator: the color is computed at that rate, so slow\nrates give random CV (a slow brown is a drunk walk) and audio rates give\nlo-fi, band-limited noise. `interp` shapes the output between ticks;\n`linear` and `smooth` turn any color into a smooth random LFO. Unconnected,\nthe generator draws a new value every sample, telegraph flips on half of all\nsamples, and dust triggers every two samples on average.\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n$noise(\"lfsrShort\", { rate: \"c3\" }).out()\n$sine($noise(\"brown\", { rate: $hz(4), interp: \"smooth\" })).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "NoiseParams",
@@ -9372,7 +9372,7 @@
               "const": "lfsrShort"
             },
             {
-              "description": "one ±5V impulse at a random point in every tick",
+              "description": "one ±5V trigger at a random point in every tick",
               "type": "string",
               "const": "velvet"
             },
@@ -9382,7 +9382,7 @@
               "const": "telegraph"
             },
             {
-              "description": "rests at −5V with single-sample +5V triggers at random moments, `rate`\nper second on average",
+              "description": "rests at −5V with +5V triggers, `rate` per second on average, at\nloosely irregular moments with no long silences",
               "type": "string",
               "const": "dust"
             }
@@ -10519,7 +10519,7 @@
   },
   {
     "name": "$lpf",
-    "documentation": "Lowpass filter that attenuates frequencies above the cutoff point.\n\nUse it to tame bright timbres, create bass-heavy sounds, or build classic\nsubtractive synth patches. Sweeping the cutoff with an envelope or LFO\nproduces the familiar filter-sweep effect.\n\n- **cutoff** — set in V/Oct (0 V = C4). Accepts modulation for filter sweeps.\n- **resonance** — boosts frequencies near the cutoff (0–5). High values\n  produce a ringing peak; very high values cause self-oscillation.\n\n```js\n// subtractive bass: saw through a lowpass with envelope on cutoff\nlet env = $adsr($pPulse($clock[0]), { attack: 0.01, decay: 0.3, sustain: 1, release: 0.4 })\n$lpf($saw('c2'), env.range('200hz', '2000hz'))\n```",
+    "documentation": "Lowpass filter that attenuates frequencies above the cutoff point.\n\nUse it to tame bright timbres, create bass-heavy sounds, or build classic\nsubtractive synth patches. Sweeping the cutoff with an envelope or LFO\nproduces the familiar filter-sweep effect.\n\n- **cutoff** — set in V/Oct (0 V = C4). Accepts modulation for filter sweeps.\n- **resonance** — boosts frequencies near the cutoff (0–5). High values\n  produce a ringing peak, but the filter never self-oscillates; use\n  `$jup6f` for a filter that does.\n\n```js\n// subtractive bass: saw through a lowpass with envelope on cutoff\nlet env = $adsr($pPulse($clock[0]), { attack: 0.01, decay: 0.3, sustain: 1, release: 0.4 })\n$lpf($saw('c2'), env.range('200hz', '2000hz'))\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "LowpassFilterParams",
@@ -18765,6 +18765,135 @@
     ]
   },
   {
+    "name": "$coinFlip",
+    "documentation": "Sends each trigger to heads or tails at random.\n\nEach trigger on **input** flips a weighted coin, and **probability** sets\nthe chance of heads. The module itself is the heads output; `.tails`\ncarries the rest. Gates keep their length, and each channel flips on its\nown.\n\nPlace it after `$clockDivider` to turn a steady clock into a loose rhythm,\nor use both outputs to split one stream between two sounds.\n\n```js\n// Each beat lands on the kick or the snare, 75/25:\nconst flip = $coinFlip($clock.beatTrigger, 3.75)\n$tr808.kick(flip).out()\n$tr808.snare(flip.tails).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CoinFlipParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "triggers or gates to flip",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "probability": {
+          "description": "chance of heads: 0 = never, 2.5 = half the time, 5 = always",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "heads",
+        "description": "triggers that land heads",
+        "polyphonic": true,
+        "default": true
+      },
+      {
+        "name": "tails",
+        "description": "triggers that land tails",
+        "polyphonic": true,
+        "default": false
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "triggers or gates to flip",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "probability",
+        "description": "chance of heads: 0 = never, 2.5 = half the time, 5 = always",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "probability"
+      }
+    ]
+  },
+  {
     "name": "$scan",
     "documentation": "Steps a counter by `distance` on each trigger, wrapping it within 0 to\n`length`.\n\nA step past `length` wraps around by the overshoot, as many times as it\ntakes, and so does a step below 0. With `snapOnWrap`, a step past\n`length` lands on 0 and a step below 0 lands on `length`. A counter\nexactly at `length` stays there. `reset` sets the counter to 0, and wins\nover a trigger in the same sample. Lengths are read at each trigger, so a\nshorter `length` takes effect on the next step.\n\n```js\n// Pitch steps of a quarter octave, wrapping within an octave:\n$sine($scan(1, 0.25, $pulse('4hz'))).out()\n```",
     "paramsSchema": {
@@ -19174,18 +19303,18 @@
   },
   {
     "name": "_erratic",
-    "documentation": "Applies a wandering random shift to a signal.\n\nThe shift spans ±**amount** scaled to the width of [**min**, **max**]: an\namount of 5 moves the signal by up to half the range either way. **bias**\nshrinks one side of that span — at +5 the shift is only upward, at -5 only\ndownward. **speed** sets how quickly the shift changes, from frozen at 0\nthrough smooth drift to white noise at 5. A **trigger** samples and holds\nthe shift on each rising edge.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
+    "documentation": "Applies a wandering random variation to a signal.\n\n**shift** mode adds an offset of up to ±**amount**, scaled to the width of\n[**min**, **max**]: 5 moves up to half the range either way. **clamp** mode\nshifts the same way, then clamps to the range. **blend** mode moves toward a\nrandom value in [**min**, **max**] by **amount** / 5 and stays in the range.\n**bias** makes the variation lean upward (+)\nor downward (−); ±5 makes it one-sided. **sparse** draws a random depth per\nvalue: low amounts mostly stay near the input with rare big jumps, high\namounts mostly jump. **speed** runs from frozen at 0 to a\nfresh random value every sample at 5. A **trigger** holds the variation\nbetween rising edges.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "ErraticParams",
       "type": "object",
       "properties": {
         "amount": {
-          "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+          "description": "depth (0–5); at 5, shift moves up to half the range either way and\nblend jumps all the way to the random value",
           "$ref": "#/$defs/PolySignal"
         },
         "bias": {
-          "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+          "description": "leans the variation upward (positive) or downward (negative); ±5 makes it one-sided",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -19195,13 +19324,8 @@
             }
           ]
         },
-        "clamp": {
-          "description": "clamp the output to [min, max]",
-          "type": "boolean",
-          "default": false
-        },
         "input": {
-          "description": "signal to shift",
+          "description": "signal to vary",
           "$ref": "#/$defs/PolySignal"
         },
         "max": {
@@ -19226,8 +19350,17 @@
             }
           ]
         },
+        "mode": {
+          "description": "shift adds a random offset; clamp also clamps it to [min, max]; blend\nmoves toward a random value in [min, max]",
+          "$ref": "#/$defs/ErraticMode"
+        },
+        "sparse": {
+          "description": "draw a random depth per value: low amounts mostly stay near the input\nwith rare big jumps, high amounts mostly jump",
+          "type": "boolean",
+          "default": false
+        },
         "speed": {
-          "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+          "description": "how fast the variation wanders: 0 = frozen, 5 = a fresh value every sample",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -19238,7 +19371,7 @@
           ]
         },
         "trigger": {
-          "description": "rising edge samples and holds the current random shift",
+          "description": "rising edge samples and holds the current random value",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -19254,6 +19387,26 @@
         "amount"
       ],
       "$defs": {
+        "ErraticMode": {
+          "description": "How the random value moves the input.",
+          "oneOf": [
+            {
+              "description": "Add a random offset.",
+              "type": "string",
+              "const": "shift"
+            },
+            {
+              "description": "Add a random offset, then clamp to [min, max].",
+              "type": "string",
+              "const": "clamp"
+            },
+            {
+              "description": "Move toward a random value in [min, max], clamped to it.",
+              "type": "string",
+              "const": "blend"
+            }
+          ]
+        },
         "PolySignal": {
           "anyOf": [
             {
@@ -19325,7 +19478,7 @@
     "signalParams": [
       {
         "name": "input",
-        "description": "signal to shift",
+        "description": "signal to vary",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,
@@ -19333,7 +19486,7 @@
       },
       {
         "name": "amount",
-        "description": "shift depth (0–5); 5 shifts by up to half the range in each direction",
+        "description": "depth (0–5); at 5, shift moves up to half the range either way and\nblend jumps all the way to the random value",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -19341,7 +19494,7 @@
       },
       {
         "name": "trigger",
-        "description": "rising edge samples and holds the current random shift",
+        "description": "rising edge samples and holds the current random value",
         "signalType": "trig",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -19349,7 +19502,7 @@
       },
       {
         "name": "speed",
-        "description": "how fast the shift wanders: 0 = frozen, 5 = white noise",
+        "description": "how fast the variation wanders: 0 = frozen, 5 = a fresh value every sample",
         "signalType": "control",
         "defaultValue": 2.0,
         "minValue": 0.0,
@@ -19357,7 +19510,7 @@
       },
       {
         "name": "bias",
-        "description": "skews the shift upward (positive) or downward (negative); ±5 makes it one-sided",
+        "description": "leans the variation upward (positive) or downward (negative); ±5 makes it one-sided",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,

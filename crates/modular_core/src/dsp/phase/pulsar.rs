@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use crate::dsp::fx::enosc_tables::aa_pulsar;
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -37,7 +37,7 @@ struct PulsarOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    amount: Clickless,
+    amount: SwapGlide,
 }
 
 /// Phase effect: pulsar synthesis distortion.
@@ -73,8 +73,9 @@ impl Pulsar {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.value_or(ch, 0.0);
 
-            // Smooth amount parameter to avoid clicks
-            state.amount.update(amount_raw);
+            state
+                .amount
+                .update(amount_raw, self.params.amount.glide_mark(ch), sample_rate);
             let amount = *state.amount;
 
             // Map amount from [0, 5] to multiplier [1, 64]

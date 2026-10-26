@@ -1,7 +1,7 @@
 use crate::{
     dsp::utils::wrap,
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 use deserr::Deserr;
 use schemars::JsonSchema;
@@ -27,10 +27,10 @@ struct PSawOscillatorOutputs {
     sample: PolyOutput,
 }
 
-/// Per-channel state for shape smoothing and phase tracking
+/// Per-channel state for shape glide and phase tracking
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    shape: Clickless,
+    shape: SwapGlide,
     /// Previous phase, kept in f64 so the DPW differencing (which divides a
     /// difference of near-equal integral values by the per-sample phase delta)
     /// stays well-conditioned when that delta is tiny at slow phasor rates.
@@ -58,15 +58,16 @@ pub struct PSawOscillator {
 }
 
 impl PSawOscillator {
-    fn update(&mut self, _sample_rate: f32) {
+    fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
-            // Update shape with smoothing - clamp to valid range
             let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
-            state.shape.update(shape_val);
+            state
+                .shape
+                .update(shape_val, self.params.shape.glide_mark(ch), sample_rate);
 
             let phase = wrap(0.0..1.0, self.params.phase.get_value(ch)) as f64;
 

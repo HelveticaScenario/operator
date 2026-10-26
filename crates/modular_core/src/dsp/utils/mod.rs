@@ -29,6 +29,15 @@ pub fn min_gate_samples(sample_rate: f32) -> u32 {
     (sample_rate * MIN_GATE_DURATION_SECS).round() as u32
 }
 
+/// Length of a trigger whose next trigger comes `gap_samples` later: the
+/// standard [`min_gate_samples`], cut to half the gap so the signal returns to
+/// rest between triggers, and never shorter than one sample.
+pub fn trigger_samples(sample_rate: f32, gap_samples: f32) -> u32 {
+    min_gate_samples(sample_rate)
+        .min((gap_samples * 0.5) as u32)
+        .max(1)
+}
+
 #[inline]
 pub fn changed(a: f32, b: f32) -> bool {
     // NaN is used as a sentinel for "never computed" in filter state,
@@ -1176,5 +1185,15 @@ mod tests {
     fn min_gate_samples_96khz() {
         let samples = min_gate_samples(96000.0);
         assert_eq!(samples, 32);
+    }
+
+    #[test]
+    fn trigger_samples_shrink_with_the_gap() {
+        assert_eq!(trigger_samples(48000.0, 48000.0), 16);
+        assert_eq!(trigger_samples(48000.0, 33.0), 16);
+        assert_eq!(trigger_samples(48000.0, 20.0), 10);
+        assert_eq!(trigger_samples(48000.0, 2.0), 1);
+        assert_eq!(trigger_samples(48000.0, 0.3), 1);
+        assert_eq!(trigger_samples(48000.0, f32::INFINITY), 16);
     }
 }

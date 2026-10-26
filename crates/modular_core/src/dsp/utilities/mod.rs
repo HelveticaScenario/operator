@@ -11,6 +11,7 @@ pub mod chord;
 pub mod chord_names;
 pub mod clamp;
 pub mod clock_divider;
+pub mod coin_flip;
 pub mod curve;
 pub mod delay;
 pub mod erratic;
@@ -48,6 +49,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     chord::Chord::install_constructor(map);
     clamp::Clamp::install_constructor(map);
     clock_divider::ClockDivider::install_constructor(map);
+    coin_flip::CoinFlip::install_constructor(map);
     scan::Scan::install_constructor(map);
     curve::Curve::install_constructor(map);
     delay::DelayRead::install_constructor(map);
@@ -82,6 +84,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     chord::Chord::install_params_deserializer(map);
     clamp::Clamp::install_params_deserializer(map);
     clock_divider::ClockDivider::install_params_deserializer(map);
+    coin_flip::CoinFlip::install_params_deserializer(map);
     scan::Scan::install_params_deserializer(map);
     curve::Curve::install_params_deserializer(map);
     delay::DelayRead::install_params_deserializer(map);
@@ -117,6 +120,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         chord::Chord::get_schema(),
         clamp::Clamp::get_schema(),
         clock_divider::ClockDivider::get_schema(),
+        coin_flip::CoinFlip::get_schema(),
         scan::Scan::get_schema(),
         curve::Curve::get_schema(),
         delay::DelayRead::get_schema(),

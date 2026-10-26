@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use crate::dsp::fx::enosc_tables::{aa_segment, interpolate_segment};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +35,7 @@ struct SegmentOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    amount: Clickless,
+    amount: SwapGlide,
 }
 
 /// Waveshaper that morphs through 8 distinct tonal shapes as you sweep the
@@ -60,8 +60,9 @@ impl Segment {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.get_value(ch);
 
-            // Smooth amount parameter to avoid clicks
-            state.amount.update(amount_raw);
+            state
+                .amount
+                .update(amount_raw, self.params.amount.glide_mark(ch), sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1] for table lookup

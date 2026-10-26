@@ -236,7 +236,8 @@ fn channels_keep_sounding_as_updates_regroup_them() {
             if segment > 0 {
                 let new = patch(voice, count, false);
                 for (id, module) in &new.sampleables {
-                    module.transfer_state_from(old.sampleables[id].as_ref());
+                    module
+                        .transfer_state_from(old.sampleables[id].as_ref(), &crate::types::SameIds);
                 }
                 start(&new);
                 old = new;

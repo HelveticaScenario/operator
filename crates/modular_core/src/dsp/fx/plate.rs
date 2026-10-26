@@ -13,7 +13,7 @@ use crate::dsp::utils::delay_line::DelayLine;
 use crate::dsp::utils::one_pole::OnePole;
 use crate::dsp::utils::{map_range, sanitize};
 use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 // ─── Reference sample rate ───────────────────────────────────────────────────
 // Glicol's DelayN values are in samples at 48kHz.
@@ -180,10 +180,10 @@ struct PlateState {
     line_f_ap: DelayLine,
     line_f_delay: [DelayLine; 3],
 
-    // Parameter smoothing
-    smoothed_bandwidth: Clickless,
-    smoothed_damping: Clickless,
-    smoothed_decay: Clickless,
+    // Patch-update glides
+    smoothed_bandwidth: SwapGlide,
+    smoothed_damping: SwapGlide,
+    smoothed_decay: SwapGlide,
 
     // DC blocking HPF (20Hz)
     dc_blocker_l: DcBlocker,
@@ -318,7 +318,7 @@ impl Plate {
         };
     }
 
-    fn update(&mut self, _sample_rate: f32) {
+    fn update(&mut self, sample_rate: f32) {
         let lens = self.state.lengths;
         let num_input_channels = self.params.input.channels();
 
@@ -326,17 +326,27 @@ impl Plate {
 
         let bw_v = self.params.bandwidth.value_or(2.02);
         let bw_coeff = map_range(bw_v, -5.0, 5.0, 0.005, 0.9999).clamp(0.005, 0.9999);
-        self.state.smoothed_bandwidth.update(bw_coeff);
+        self.state.smoothed_bandwidth.update(
+            bw_coeff,
+            self.params.bandwidth.glide_mark(),
+            sample_rate,
+        );
         let bandwidth = *self.state.smoothed_bandwidth;
 
         let damp_v = self.params.damping.value_or(4.09);
         let damp_coeff = map_range(damp_v, -5.0, 5.0, 0.9999, 0.005).clamp(0.005, 0.9999);
-        self.state.smoothed_damping.update(damp_coeff);
+        self.state.smoothed_damping.update(
+            damp_coeff,
+            self.params.damping.glide_mark(),
+            sample_rate,
+        );
         let damping = *self.state.smoothed_damping;
 
         let decay_v = self.params.decay.value_or(-2.0);
         let decay_raw = map_range(decay_v, -5.0, 5.0, 0.0, 0.9999).clamp(0.0, 0.9999);
-        self.state.smoothed_decay.update(decay_raw);
+        self.state
+            .smoothed_decay
+            .update(decay_raw, self.params.decay.glide_mark(), sample_rate);
         let decay = *self.state.smoothed_decay;
 
         let mod_v = self.params.modulation.value_or(0.0);

@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 
 use crate::dsp::utils::rng::{LcgRng, seed_base};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -50,8 +50,8 @@ const MIN_STEP: f32 = 1.0e-4;
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    amount: Clickless,
-    step: Clickless,
+    amount: SwapGlide,
+    step: SwapGlide,
     /// Previous quantized value, for the differentiation that brightens the grit.
     prev_q: f32,
     /// False until the first sample has seeded `prev_q`. A fresh channel primes
@@ -116,15 +116,23 @@ impl QuantNoise {
         self.state.seeded = true;
     }
 
-    fn update(&mut self, _sample_rate: f32) {
+    fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
             let input = self.params.input.get_value(ch);
-            state.amount.update(self.params.amount.get_value(ch));
-            state.step.update(self.params.step.value_or(ch, 0.25));
+            state.amount.update(
+                self.params.amount.get_value(ch),
+                self.params.amount.glide_mark(ch),
+                sample_rate,
+            );
+            state.step.update(
+                self.params.step.value_or(ch, 0.25),
+                self.params.step.glide_mark(ch),
+                sample_rate,
+            );
             let amount = (*state.amount).max(0.0);
             let step = (*state.step).max(MIN_STEP);
             let dither = self.params.dither.value_or(ch, 5.0).clamp(0.0, 5.0) / 5.0;

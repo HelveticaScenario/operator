@@ -1,21 +1,22 @@
-//! Andy Simper's (Cytomic) trapezoidal SVF as an EQ section, with
-//! gain-parameterized output mixes from "Solving the continuous SVF equations
-//! using trapezoidal integration and equivalent currents" (2016).
+//! EQ sections on the shared trapezoidal SVF kernel, with the
+//! gain-parameterized output mixes from Simper's "Solving the continuous SVF
+//! equations using trapezoidal integration and equivalent currents" (2016).
 
 use super::params::{DEFAULT_Q, EqSection, EqSectionType, MAX_Q, MIN_Q, effective_q};
-use crate::dsp::utils::{changed, sanitize, voct_to_hz};
+use crate::dsp::filters::svf_core::SvfCoeffs;
+use crate::dsp::utils::{changed, voct_to_hz};
 use crate::poly::{MonoSignal, MonoSignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
-/// Per-section smoothing and change-detection state. `NaN` = never computed.
+/// Per-section patch-update glides and change-detection state. `NaN` = never computed.
 #[derive(Clone, Copy)]
 struct SectionSmooth {
     last_freq: f32,
     last_gain: f32,
     last_q: f32,
-    smooth_freq: Clickless,
-    smooth_gain: Clickless,
-    smooth_q: Clickless,
+    smooth_freq: SwapGlide,
+    smooth_gain: SwapGlide,
+    smooth_q: SwapGlide,
 }
 
 impl Default for SectionSmooth {
@@ -24,36 +25,22 @@ impl Default for SectionSmooth {
             last_freq: f32::NAN,
             last_gain: f32::NAN,
             last_q: f32::NAN,
-            smooth_freq: Clickless::default(),
-            smooth_gain: Clickless::default(),
-            smooth_q: Clickless::default(),
+            smooth_freq: SwapGlide::default(),
+            smooth_gain: SwapGlide::default(),
+            smooth_q: SwapGlide::default(),
         }
     }
 }
 
-/// Trapezoidal-integration gains plus the per-type output mix.
-#[derive(Clone, Copy, Default)]
-pub(super) struct SvfCoeffs {
-    a1: f32,
-    a2: f32,
-    a3: f32,
-    m0: f32,
-    m1: f32,
-    m2: f32,
-}
-
-/// One section's smoothed params and the coefficients derived from them.
+/// One section's glided params and the coefficients derived from them.
 #[derive(Clone, Copy, Default)]
 pub(super) struct SectionRuntime {
     smooth: SectionSmooth,
     pub(super) coeffs: SvfCoeffs,
-    /// Every param is a fixed value its smoother has reached, so refreshing
+    /// Every param is a fixed value whose glide has finished, so refreshing
     /// can change nothing until the next patch update.
     settled: bool,
 }
-
-/// Smoothed values this close to their fixed targets count as arrived.
-const SETTLE_EPSILON: f32 = 1e-4;
 
 /// An optional param's fixed value (its default when absent), or None when
 /// it is signal-driven.
@@ -65,7 +52,7 @@ fn fixed_or(signal: &Option<MonoSignal>, default: f32) -> Option<f32> {
 }
 
 impl SectionRuntime {
-    /// Smooths the section's params and recomputes coefficients when they move.
+    /// Glides the section's params and recomputes coefficients when they move.
     pub(super) fn refresh(&mut self, sec: &EqSection, sample_rate: f32, adaptive_q: bool) {
         if self.settled {
             return;
@@ -76,12 +63,12 @@ impl SectionRuntime {
             sec.gain.value_or(0.0),
             sec.q.value_or(DEFAULT_Q),
         );
-        s.smooth_freq.update(target_f);
-        s.smooth_gain.update(target_g);
-        s.smooth_q.update(target_q);
-        let arrived = (*s.smooth_freq - target_f).abs() < SETTLE_EPSILON
-            && (*s.smooth_gain - target_g).abs() < SETTLE_EPSILON
-            && (*s.smooth_q - target_q).abs() < SETTLE_EPSILON;
+        s.smooth_freq
+            .update(target_f, sec.freq.glide_mark(), sample_rate);
+        s.smooth_gain
+            .update(target_g, sec.gain.glide_mark(), sample_rate);
+        s.smooth_q.update(target_q, sec.q.glide_mark(), sample_rate);
+        let arrived = !s.smooth_freq.gliding() && !s.smooth_gain.gliding() && !s.smooth_q.gliding();
         if arrived
             && sec.freq.constant_value().is_some()
             && fixed_or(&sec.gain, 0.0).is_some()
@@ -101,8 +88,8 @@ impl SectionRuntime {
         }
     }
 
-    /// The values the filter is running at: smoothed freq (V/Oct), and gain
-    /// and q after smoothing and clamping.
+    /// The values the filter is running at: glided freq (V/Oct), and gain
+    /// and q after gliding and clamping.
     pub(super) fn live_values(&self) -> [f32; 3] {
         let s = &self.smooth;
         [
@@ -112,7 +99,7 @@ impl SectionRuntime {
         ]
     }
 
-    /// Forces the next refresh to recompute coefficients, keeping the smoothers.
+    /// Forces the next refresh to run its glides and recompute coefficients.
     pub(super) fn invalidate(&mut self) {
         self.settled = false;
         self.smooth.last_freq = f32::NAN;
@@ -156,28 +143,5 @@ fn compute_section(
         }
     };
 
-    let a1 = 1.0 / (1.0 + g * (g + k));
-    let a2 = g * a1;
-    let a3 = g * a2;
-    SvfCoeffs {
-        a1,
-        a2,
-        a3,
-        m0,
-        m1,
-        m2,
-    }
-}
-
-/// Runs one sample through a section, updating its two integrator states.
-/// `x` must be finite: a chain sanitizes its input once, and each section's
-/// output stays finite because its coefficients and states are.
-#[inline]
-pub(super) fn process(c: &SvfCoeffs, ic1: &mut f32, ic2: &mut f32, x: f32) -> f32 {
-    let v3 = x - *ic2;
-    let v1 = c.a1 * *ic1 + c.a2 * v3;
-    let v2 = *ic2 + c.a2 * *ic1 + c.a3 * v3;
-    *ic1 = sanitize(2.0 * v1 - *ic1);
-    *ic2 = sanitize(2.0 * v2 - *ic2);
-    c.m0 * x + c.m1 * v1 + c.m2 * v2
+    SvfCoeffs::new(g, k, m0, m1, m2)
 }

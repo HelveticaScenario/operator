@@ -16,11 +16,20 @@ use schemars::JsonSchema;
 use crate::{
     dsp::utils::{SchmittTrigger, voct_to_midi},
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 
 /// Block size for rendering - matches VCV Rack's implementation
 const BLOCK_SIZE: usize = 12;
+
+/// Plaits' knob filters as time constants. The firmware runs
+/// `ONE_POLE(value, adc, c)` once per 12-sample block at 48 kHz, with c = 0.01
+/// for timbre and morph (and their hidden LPG colour and decay) and c = 0.005
+/// for harmonics and the attenuverters: τ = -(12 / 48000) / ln(1 - c). Patch
+/// edits glide like a knob turn; live signals arrive unfiltered, like its CV
+/// jacks.
+const KNOB_TAU_FAST: f32 = 0.024_875;
+const KNOB_TAU_SLOW: f32 = 0.049_875;
 
 /// Internal sample rate for the Plaits engine (designed for 48kHz)
 const ENGINE_SAMPLE_RATE: f32 = 48000.0;
@@ -197,13 +206,16 @@ struct PlaitsChannelState {
     voice: Voice<'static>,
     main_buffer: [f32; BLOCK_SIZE],
     aux_buffer: [f32; BLOCK_SIZE],
-    // Smoothed parameters
-    harmonics: Clickless,
-    timbre: Clickless,
-    morph: Clickless,
-    lpg_color: Clickless,
-    lpg_decay: Clickless,
-    mix: Clickless,
+    // Glided parameters
+    harmonics: SwapGlide,
+    timbre_amt: SwapGlide,
+    fm_amt: SwapGlide,
+    morph_amt: SwapGlide,
+    timbre: SwapGlide,
+    morph: SwapGlide,
+    lpg_color: SwapGlide,
+    lpg_decay: SwapGlide,
+    mix: SwapGlide,
     // Trigger state tracking
     /// Schmitt trigger for edge detection with hysteresis
     trigger_schmitt: SchmittTrigger,
@@ -220,12 +232,15 @@ impl Default for PlaitsChannelState {
             voice,
             main_buffer: [0.0; BLOCK_SIZE],
             aux_buffer: [0.0; BLOCK_SIZE],
-            harmonics: Clickless::default(),
-            timbre: Clickless::default(),
-            morph: Clickless::default(),
-            lpg_color: Clickless::default(),
-            lpg_decay: Clickless::default(),
-            mix: Clickless::default(),
+            harmonics: SwapGlide::with_time_constant(KNOB_TAU_SLOW),
+            timbre_amt: SwapGlide::with_time_constant(KNOB_TAU_SLOW),
+            fm_amt: SwapGlide::with_time_constant(KNOB_TAU_SLOW),
+            morph_amt: SwapGlide::with_time_constant(KNOB_TAU_SLOW),
+            timbre: SwapGlide::with_time_constant(KNOB_TAU_FAST),
+            morph: SwapGlide::with_time_constant(KNOB_TAU_FAST),
+            lpg_color: SwapGlide::with_time_constant(KNOB_TAU_FAST),
+            lpg_decay: SwapGlide::with_time_constant(KNOB_TAU_FAST),
+            mix: SwapGlide::default(),
             trigger_schmitt: SchmittTrigger::default(),
             trigger_latch: false,
         }
@@ -303,9 +318,7 @@ impl Plaits {
             .into_boxed_slice();
     }
 
-    fn update(&mut self, _sample_rate: f32) {
-        // sample_rate is fixed at construction, no need to handle changes
-
+    fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count().max(1);
 
         // Track triggers on every sample to catch short pulses
@@ -324,7 +337,7 @@ impl Plaits {
 
         // Render when buffer is exhausted
         if self.state.buffer_pos >= BLOCK_SIZE {
-            self.render_block(num_channels);
+            self.render_block(num_channels, sample_rate);
             self.state.buffer_pos = 0;
         }
 
@@ -337,11 +350,13 @@ impl Plaits {
             self.outputs.main.set(ch, main);
             self.outputs.aux.set(ch, aux);
 
-            state
-                .mix
-                .update(self.params.mix.value_or(ch, 0.0).clamp(0.0, 5.0));
+            state.mix.update(
+                self.params.mix.value_or(ch, 0.0).clamp(0.0, 5.0),
+                self.params.mix.glide_mark(ch),
+                sample_rate,
+            );
 
-            let mix = state.mix / 5.0;
+            let mix = *state.mix / 5.0;
 
             self.outputs
                 .mix
@@ -351,26 +366,52 @@ impl Plaits {
         self.state.buffer_pos += 1;
     }
 
-    fn render_block(&mut self, num_channels: usize) {
+    fn render_block(&mut self, num_channels: usize, sample_rate: f32) {
+        let block_rate = sample_rate / BLOCK_SIZE as f32;
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
-            // Update smoothed parameters
-            state
-                .harmonics
-                .update(self.params.harmonics.value_or(ch, 0.0).clamp(-5.0, 5.0));
-            state
-                .timbre
-                .update(self.params.timbre.value_or(ch, 0.0).clamp(-5.0, 5.0));
-            state
-                .morph
-                .update(self.params.morph.value_or(ch, 0.0).clamp(-5.0, 5.0));
-            state
-                .lpg_color
-                .update(self.params.lpg_color.value_or(ch, 2.5).clamp(0.0, 5.0));
-            state
-                .lpg_decay
-                .update(self.params.lpg_decay.value_or(ch, 2.5).clamp(0.0, 5.0));
+            state.harmonics.update(
+                self.params.harmonics.value_or(ch, 0.0).clamp(-5.0, 5.0),
+                self.params.harmonics.glide_mark(ch),
+                block_rate,
+            );
+            state.timbre.update(
+                self.params.timbre.value_or(ch, 0.0).clamp(-5.0, 5.0),
+                self.params.timbre.glide_mark(ch),
+                block_rate,
+            );
+            state.morph.update(
+                self.params.morph.value_or(ch, 0.0).clamp(-5.0, 5.0),
+                self.params.morph.glide_mark(ch),
+                block_rate,
+            );
+            state.lpg_color.update(
+                self.params.lpg_color.value_or(ch, 2.5).clamp(0.0, 5.0),
+                self.params.lpg_color.glide_mark(ch),
+                block_rate,
+            );
+            state.lpg_decay.update(
+                self.params.lpg_decay.value_or(ch, 2.5).clamp(0.0, 5.0),
+                self.params.lpg_decay.glide_mark(ch),
+                block_rate,
+            );
+
+            state.timbre_amt.update(
+                self.params.timbre_amt.value_or(ch, 0.0),
+                self.params.timbre_amt.glide_mark(ch),
+                block_rate,
+            );
+            state.fm_amt.update(
+                self.params.fm_amt.value_or(ch, 0.0),
+                self.params.fm_amt.glide_mark(ch),
+                block_rate,
+            );
+            state.morph_amt.update(
+                self.params.morph_amt.value_or(ch, 0.0),
+                self.params.morph_amt.glide_mark(ch),
+                block_rate,
+            );
 
             // Get engine index from enum
             let engine_index = self.params.engine.to_index();
@@ -384,12 +425,9 @@ impl Plaits {
                 decay: (*state.lpg_decay / 5.0).clamp(0.0, 1.0),
                 lpg_colour: (*state.lpg_color / 5.0).clamp(0.0, 1.0),
                 // Modulation amounts (attenuverters)
-                frequency_modulation_amount: (self.params.fm_amt.value_or(ch, 0.0) / 5.0)
-                    .clamp(-1.0, 1.0),
-                timbre_modulation_amount: (self.params.timbre_amt.value_or(ch, 0.0) / 5.0)
-                    .clamp(-1.0, 1.0),
-                morph_modulation_amount: (self.params.morph_amt.value_or(ch, 0.0) / 5.0)
-                    .clamp(-1.0, 1.0),
+                frequency_modulation_amount: (*state.fm_amt / 5.0).clamp(-1.0, 1.0),
+                timbre_modulation_amount: (*state.timbre_amt / 5.0).clamp(-1.0, 1.0),
+                morph_modulation_amount: (*state.morph_amt / 5.0).clamp(-1.0, 1.0),
             };
 
             // Build the Modulations struct
@@ -407,7 +445,7 @@ impl Plaits {
 
             // Operator merges Plaits' knob + CV jack into a single port per
             // destination, so harmonics/timbre/morph have no concept of an
-            // external modulation source: the smoothed signal feeds the
+            // external modulation source: the glided signal feeds the
             // patch.* base values, and timbreAmt / morphAmt route the
             // internal trigger envelope into those destinations.
             let modulations = Modulations {
@@ -442,3 +480,35 @@ impl Plaits {
 }
 
 message_handlers!(impl Plaits {});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Connect, SameIds, Signal};
+
+    /// A patch-edit glide follows the firmware's `ONE_POLE(value, target, c)`,
+    /// run once per block at 48 kHz, one block behind: the glide holds the
+    /// pre-edit value for the block the edit lands in.
+    #[test]
+    fn knob_glides_match_firmware_pot_filters() {
+        let block_rate = 48_000.0 / BLOCK_SIZE as f32;
+        for (tau, c) in [(KNOB_TAU_FAST, 0.01f32), (KNOB_TAU_SLOW, 0.005)] {
+            let before = PolySignal::mono(Signal::Volts(-5.0));
+            let mut after = PolySignal::mono(Signal::Volts(5.0));
+            after.mark_glides(Some(&before), 1, &SameIds);
+            let mut glide = SwapGlide::with_time_constant(tau);
+            glide.update(-5.0, before.glide_mark(0), block_rate);
+            glide.update(5.0, after.glide_mark(0), block_rate);
+            let mut pot = -5.0f32;
+            for block in 0..4_000 {
+                pot += c * (5.0 - pot);
+                glide.update(5.0, after.glide_mark(0), block_rate);
+                assert!(
+                    (*glide - pot).abs() < 1e-3,
+                    "c = {c}: block {block} glide {} vs firmware {pot}",
+                    *glide
+                );
+            }
+        }
+    }
+}

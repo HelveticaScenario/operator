@@ -4,6 +4,8 @@
 //! - Voltage values (V/Oct, pre-converted at parse time)
 //! - Rests
 
+use std::sync::Arc;
+
 use deserr::{DeserializeError, Deserr, ErrorKind, IntoValue, Map, Sequence, ValuePointerRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -47,7 +49,9 @@ pub(crate) struct SeqCycleHap {
 /// multi-source highlights know which input string each leaf came from.
 pub(crate) type SeqCycleStorage = CycleStorage<SeqCycleHap, super::cache::FlatSpan>;
 
-/// Fill `storage` with the pattern's haps for `cycle`.
+/// Fill `storage` with the pattern's haps for `cycle`, sorted by `part_begin`
+/// (stable, so simultaneous haps keep query order). `Seq::update` relies on the
+/// order to binary-search the haps a forward playhead step enters.
 pub(crate) fn populate_cycle_storage(
     pattern: &Pattern<SeqValue>,
     cycle: i64,
@@ -75,6 +79,9 @@ pub(crate) fn populate_cycle_storage(
             span_len,
         });
     });
+    storage
+        .haps
+        .sort_by(|a, b| a.part_begin.total_cmp(&b.part_begin));
 }
 
 /// A value in a sequence pattern.
@@ -637,7 +644,10 @@ pub struct SeqPatternParam {
 
     /// Baked haps for the ribbon window `[offset, offset+length)`, one
     /// `SeqCycleStorage` per cycle. Filled by [`SeqPatternParam::bake`].
-    pub(crate) cached_haps: Vec<SeqCycleStorage>,
+    /// Shared, so cloning params (every params-cache hit) never copies the
+    /// bake. The audio thread never drops the last reference: replaced modules
+    /// return through the garbage queue and drop on the main thread.
+    pub(crate) cached_haps: Arc<[SeqCycleStorage]>,
 }
 
 impl JsonSchema for SeqPatternParam {
@@ -672,7 +682,7 @@ impl SeqPatternParam {
             per_source,
             is_multi_source: false,
             pattern: Some(pattern),
-            cached_haps: Vec::new(),
+            cached_haps: Arc::default(),
         })
     }
 
@@ -762,7 +772,7 @@ impl SeqPatternParam {
             per_source,
             is_multi_source: true,
             pattern: Some(pattern),
-            cached_haps: Vec::new(),
+            cached_haps: Arc::default(),
         })
     }
 
@@ -909,7 +919,7 @@ impl SeqPatternParam {
             per_source,
             is_multi_source: true,
             pattern: Some(pattern),
-            cached_haps: Vec::new(),
+            cached_haps: Arc::default(),
         })
     }
 
@@ -921,7 +931,7 @@ impl SeqPatternParam {
             per_source,
             is_multi_source: true,
             pattern: Some(pattern),
-            cached_haps: Vec::new(),
+            cached_haps: Arc::default(),
         })
     }
 
@@ -933,7 +943,7 @@ impl SeqPatternParam {
             per_source,
             is_multi_source: true,
             pattern: Some(pattern),
-            cached_haps: Vec::new(),
+            cached_haps: Arc::default(),
         })
     }
 
@@ -945,7 +955,7 @@ impl SeqPatternParam {
             per_source,
             is_multi_source: true,
             pattern: Some(pattern),
-            cached_haps: Vec::new(),
+            cached_haps: Arc::default(),
         })
     }
 
@@ -956,7 +966,7 @@ impl SeqPatternParam {
             per_source,
             is_multi_source: true,
             pattern: Some(pattern),
-            cached_haps: Vec::new(),
+            cached_haps: Arc::default(),
         })
     }
 
@@ -1065,7 +1075,7 @@ impl SeqPatternParam {
     /// audio thread.
     pub(crate) fn bake(&mut self, offset: f64, length: f64) {
         if let Some(pattern) = self.pattern.as_ref() {
-            self.cached_haps = bake_cycles(pattern, offset, length);
+            self.cached_haps = bake_cycles(pattern, offset, length).into();
         }
     }
 }
@@ -1180,6 +1190,13 @@ impl Connect for SeqPatternParam {
     fn connect(&mut self, _patch: &Patch) {}
     fn collect_cables(&self, _sink: &mut Vec<String>) {}
     fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
+    fn mark_glides(
+        &mut self,
+        _old: Option<&Self>,
+        _generation: u64,
+        _ids: &dyn crate::types::PreviousIds,
+    ) {
+    }
 }
 
 #[cfg(test)]
@@ -1265,6 +1282,27 @@ mod tests {
         let v: Vec<f64> = haps.iter().map(|h| h.value.to_voltage().unwrap()).collect();
         assert!((v[0] - 2.0 / 12.0).abs() < 1e-9, "v[0]={}", v[0]);
         assert!((v[1] - 4.0 / 12.0).abs() < 1e-9, "v[1]={}", v[1]);
+    }
+
+    #[test]
+    fn test_baked_haps_sorted_by_part_begin() {
+        // Stack layers query one after another, so the raw hap order is not
+        // time order; `Seq::update` binary-searches each cycle by `part_begin`.
+        let mut param = SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test(
+            "<0 1 2>*8, c3(3,8) e3@3 g3, [c4|d4]*5",
+        ))
+        .unwrap();
+        param.bake(0.0, 6.0);
+        for storage in param.cached_haps().iter() {
+            assert!(storage.haps.len() > 1);
+            assert!(
+                storage
+                    .haps
+                    .windows(2)
+                    .all(|w| w[0].part_begin <= w[1].part_begin),
+                "baked haps out of part_begin order"
+            );
+        }
     }
 
     // ===== $p.arrange tests =====

@@ -1,11 +1,12 @@
 //! Per-channel generator state for `$noise`.
 
 use super::generators::{
-    BLUE_GAIN, BROWN_STEP, Lfsr, LfsrLoop, PINK_GAIN, PinkFilter, coin, gaussian, rail, reflect,
+    BLUE_GAIN, BROWN_STEP, Lfsr, LfsrLoop, PINK_GAIN, PinkFilter, coin, dust_gap, gaussian, rail,
+    reflect,
 };
 use super::{NoiseInterp, NoiseKind};
-use crate::dsp::utils::CatmullRom;
 use crate::dsp::utils::rng::LcgRng;
+use crate::dsp::utils::{CatmullRom, TempGate, TempGateState, trigger_samples};
 
 /// Draws that settle the pink filter bank before its first output. Its slowest
 /// pole has a time constant of about 880 draws, so a cold filter would start
@@ -43,6 +44,16 @@ pub(super) struct NoiseChannelState {
     impulse_sign: f32,
     /// Velvet: the scheduled impulse has not fired yet.
     impulse_pending: bool,
+    /// Velvet: clock phase of the next tick's impulse, drawn a tick ahead so
+    /// each impulse knows the gap to the next.
+    next_impulse_at: f32,
+    /// Velvet: sign of the next tick's impulse.
+    next_impulse_sign: f32,
+    /// The pulse dust or velvet is holding.
+    pulse: TempGate,
+    /// Dust: time left until the next trigger, in average gaps. f64 for the
+    /// same reason as `phase`.
+    dust_wait: f64,
 }
 
 impl NoiseChannelState {
@@ -85,9 +96,18 @@ impl NoiseChannelState {
         self.telegraph_high = self.generator.next_unit() >= 0.5;
         self.phase = 0.0;
         self.schedule_impulse();
+        self.schedule_impulse();
+        self.pulse = TempGate::new(TempGateState::Low, 0.0, 0.0);
 
         match kind {
-            NoiseKind::Velvet | NoiseKind::Telegraph | NoiseKind::Dust => {}
+            // A random fraction of a gap, so the first trigger can come at any
+            // moment.
+            NoiseKind::Dust => {
+                self.pulse = TempGate::new(TempGateState::Low, -1.0, -1.0);
+                self.dust_wait =
+                    f64::from(dust_gap(&mut self.generator) * self.generator.next_unit());
+            }
+            NoiseKind::Velvet | NoiseKind::Telegraph => {}
             _ => {
                 if matches!(kind, NoiseKind::Pink | NoiseKind::Blue) {
                     for _ in 0..PINK_WARMUP {
@@ -156,31 +176,52 @@ impl NoiseChannelState {
         }
     }
 
+    /// Move the next tick's impulse into the current tick and draw the one
+    /// after it.
     fn schedule_impulse(&mut self) {
-        self.impulse_at = self.generator.next_unit();
-        self.impulse_sign = coin(&mut self.generator);
+        self.impulse_at = self.next_impulse_at;
+        self.impulse_sign = self.next_impulse_sign;
         self.impulse_pending = true;
+        self.next_impulse_at = self.generator.next_unit();
+        self.next_impulse_sign = coin(&mut self.generator);
+    }
+
+    /// Start a pulse from `rest` to `level` that lasts the standard trigger
+    /// length, shortened when the next pulse is `gap_ticks` away at `inc`
+    /// ticks per sample.
+    fn start_pulse(&mut self, rest: f32, level: f32, gap_ticks: f64, inc: f32, sample_rate: f32) {
+        let gap_samples = (gap_ticks / f64::from(inc)) as f32;
+        self.pulse = TempGate::new(TempGateState::Low, rest, level);
+        self.pulse.set_state(
+            TempGateState::High,
+            TempGateState::Low,
+            trigger_samples(sample_rate, gap_samples),
+        );
     }
 
     /// Advance the clock by `inc` (≤ 1) ticks and return the velvet output.
     /// Each tick schedules one impulse at a random phase within it. An impulse
     /// still pending when its tick ends fires on that final sample, and one
     /// that would land on the same sample fires on the next.
-    pub(super) fn velvet(&mut self, inc: f32) -> f32 {
-        let mut out = 0.0;
+    pub(super) fn velvet(&mut self, inc: f32, sample_rate: f32) -> f32 {
         self.phase += f64::from(inc);
+        let mut fired = false;
         if self.phase >= 1.0 {
             self.phase -= 1.0;
-            if self.impulse_pending {
-                out = self.impulse_sign;
-            }
+            let late_sign = self.impulse_pending.then_some(self.impulse_sign);
             self.schedule_impulse();
+            if let Some(sign) = late_sign {
+                fired = true;
+                let gap = (f64::from(self.impulse_at) - self.phase).max(0.0);
+                self.start_pulse(0.0, sign, gap, inc, sample_rate);
+            }
         }
-        if out == 0.0 && self.impulse_pending && self.phase > f64::from(self.impulse_at) {
+        if !fired && self.impulse_pending && self.phase > f64::from(self.impulse_at) {
             self.impulse_pending = false;
-            out = self.impulse_sign;
+            let gap = 1.0 - self.phase + f64::from(self.next_impulse_at);
+            self.start_pulse(0.0, self.impulse_sign, gap, inc, sample_rate);
         }
-        out
+        self.pulse.process()
     }
 
     /// Telegraph: flip with probability `p`, return the level.
@@ -189,9 +230,17 @@ impl NoiseChannelState {
         rail(self.telegraph_high)
     }
 
-    /// Dust: +1 with probability `p`, else −1.
-    pub(super) fn dust(&mut self, p: f32) -> f32 {
-        rail(self.generator.next_unit() < p)
+    /// Dust: count down `inc` average gaps and return the output, −1 at rest
+    /// and +1 during a trigger. Triggers that fall within one sample merge.
+    pub(super) fn dust(&mut self, inc: f32, sample_rate: f32) -> f32 {
+        self.dust_wait -= f64::from(inc);
+        if self.dust_wait <= 0.0 {
+            while self.dust_wait <= 0.0 {
+                self.dust_wait += f64::from(dust_gap(&mut self.generator));
+            }
+            self.start_pulse(-1.0, 1.0, self.dust_wait, inc, sample_rate);
+        }
+        self.pulse.process()
     }
 }
 
