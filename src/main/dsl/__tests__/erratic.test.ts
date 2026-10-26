@@ -95,8 +95,8 @@ describe('.erratic()', () => {
         });
     });
 
-    test('sparse passes through on an unranged signal', () => {
-        builder.$c('c3').erratic(1, { sparse: true });
+    test('unranged signal passes sparse but not mode', () => {
+        builder.$c('c3').erratic(1, { sparse: true, mode: 'blend' } as object);
         const params = erraticParams();
         expect(params.sparse).toBe(true);
         expect(params.mode).toBeUndefined();

@@ -193,14 +193,14 @@ export interface ErraticOptions {
     speed?: PolySignal;
     /** Leans the variation upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
     bias?: PolySignal;
-    /** `'shift'` adds a random offset; `'blend'` moves toward a random value in the range, staying in range when the input is (default `'shift'`) */
-    mode?: 'shift' | 'blend';
     /** Draw a random depth per value: low amounts mostly stay near the input with rare big jumps, high amounts mostly jump (default false) */
     sparse?: boolean;
 }
 
 /** Options for `.erratic()` on a ranged signal */
 export interface RangedErraticOptions extends ErraticOptions {
+    /** `'shift'` adds a random offset; `'blend'` moves toward a random value in the range, staying in range when the input is (default `'shift'`) */
+    mode?: 'shift' | 'blend';
     /** Clamp the output to the signal's range (default true) */
     clamp?: boolean;
 }
@@ -734,13 +734,14 @@ function erratic(
     range?: { min: PolySignal; max: PolySignal },
 ): Collection {
     const factory = builder.getFactory('_erratic');
-    const options = { trigger, speed, bias, mode, sparse };
+    const options = { trigger, speed, bias, sparse };
     if (!range) {
         return factory(input, amount, options) as Collection;
     }
     return (
         factory(input, amount, {
             ...options,
+            mode,
             clamp,
             min: range.min,
             max: range.max,
