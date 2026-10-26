@@ -1,16 +1,18 @@
+use std::ops::Range;
+
 use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
-        utils::{SchmittTrigger, wrap_phase_f64},
+        utils::{SchmittTrigger, sanitize, wrap_phase_f64},
     },
-    poly::{PolyOutput, PolySignal, PolySignalExt},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 #[deserr(deny_unknown_fields)]
@@ -31,6 +33,7 @@ struct SawOscillatorParams {
     fm_mode: FmMode,
     /// hard sync source — rising edges reset the oscillator phase
     #[deserr(default)]
+    #[block_input(optional)]
     sync: Option<PolySignal>,
     /// phase offset in [0, 1) added to the internal phase before sampling
     #[signal(default = 0.0, range = (0.0, 1.0))]
@@ -100,136 +103,204 @@ struct ChannelState {
 /// ```js
 /// $saw('a3', { shape: 2.5 }).out() // triangle wave
 /// ```
-#[module(name = "$saw", args(freq))]
+#[module(name = "$saw", args(freq), block)]
 pub struct SawOscillator {
     outputs: SawOscillatorOutputs,
     channel_state: Box<[ChannelState]>,
     params: SawOscillatorParams,
 }
 
+impl ChannelState {
+    /// Advance the phase by `phase_increment` (cycles per sample) and return
+    /// the next output sample. `shape` is this sample's clamped shape input and
+    /// `sync` its sync input, if connected.
+    #[inline(always)]
+    fn step(
+        &mut self,
+        phase_increment: f64,
+        shape: f32,
+        offset: f32,
+        sync: Option<f32>,
+        wait_for_zero_cross: bool,
+    ) -> f32 {
+        self.shape.update(shape);
+
+        // Convert shape (0–5) to symmetry (peak position):
+        // 0 = saw (peak at 1.0), 2.5 = triangle (peak at 0.5), 5 = ramp (peak at 0.0)
+        let s = (1.0 - *self.shape * 0.2).clamp(0.001, 0.999) as f64;
+
+        // Phase offset shifts the read position without altering the
+        // accumulator, so it never drifts.
+        let read_offset = offset.rem_euclid(1.0) as f64;
+
+        // Seed a fresh voice so its read position starts just before the
+        // gentle zero crossing, then the mute below holds silence until it
+        // arrives. The waveform crosses zero mid-rise (phase s/2) and
+        // mid-fall (phase (1+s)/2); the crossing on the longer of the two
+        // segments is the gentle one (the other is the steep, band-limited
+        // edge). We start the read `read_offset` of a cycle before that
+        // crossing, so the wait equals the phase offset — a small offset
+        // gives a short wait, not nearly a whole cycle, while still honoring
+        // the offset in the running phase. The running read adds read_offset
+        // on top of the accumulator, so the seed subtracts twice it to land
+        // the read at `zero_cross - read_offset`. Only fresh voices seed;
+        // carried-over state keeps its phase (see `seeded`).
+        if !self.seeded {
+            let zero_cross = if s >= 0.5 { s * 0.5 } else { (1.0 + s) * 0.5 };
+            self.phase = (zero_cross - 2.0 * read_offset).rem_euclid(1.0);
+            self.seeded = true;
+            // Arm the zero-cross mute. With no offset the read starts on the
+            // crossing, so prev_out is 0 and the mute releases on the first
+            // sample; an offset starts it earlier, holding silence until the
+            // output reaches the crossing.
+            self.gate_open = !wait_for_zero_cross;
+            let read_start = (zero_cross - read_offset).rem_euclid(1.0);
+            self.prev_out = naive_triangle(read_start, s) as f32 * 5.0;
+        }
+
+        // DPW: compute integral at current phase BEFORE advancing
+        let read_old = (self.phase + read_offset).rem_euclid(1.0);
+        let integral_old = triangle_integral(read_old, s);
+
+        self.phase = wrap_phase_f64(self.phase + phase_increment);
+        let read_phase = (self.phase + read_offset).rem_euclid(1.0);
+
+        // DPW body for this sample. The sync reset (below) lands in the
+        // upcoming interval, so the phase advanced normally here and the DPW
+        // differentiation stays valid; the reset is band-limited separately.
+        let body = if phase_increment.abs() > 1.0e-7 {
+            // The DPW slope is computed in f64: integral_new and
+            // integral_old are near-equal when the phase increment is small
+            // (low frequency), so the difference and its division must keep
+            // enough precision that f32 rounding does not get amplified into
+            // per-sample hash on slow, LFO-rate outputs.
+            let integral_new = triangle_integral(read_phase, s);
+            ((integral_new - integral_old) / phase_increment) as f32
+        } else {
+            // Near-DC fallback: use naive waveform (no aliasing at low freq)
+            naive_triangle(read_phase, s) as f32
+        };
+
+        let pending = self.blep_carry;
+        self.blep_carry = 0.0;
+
+        // Hard sync: a rising edge resets the phase, with a PolyBLEP placed
+        // at the subsample crossing to band-limit the reset discontinuity.
+        let mut now = 0.0;
+        if let Some(v) = sync {
+            if self.sync_schmitt.process(v) {
+                let frac = sync_edge_fraction(self.sync_prev, v);
+                let before = naive_triangle(read_phase, s);
+                self.phase = 0.0;
+                let after = naive_triangle(read_offset, s);
+                let (n, carry) = sync_blep((after - before) as f32, frac);
+                now = n;
+                self.blep_carry = carry;
+            }
+            self.sync_prev = v;
+        }
+
+        let out = (body + pending + now) * 5.0;
+
+        // Zero-cross mute: hold silence until the output crosses zero on its
+        // gentle segment, then latch open. The waveform also crosses zero on
+        // its steep edge — releasing there would itself click — so only the
+        // crossing that matches the seed's longer segment counts: rising
+        // (negative→positive) for saw-side shapes, falling for ramp-side.
+        // Releasing on the gentle slope means the first audible sample is ~0.
+        let crossed = if s >= 0.5 {
+            self.prev_out <= 0.0 && out >= 0.0
+        } else {
+            self.prev_out >= 0.0 && out <= 0.0
+        };
+        let sample = if self.gate_open {
+            out
+        } else if crossed {
+            self.gate_open = true;
+            out
+        } else {
+            0.0
+        };
+        self.prev_out = out;
+        sample
+    }
+}
+
+/// Phase increment in cycles per sample for V/oct `pitch` with `fm` applied.
+#[inline(always)]
+fn phase_increment(pitch: f32, fm: f32, fm_mode: FmMode, sample_rate: f32) -> f64 {
+    apply_fm(pitch, fm, fm_mode) as f64 * (1.0 / sample_rate as f64)
+}
+
 impl SawOscillator {
     fn update(&mut self, sample_rate: f32) {
-        let num_channels = self.channel_count();
-
-        // Pre-compute inverse sample rate for frequency calculation
-        let inv_sample_rate = 1.0 / sample_rate as f64;
-
-        let wait_for_zero_cross = self.params.wait_for_zero_cross;
-
-        for ch in 0..num_channels {
-            let state = &mut self.channel_state[ch];
-
-            // Update shape with smoothing - clamp to valid range
-            let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
-            state.shape.update(shape_val);
-
-            let pitch = self.params.freq.get_value(ch);
-            let fm = self.params.fm.value_or(ch, 0.0);
-            let frequency = apply_fm(pitch, fm, self.params.fm_mode);
-            let phase_increment = frequency as f64 * inv_sample_rate;
-
-            // Convert shape (0–5) to symmetry (peak position):
-            // 0 = saw (peak at 1.0), 2.5 = triangle (peak at 0.5), 5 = ramp (peak at 0.0)
-            let s = (1.0 - *state.shape * 0.2).clamp(0.001, 0.999) as f64;
-
-            // Phase offset shifts the read position without altering the
-            // accumulator, so it never drifts.
-            let offset = self.params.phase_offset.value_or(ch, 0.0);
-            let read_offset = offset.rem_euclid(1.0) as f64;
-
-            // Seed a fresh voice so its read position starts just before the
-            // gentle zero crossing, then the mute below holds silence until it
-            // arrives. The waveform crosses zero mid-rise (phase s/2) and
-            // mid-fall (phase (1+s)/2); the crossing on the longer of the two
-            // segments is the gentle one (the other is the steep, band-limited
-            // edge). We start the read `read_offset` of a cycle before that
-            // crossing, so the wait equals the phase offset — a small offset
-            // gives a short wait, not nearly a whole cycle, while still honoring
-            // the offset in the running phase. The running read adds read_offset
-            // on top of the accumulator, so the seed subtracts twice it to land
-            // the read at `zero_cross - read_offset`. Only fresh voices seed;
-            // carried-over state keeps its phase (see `seeded`).
-            if !state.seeded {
-                let zero_cross = if s >= 0.5 { s * 0.5 } else { (1.0 + s) * 0.5 };
-                state.phase = (zero_cross - 2.0 * read_offset).rem_euclid(1.0);
-                state.seeded = true;
-                // Arm the zero-cross mute. With no offset the read starts on the
-                // crossing, so prev_out is 0 and the mute releases on the first
-                // sample; an offset starts it earlier, holding silence until the
-                // output reaches the crossing.
-                state.gate_open = !wait_for_zero_cross;
-                let read_start = (zero_cross - read_offset).rem_euclid(1.0);
-                state.prev_out = naive_triangle(read_start, s) as f32 * 5.0;
-            }
-
-            // DPW: compute integral at current phase BEFORE advancing
-            let read_old = (state.phase + read_offset).rem_euclid(1.0);
-            let integral_old = triangle_integral(read_old, s);
-
-            state.phase = wrap_phase_f64(state.phase + phase_increment);
-            let read_phase = (state.phase + read_offset).rem_euclid(1.0);
-
-            // DPW body for this sample. The sync reset (below) lands in the
-            // upcoming interval, so the phase advanced normally here and the DPW
-            // differentiation stays valid; the reset is band-limited separately.
-            let body = if phase_increment.abs() > 1.0e-7 {
-                // The DPW slope is computed in f64: integral_new and
-                // integral_old are near-equal when the phase increment is small
-                // (low frequency), so the difference and its division must keep
-                // enough precision that f32 rounding does not get amplified into
-                // per-sample hash on slow, LFO-rate outputs.
-                let integral_new = triangle_integral(read_phase, s);
-                ((integral_new - integral_old) / phase_increment) as f32
-            } else {
-                // Near-DC fallback: use naive waveform (no aliasing at low freq)
-                naive_triangle(read_phase, s) as f32
-            };
-
-            let pending = state.blep_carry;
-            state.blep_carry = 0.0;
-
-            // Hard sync: a rising edge resets the phase, with a PolyBLEP placed
-            // at the subsample crossing to band-limit the reset discontinuity.
-            let mut now = 0.0;
-            if let Some(sync) = &self.params.sync {
-                let v = sync.get_value(ch);
-                if state.sync_schmitt.process(v) {
-                    let frac = sync_edge_fraction(state.sync_prev, v);
-                    let before = naive_triangle(read_phase, s);
-                    state.phase = 0.0;
-                    let after = naive_triangle(read_offset, s);
-                    let (n, carry) = sync_blep((after - before) as f32, frac);
-                    now = n;
-                    state.blep_carry = carry;
-                }
-                state.sync_prev = v;
-            }
-
-            let out = (body + pending + now) * 5.0;
-
-            // Zero-cross mute: hold silence until the output crosses zero on its
-            // gentle segment, then latch open. The waveform also crosses zero on
-            // its steep edge — releasing there would itself click — so only the
-            // crossing that matches the seed's longer segment counts: rising
-            // (negative→positive) for saw-side shapes, falling for ramp-side.
-            // Releasing on the gentle slope means the first audible sample is ~0.
-            let crossed = if s >= 0.5 {
-                state.prev_out <= 0.0 && out >= 0.0
-            } else {
-                state.prev_out >= 0.0 && out <= 0.0
-            };
-            let sample = if state.gate_open {
-                out
-            } else if crossed {
-                state.gate_open = true;
-                out
-            } else {
-                0.0
-            };
-            state.prev_out = out;
-
+        let p = &self.params;
+        for (ch, state) in self.channel_state.iter_mut().enumerate() {
+            let shape = p
+                .shape
+                .value_or(ch, SawOscillatorParams::SHAPE_DEFAULT)
+                .clamp(0.0, 5.0);
+            let pitch = p.freq.get_value(ch);
+            let fm = p.fm.value_or(ch, SawOscillatorParams::FM_DEFAULT);
+            let increment = phase_increment(pitch, fm, p.fm_mode, sample_rate);
+            let offset = p
+                .phase_offset
+                .value_or(ch, SawOscillatorParams::PHASE_OFFSET_DEFAULT);
+            let sync = p.sync.as_ref().map(|sync| sync.get_value(ch));
+            let sample = state.step(increment, shape, offset, sync, p.wait_for_zero_cross);
             self.outputs.sample.set(ch, sample);
         }
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut SawOscillatorBlockOutputs,
+        range: Range<usize>,
+        sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch = Default::default();
+        let SawOscillatorParamsBlockInputs {
+            freq,
+            shape,
+            fm,
+            sync,
+            phase_offset: offset,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
+        // A pitch held for the whole range needs its exponential only once.
+        let mut held_increments = [0.0f64; PORT_MAX_CHANNELS];
+        let held = freq.is_constant() && fm.is_constant();
+        if held {
+            let (freq, fm) = (freq.row(range.start), fm.row(range.start));
+            for ((increment, &pitch), &fm) in held_increments.iter_mut().zip(freq).zip(fm) {
+                *increment = phase_increment(pitch, fm, p.fm_mode, sample_rate);
+            }
+        }
+        for i in range {
+            let (pitch, fm, shape, offset) = (freq.row(i), fm.row(i), shape.row(i), offset.row(i));
+            let sync = sync.as_ref().map(|sync| sync.row(i));
+            let slots = outputs
+                .sample
+                .slot_mut(i)
+                .iter_mut()
+                .zip(self.channel_state.iter_mut());
+            for (ch, (out, state)) in slots.enumerate() {
+                let increment = if held {
+                    held_increments[ch]
+                } else {
+                    phase_increment(pitch[ch], fm[ch], p.fm_mode, sample_rate)
+                };
+                *out = sanitize(state.step(
+                    increment,
+                    shape[ch].clamp(0.0, 5.0),
+                    offset[ch],
+                    sync.map(|sync| sync[ch]),
+                    p.wait_for_zero_cross,
+                ));
+            }
+        }
+        Some(())
     }
 }
 
