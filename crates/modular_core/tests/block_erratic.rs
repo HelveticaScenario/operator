@@ -30,7 +30,7 @@ fn clamps_to_cable_range() {
             "trigger": poly_cable("lfo", CHANNELS),
             "min": poly_cable("lfo", CHANNELS),
             "max": [5.0, cable("lfo", 0), 5.0, 5.0],
-            "clamp": true,
+            "mode": "clamp",
         }),
         |src, lfo| {
             src.iter()
@@ -54,7 +54,8 @@ fn allocation_free() {
     for params in [
         json!({ "input": poly_cable("src", CHANNELS), "amount": 2.0 }),
         json!({ "input": poly_cable("src", CHANNELS), "amount": cable("lfo", 0), "speed": poly_cable("lfo", CHANNELS), "trigger": poly_cable("src", CHANNELS) }),
-        json!({ "input": cable("src", 1), "amount": [1.0, 2.0, 3.0, 4.0], "bias": [cable("lfo", 2), 1.0], "min": -1.0, "max": 1.0, "clamp": true }),
+        json!({ "input": cable("src", 1), "amount": [1.0, 2.0, 3.0, 4.0], "bias": [cable("lfo", 2), 1.0], "min": -1.0, "max": 1.0, "mode": "clamp" }),
+        json!({ "input": poly_cable("src", CHANNELS), "amount": 5.0, "speed": 5.0, "trigger": poly_cable("src", CHANNELS), "mode": "blend", "sparse": true }),
     ] {
         assert_eq!(allocations_while_rendering("_erratic", params), 0);
     }

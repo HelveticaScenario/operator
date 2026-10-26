@@ -187,18 +187,20 @@ export interface MonoOutOptions {
 
 /** Options for `.erratic()` on a signal without a known range */
 export interface ErraticOptions {
-    /** Rising edge samples and holds the current random shift */
+    /** Rising edge samples and holds the current random value */
     trigger?: PolySignal;
-    /** How fast the shift wanders: 0 = frozen, 5 = white noise (default 2) */
+    /** How fast the variation wanders: 0 = frozen, 5 = a fresh value every sample (default 2) */
     speed?: PolySignal;
-    /** Skews the shift upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
+    /** Leans the variation upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
     bias?: PolySignal;
+    /** Draw a random depth per value: low amounts mostly stay near the input with rare big jumps, high amounts mostly jump (default false) */
+    sparse?: boolean;
 }
 
 /** Options for `.erratic()` on a ranged signal */
 export interface RangedErraticOptions extends ErraticOptions {
-    /** Clamp the output to the signal's range (default true) */
-    clamp?: boolean;
+    /** `'clamp'` adds a random offset and clamps to the range; `'shift'` adds it unclamped; `'blend'` moves toward a random value in the range (default `'clamp'`) */
+    mode?: 'clamp' | 'shift' | 'blend';
 }
 
 /** VU meter / mute / solo state shared by both out group kinds */
@@ -718,27 +720,26 @@ function playPattern(builder: GraphBuilder, value: PolySignal): PolySignal {
 }
 
 /**
- * Apply an `_erratic` random shift to `input`. With a `range`, the shift scales
- * to the range's width, the output clamps to it unless `clamp` is false, and
- * the result carries it; without one, the shift scales to ±5 V and is unclamped.
+ * Apply an `_erratic` random variation to `input`. With a `range`, the variation
+ * scales to the range's width, `mode` applies (clamping by default), and the
+ * result carries the range; without one, it is an unclamped shift scaled to ±5 V.
  */
 function erratic(
     builder: GraphBuilder,
     input: ModuleOutput | ModuleOutput[],
     amount: PolySignal,
-    { trigger, speed, bias, clamp = true }: RangedErraticOptions,
+    { trigger, speed, bias, sparse, mode = 'clamp' }: RangedErraticOptions,
     range?: { min: PolySignal; max: PolySignal },
 ): Collection {
     const factory = builder.getFactory('_erratic');
+    const options = { trigger, speed, bias, sparse };
     if (!range) {
-        return factory(input, amount, { trigger, speed, bias }) as Collection;
+        return factory(input, amount, options) as Collection;
     }
     return (
         factory(input, amount, {
-            trigger,
-            speed,
-            bias,
-            clamp,
+            ...options,
+            mode,
             min: range.min,
             max: range.max,
         }) as Collection
@@ -815,7 +816,7 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
     /**
      * Apply a wandering random shift to all outputs, scaled to each output's
      * range: `amount` 5 shifts by up to half the range either way. Clamps to
-     * the range unless `clamp` is false.
+     * the range unless `mode` is `'shift'`.
      */
     erratic(
         amount: PolySignal,
@@ -2553,7 +2554,7 @@ export class ModuleOutputWithRange extends ModuleOutput {
     /**
      * Apply a wandering random shift scaled to this output's range: `amount` 5
      * shifts by up to half the range either way. Clamps to the range unless
-     * `clamp` is false.
+     * `mode` is `'shift'`.
      */
     erratic(
         amount: PolySignal,
