@@ -215,20 +215,28 @@ pub fn seq_derive_channel_count(params: &SeqParams) -> usize {
 
     // A baked hap's part never leaves its cycle, so each cycle is swept on its
     // own. Starts come from the haps, which are sorted by `part_begin`; a part
-    // ending exactly where another starts does not overlap it.
+    // ending exactly where another starts does not overlap it. Zero-length
+    // parts never sound, so they are skipped; every counted end then belongs
+    // to a hap that started earlier.
+    let mut starts: Vec<f64> = Vec::new();
     let mut ends: Vec<f64> = Vec::new();
     let mut max_simultaneous: usize = 0;
     for cycle_storage in cached {
-        let sounding = || cycle_storage.haps.iter().filter(|h| !h.value.is_rest());
+        starts.clear();
         ends.clear();
-        ends.extend(sounding().map(|h| h.part_end));
+        for hap in &cycle_storage.haps {
+            if !hap.value.is_rest() && hap.part_end > hap.part_begin {
+                starts.push(hap.part_begin);
+                ends.push(hap.part_end);
+            }
+        }
         ends.sort_by(f64::total_cmp);
         let mut ended = 0;
-        for (started, hap) in sounding().enumerate() {
-            while ended < ends.len() && ends[ended] <= hap.part_begin {
+        for (started, &begin) in starts.iter().enumerate() {
+            while ended < ends.len() && ends[ended] <= begin {
                 ended += 1;
             }
-            max_simultaneous = max_simultaneous.max((started + 1).saturating_sub(ended));
+            max_simultaneous = max_simultaneous.max(started + 1 - ended);
             if max_simultaneous >= MAX_POLYPHONY {
                 return MAX_POLYPHONY;
             }
