@@ -409,6 +409,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
             json!({ "trigger": 0.0 })
         }
         "$clockDivider" => json!({ "division": 2, "input": 0.0 }),
+        "$coinFlip" => json!({ "input": 0.0 }),
         "$scan" => json!({ "length": 1.0, "distance": 1.0, "trigger": 0.0 }),
         "$sah" => json!({ "input": 0.0, "trigger": 0.0 }),
         "$tah" => json!({ "input": 0.0, "gate": 0.0 }),
