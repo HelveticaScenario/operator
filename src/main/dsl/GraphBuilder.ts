@@ -199,10 +199,8 @@ export interface ErraticOptions {
 
 /** Options for `.erratic()` on a ranged signal */
 export interface RangedErraticOptions extends ErraticOptions {
-    /** `'shift'` adds a random offset; `'blend'` moves toward a random value in the range, staying in range when the input is (default `'shift'`) */
-    mode?: 'shift' | 'blend';
-    /** Clamp the output to the signal's range (default true) */
-    clamp?: boolean;
+    /** `'clamp'` adds a random offset and clamps to the range; `'shift'` adds it unclamped; `'blend'` moves toward a random value in the range (default `'clamp'`) */
+    mode?: 'clamp' | 'shift' | 'blend';
 }
 
 /** VU meter / mute / solo state shared by both out group kinds */
@@ -722,15 +720,15 @@ function playPattern(builder: GraphBuilder, value: PolySignal): PolySignal {
 }
 
 /**
- * Apply an `_erratic` random shift to `input`. With a `range`, the shift scales
- * to the range's width, the output clamps to it unless `clamp` is false, and
- * the result carries it; without one, the shift scales to ±5 V and is unclamped.
+ * Apply an `_erratic` random variation to `input`. With a `range`, the variation
+ * scales to the range's width, `mode` applies (clamping by default), and the
+ * result carries the range; without one, it is an unclamped shift scaled to ±5 V.
  */
 function erratic(
     builder: GraphBuilder,
     input: ModuleOutput | ModuleOutput[],
     amount: PolySignal,
-    { trigger, speed, bias, mode, sparse, clamp = true }: RangedErraticOptions,
+    { trigger, speed, bias, sparse, mode = 'clamp' }: RangedErraticOptions,
     range?: { min: PolySignal; max: PolySignal },
 ): Collection {
     const factory = builder.getFactory('_erratic');
@@ -742,7 +740,6 @@ function erratic(
         factory(input, amount, {
             ...options,
             mode,
-            clamp,
             min: range.min,
             max: range.max,
         }) as Collection
@@ -819,7 +816,7 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
     /**
      * Apply a wandering random shift to all outputs, scaled to each output's
      * range: `amount` 5 shifts by up to half the range either way. Clamps to
-     * the range unless `clamp` is false.
+     * the range unless `mode` is `'shift'`.
      */
     erratic(
         amount: PolySignal,
@@ -2557,7 +2554,7 @@ export class ModuleOutputWithRange extends ModuleOutput {
     /**
      * Apply a wandering random shift scaled to this output's range: `amount` 5
      * shifts by up to half the range either way. Clamps to the range unless
-     * `clamp` is false.
+     * `mode` is `'shift'`.
      */
     erratic(
         amount: PolySignal,

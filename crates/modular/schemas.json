@@ -18581,7 +18581,7 @@
   },
   {
     "name": "_erratic",
-    "documentation": "Applies a wandering random variation to a signal.\n\n**shift** mode adds an offset of up to ±**amount**, scaled to the width of\n[**min**, **max**]: 5 moves up to half the range either way. **blend** mode\nmoves toward a random value in [**min**, **max**] by **amount** / 5, so an\ninput in range stays in range. **bias** makes the variation lean upward (+)\nor downward (−); ±5 makes it one-sided. **sparse** draws a random depth per\nvalue: low amounts mostly stay near the input with rare big jumps, high\namounts mostly jump. **speed** runs from frozen at 0 to a\nfresh random value every sample at 5. A **trigger** holds the variation\nbetween rising edges.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
+    "documentation": "Applies a wandering random variation to a signal.\n\n**shift** mode adds an offset of up to ±**amount**, scaled to the width of\n[**min**, **max**]: 5 moves up to half the range either way. **clamp** mode\nshifts the same way, then clamps to the range. **blend** mode moves toward a\nrandom value in [**min**, **max**] by **amount** / 5 and stays in the range.\n**bias** makes the variation lean upward (+)\nor downward (−); ±5 makes it one-sided. **sparse** draws a random depth per\nvalue: low amounts mostly stay near the input with rare big jumps, high\namounts mostly jump. **speed** runs from frozen at 0 to a\nfresh random value every sample at 5. A **trigger** holds the variation\nbetween rising edges.\n\nBacks the DSL's `.erratic()` signal method, which fills **min**/**max**\nfrom a ranged signal's range.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "ErraticParams",
@@ -18601,11 +18601,6 @@
               "type": "null"
             }
           ]
-        },
-        "clamp": {
-          "description": "clamp the output to [min, max]",
-          "type": "boolean",
-          "default": false
         },
         "input": {
           "description": "signal to vary",
@@ -18634,7 +18629,7 @@
           ]
         },
         "mode": {
-          "description": "shift adds a random offset; blend moves toward a random value in the\nrange, staying in range when the input is",
+          "description": "shift adds a random offset; clamp also clamps it to [min, max]; blend\nmoves toward a random value in [min, max]",
           "$ref": "#/$defs/ErraticMode"
         },
         "sparse": {
@@ -18679,7 +18674,12 @@
               "const": "shift"
             },
             {
-              "description": "Move toward a random value in the range.",
+              "description": "Add a random offset, then clamp to [min, max].",
+              "type": "string",
+              "const": "clamp"
+            },
+            {
+              "description": "Move toward a random value in [min, max], clamped to it.",
               "type": "string",
               "const": "blend"
             }

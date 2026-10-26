@@ -47,7 +47,9 @@ enum ErraticMode {
     /// Add a random offset.
     #[default]
     Shift,
-    /// Move toward a random value in the range.
+    /// Add a random offset, then clamp to [min, max].
+    Clamp,
+    /// Move toward a random value in [min, max], clamped to it.
     Blend,
 }
 
@@ -82,12 +84,8 @@ struct ErraticParams {
     #[signal(default = 5.0)]
     #[deserr(default)]
     max: Option<PolySignal>,
-    /// clamp the output to [min, max]
-    #[serde(default)]
-    #[deserr(default)]
-    clamp: bool,
-    /// shift adds a random offset; blend moves toward a random value in the
-    /// range, staying in range when the input is
+    /// shift adds a random offset; clamp also clamps it to [min, max]; blend
+    /// moves toward a random value in [min, max]
     #[serde(default)]
     #[deserr(default)]
     mode: ErraticMode,
@@ -206,7 +204,7 @@ impl ErraticChannelState {
         let bias = f.bias.clamp(-5.0, 5.0) / 5.0;
 
         let out = match p.mode {
-            ErraticMode::Shift => {
+            ErraticMode::Shift | ErraticMode::Clamp => {
                 let half = depth * 5.0 * (hi_bound - lo_bound) / NOMINAL_WIDTH;
                 let lo = -half * (1.0 - bias.max(0.0));
                 let hi = half * (1.0 + bias.min(0.0));
@@ -221,10 +219,9 @@ impl ErraticChannelState {
                 f.input + (target - f.input) * depth.min(1.0)
             }
         };
-        if p.clamp {
-            out.clamp(lo_bound, hi_bound)
-        } else {
-            out
+        match p.mode {
+            ErraticMode::Shift => out,
+            ErraticMode::Clamp | ErraticMode::Blend => out.clamp(lo_bound, hi_bound),
         }
     }
 }
@@ -232,9 +229,10 @@ impl ErraticChannelState {
 /// Applies a wandering random variation to a signal.
 ///
 /// **shift** mode adds an offset of up to ±**amount**, scaled to the width of
-/// [**min**, **max**]: 5 moves up to half the range either way. **blend** mode
-/// moves toward a random value in [**min**, **max**] by **amount** / 5, so an
-/// input in range stays in range. **bias** makes the variation lean upward (+)
+/// [**min**, **max**]: 5 moves up to half the range either way. **clamp** mode
+/// shifts the same way, then clamps to the range. **blend** mode moves toward a
+/// random value in [**min**, **max**] by **amount** / 5 and stays in the range.
+/// **bias** makes the variation lean upward (+)
 /// or downward (−); ±5 makes it one-sided. **sparse** draws a random depth per
 /// value: low amounts mostly stay near the input with rare big jumps, high
 /// amounts mostly jump. **speed** runs from frozen at 0 to a
@@ -345,7 +343,6 @@ mod tests {
             bias: Some(volts(bias)),
             min: None,
             max: None,
-            clamp: false,
             mode: ErraticMode::Shift,
             sparse: false,
         }
@@ -452,7 +449,7 @@ mod tests {
         let mut p = params(4.5, 5.0, 5.0, 5.0);
         p.min = Some(volts(0.0));
         p.max = Some(volts(5.0));
-        p.clamp = true;
+        p.mode = ErraticMode::Clamp;
         let mut m = make(p);
         let (lo, hi) = bounds(&run(&mut m, 1024));
         assert!(lo >= 4.5 && hi <= 5.0, "{lo}..{hi}");
@@ -487,9 +484,8 @@ mod tests {
         p.bias = Some(poly(&[0.0, 2.0, -3.0, 5.0]));
         p.min = Some(poly(&[-5.0, 0.0, -3.0, 0.0]));
         p.max = Some(poly(&[5.0, 1.0, -1.0, 5.0]));
-        p.clamp = true;
         let cases = [false, true].into_iter().flat_map(|trigger| {
-            [ErraticMode::Shift, ErraticMode::Blend]
+            [ErraticMode::Shift, ErraticMode::Clamp, ErraticMode::Blend]
                 .into_iter()
                 .flat_map(move |mode| [false, true].map(|sparse| (trigger, mode, sparse)))
         });

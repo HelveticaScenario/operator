@@ -1,7 +1,7 @@
 /**
  * `.erratic()` builds a hidden `_erratic` module. On a ranged signal it passes
- * the range as `min`/`max`, clamps by default, and the result keeps the range;
- * on an unranged signal it passes neither and never clamps.
+ * the range as `min`/`max`, uses `mode: 'clamp'` by default, and the result
+ * keeps the range; on an unranged signal it passes neither range nor mode.
  */
 
 import { beforeEach, describe, expect, test } from 'vitest';
@@ -39,19 +39,19 @@ describe('.erratic()', () => {
         expect(out[0].minValue).toBe(0);
         expect(out[0].maxValue).toBe(10);
         const params = erraticParams();
-        expect(params).toMatchObject({ min: 0, max: 10, clamp: true });
+        expect(params).toMatchObject({ min: 0, max: 10, mode: 'clamp' });
     });
 
-    test('clamp: false on a ranged collection', () => {
+    test("mode: 'shift' on a ranged collection", () => {
         const out = (builder.getFactory('$sine')('1hz') as CollectionWithRange)
             .range(-3, -1)
-            .erratic(5, { clamp: false });
+            .erratic(5, { mode: 'shift' });
 
         expect(out).toBeInstanceOf(CollectionWithRange);
         expect(erraticParams()).toMatchObject({
             min: [-3],
             max: [-1],
-            clamp: false,
+            mode: 'shift',
         });
     });
 
@@ -69,11 +69,8 @@ describe('.erratic()', () => {
         ]);
     });
 
-    test('unranged signal stays unranged and passes no range or clamp', () => {
-        const out = builder.$c('c3').erratic(1, {
-            bias: 2,
-            clamp: true,
-        } as object);
+    test('unranged signal stays unranged and passes no range', () => {
+        const out = builder.$c('c3').erratic(1, { bias: 2 });
 
         expect(out).toBeInstanceOf(Collection);
         expect(out[0]).not.toBeInstanceOf(ModuleOutputWithRange);
@@ -81,7 +78,6 @@ describe('.erratic()', () => {
         expect(params.bias).toBe(2);
         expect(params.min).toBeUndefined();
         expect(params.max).toBeUndefined();
-        expect(params.clamp).toBeUndefined();
     });
 
     test('mode and sparse pass through on a ranged signal', () => {
@@ -91,7 +87,6 @@ describe('.erratic()', () => {
         expect(erraticParams()).toMatchObject({
             mode: 'blend',
             sparse: true,
-            clamp: true,
         });
     });
 

@@ -823,10 +823,8 @@ interface ErraticOptions {
 
 /** Options for \`.erratic()\` on a ranged signal */
 interface RangedErraticOptions extends ErraticOptions {
-  /** \`'shift'\` adds a random offset; \`'blend'\` moves toward a random value in the range, staying in range when the input is (default \`'shift'\`) */
-  mode?: 'shift' | 'blend';
-  /** Clamp the output to the signal's range (default true) */
-  clamp?: boolean;
+  /** \`'clamp'\` adds a random offset and clamps to the range; \`'shift'\` adds it unclamped; \`'blend'\` moves toward a random value in the range (default \`'clamp'\`) */
+  mode?: 'clamp' | 'shift' | 'blend';
 }
 
 /**
@@ -1115,11 +1113,10 @@ interface ModuleOutputWithRange extends ModuleOutput {
   /**
    * Randomly vary this output within its range. By default it's a wandering
    * shift where \`amount\` 5 moves up to half the range either way (±5 on a
-   * 0–10 signal); \`mode: 'blend'\` moves toward a random value in the range.
-   * Clamps to the range unless \`clamp\` is false; the result keeps the
-   * range.
+   * 0–10 signal), clamped to the range; see \`mode\` for an unclamped shift or
+   * blend. The result keeps the range.
    * @param amount Depth (0–5) as {@link Poly<Signal>}
-   * @param options Trigger, speed, bias, mode, sparse, and clamp ({@link RangedErraticOptions})
+   * @param options Trigger, speed, bias, mode, and sparse ({@link RangedErraticOptions})
    * @returns A {@link CollectionWithRange} with the same range
    * @example $saw('c3').amp($sine('4hz').range(2, 5).erratic(2, { trigger: $clock.beatTrigger })).out()
    * @example $saw('c3').amp($sine('4hz').range(0, 5).erratic(5, { mode: 'blend', sparse: true, speed: 5, trigger: $clock.beatTrigger })).out()  // usually a new level each beat, sometimes close to the sine
@@ -1407,11 +1404,11 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
   override range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
 
   /**
-   * Randomly vary all outputs, scaled to each output's range (see \`mode\`
-   * for shift or blend). Clamps to the range unless \`clamp\` is false; the
-   * result keeps the ranges.
+   * Randomly vary all outputs within each output's range: a clamped shift by
+   * default; see \`mode\` for an unclamped shift or blend. The result keeps
+   * the ranges.
    * @param amount Depth (0–5) as {@link Poly<Signal>}
-   * @param options Trigger, speed, bias, mode, sparse, and clamp ({@link RangedErraticOptions})
+   * @param options Trigger, speed, bias, mode, and sparse ({@link RangedErraticOptions})
    * @returns A {@link CollectionWithRange} with the same ranges
    * @example $saw($c('c3', 'e3')).amp($sine(['4hz', '5hz']).range(2, 5).erratic(2, { speed: 3 })).out()  // each voice's tremolo wanders on its own
    */
