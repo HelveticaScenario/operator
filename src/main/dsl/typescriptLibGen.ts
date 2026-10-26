@@ -874,6 +874,64 @@ interface ModuleOutput {
   shift(offset: Poly<Signal>): Collection;
 
   /**
+   * Add another signal to this one, sample by sample.
+   * @param operand Signal to add as {@link Poly<Signal>}
+   * @returns The sum as a {@link Collection} for chaining
+   * @example $sine('c3').add($sine('c4')).out()
+   */
+  add(operand: Poly<Signal>): Collection;
+
+  /**
+   * Subtract another signal from this one, sample by sample.
+   * @param operand Signal to subtract as {@link Poly<Signal>}
+   * @returns The difference as a {@link Collection} for chaining
+   * @example $saw('c3').sub($saw('c3', { phaseOffset: 0.5 })).out()  // pulse from two saws
+   */
+  sub(operand: Poly<Signal>): Collection;
+
+  /**
+   * Multiply this signal by another, sample by sample (2 = double).
+   * To change amplitude with a 0–5 V signal such as \`$adsr\`, see
+   * {@link amp} and {@link gain}.
+   * @param operand Factor as {@link Poly<Signal>}
+   * @returns The product as a {@link Collection} for chaining
+   * @example $sine('c3').mul($sine('2hz')).out()  // ring modulation
+   */
+  mul(operand: Poly<Signal>): Collection;
+
+  /**
+   * Divide this signal by another, sample by sample. Dividing by 0 gives 0.
+   * @param operand Divisor as {@link Poly<Signal>}
+   * @returns The quotient as a {@link Collection} for chaining
+   * @example $clockedDelay($saw('c3').amp($perc($clock.beatTrigger)), { bars: $sine('0.1hz').range(1, 4).round().div(8) }).out()  // 1/8 to 4/8 of a bar
+   */
+  div(operand: Poly<Signal>): Collection;
+
+  /**
+   * Round this signal to the nearest whole volt, halves away from zero. On a
+   * ranged signal the range rounds too.
+   * @returns The rounded {@link Collection} for chaining
+   * @example $sine($sine('1hz').range(0, 3).round().div(12).add('c3')).out()  // steps of a semitone
+   */
+  round(): Collection;
+
+  /**
+   * Round this signal down to a whole volt. On a ranged signal the range
+   * rounds too.
+   * @returns The rounded {@link Collection} for chaining
+   * @example $sine($saw('0.5hz').range(0, 4).floor().add('c3')).out()  // octaves up from C3
+   */
+  floor(): Collection;
+
+  /**
+   * Round this signal up to a whole volt. On a ranged signal the range
+   * rounds too.
+   * @returns The rounded {@link Collection} for chaining
+   * @example $sine($saw('0.5hz').range(-4, 0).ceil().add('c4')).out()  // octaves down from C4
+   */
+  ceil(): Collection;
+
+  /**
    * Offset this pitch by an absolute frequency amount, in Hz. The V/Oct signal
    * is converted to Hz, the offset added, then converted back. Creates an
    * $addHz module internally.
@@ -905,12 +963,14 @@ interface ModuleOutput {
    gain(level: Poly<Signal>): Collection;
 
   /**
-   * Apply a power curve to this signal. Creates a \\$curve module internally.
-   * @param factor Exponent for the curve (default 3)
-   * @returns The curved {@link Collection} for chaining
-   * @example $sine("1hz").exp(2)  // Quadratic curve
+   * Raise this signal to the power \`exponent\`, sample by sample. Negative
+   * values mirror positive ones, so 2 squares the size and keeps the sign.
+   * For a curve that keeps ±5 V at ±5 V, use \\$curve.
+   * @param exponent Power as {@link Poly<Signal>}
+   * @returns The {@link Collection} for chaining
+   * @example $sine('c3').amp($sine('1hz').range(0, 2.2).exp(2)).out()  // tremolo, 0–4.84
    */
-  exp(factor?: Poly<Signal>): Collection;
+  exp(exponent: Poly<Signal>): Collection;
 
   /**
    * Apply a wandering random shift of up to ±\`amount\` V. Each channel
@@ -1122,6 +1182,26 @@ interface ModuleOutputWithRange extends ModuleOutput {
    * @example $saw('c3').amp($sine('4hz').range(0, 5).erratic(5, { mode: 'blend', sparse: true, speed: 5, trigger: $clock.beatTrigger })).out()  // usually a new level each beat, sometimes close to the sine
    */
   erratic(amount: Poly<Signal>, options?: RangedErraticOptions): CollectionWithRange;
+
+  /**
+   * Round to the nearest whole volt, halves away from zero; the range rounds
+   * with it.
+   * @returns A {@link CollectionWithRange} with the rounded range
+   * @example $sine($sine('1hz').range(0, 7.5).round().range('c3', 'c4')).out()  // eight steps across an octave
+   */
+  round(): CollectionWithRange;
+
+  /**
+   * Round down to a whole volt; the range rounds with it.
+   * @returns A {@link CollectionWithRange} with the rounded range
+   */
+  floor(): CollectionWithRange;
+
+  /**
+   * Round up to a whole volt; the range rounds with it.
+   * @returns A {@link CollectionWithRange} with the rounded range
+   */
+  ceil(): CollectionWithRange;
 }
 
 
@@ -1175,6 +1255,48 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
   shift(offset: Poly<Signal>): Collection;
 
   /**
+   * Add another signal to all signals, sample by sample.
+   * @see {@link ModuleOutput.add}
+   */
+  add(operand: Poly<Signal>): Collection;
+
+  /**
+   * Subtract another signal from all signals, sample by sample.
+   * @see {@link ModuleOutput.sub}
+   */
+  sub(operand: Poly<Signal>): Collection;
+
+  /**
+   * Multiply all signals by another, sample by sample.
+   * @see {@link ModuleOutput.mul}
+   */
+  mul(operand: Poly<Signal>): Collection;
+
+  /**
+   * Divide all signals by another, sample by sample. Dividing by 0 gives 0.
+   * @see {@link ModuleOutput.div}
+   */
+  div(operand: Poly<Signal>): Collection;
+
+  /**
+   * Round all signals to the nearest whole volt, halves away from zero.
+   * @see {@link ModuleOutput.round}
+   */
+  round(): Collection;
+
+  /**
+   * Round all signals down to a whole volt.
+   * @see {@link ModuleOutput.floor}
+   */
+  floor(): Collection;
+
+  /**
+   * Round all signals up to a whole volt.
+   * @see {@link ModuleOutput.ceil}
+   */
+  ceil(): Collection;
+
+  /**
    * Offset all pitches by an absolute frequency amount, in Hz.
    * @param offset Hz offset as {@link Poly<Signal>}
    * @see {@link ModuleOutput.addHz}
@@ -1199,11 +1321,10 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
   gain(level: Poly<Signal>): Collection;
 
   /**
-   * Apply a power curve to all signals. Creates a \\$curve module internally.
-   * @param factor Exponent for the curve (default 3)
+   * Raise all signals to the power \`exponent\`, sample by sample.
    * @see {@link ModuleOutput.exp}
    */
-  exp(factor?: Poly<Signal>): Collection;
+  exp(exponent: Poly<Signal>): Collection;
 
   /**
    * Apply a wandering random shift of up to ±\`amount\` V to all signals.
@@ -1413,6 +1534,24 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
    * @example $saw($c('c3', 'e3')).amp($sine(['4hz', '5hz']).range(2, 5).erratic(2, { speed: 3 })).out()  // each voice's tremolo wanders on its own
    */
   override erratic(amount: Poly<Signal>, options?: RangedErraticOptions): CollectionWithRange;
+
+  /**
+   * Round all outputs to the nearest whole volt; the ranges round with them.
+   * @see {@link ModuleOutputWithRange.round}
+   */
+  override round(): CollectionWithRange;
+
+  /**
+   * Round all outputs down to a whole volt; the ranges round with them.
+   * @see {@link ModuleOutputWithRange.floor}
+   */
+  override floor(): CollectionWithRange;
+
+  /**
+   * Round all outputs up to a whole volt; the ranges round with them.
+   * @see {@link ModuleOutputWithRange.ceil}
+   */
+  override ceil(): CollectionWithRange;
 }
 
 /**

@@ -8,8 +8,8 @@ use crate::dsp::utils::rng::{LcgRng, seed_base};
 use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal, PolySignalExt};
 use crate::types::PatchUpdateHandler;
 
-use super::buffer::GrainBuffer;
 use super::chain::Media;
+use super::fresh::FreshBuffers;
 use super::grains_chain::{GrainsChain, GrainsVoice};
 use super::player::{GrainParams, GrainTrigger};
 use super::queue::TriggerQueue;
@@ -84,34 +84,7 @@ struct GranularParams {
     #[serde(skip)]
     #[deserr(skip)]
     #[schemars(skip)]
-    fresh: Option<Fresh>,
-}
-
-/// Silent recording buffers made on the main thread. A voice takes one in
-/// `on_patch_update` when it has no recording at the module's quality, and
-/// leaves the buffer it gives up here, to drop with the params on the main
-/// thread. A clone starts empty, as `init` fills it.
-#[derive(Default)]
-struct Fresh(Vec<GrainBuffer>);
-
-impl Clone for Fresh {
-    fn clone(&self) -> Self {
-        Self::default()
-    }
-}
-
-impl crate::types::Connect for Fresh {
-    fn apply_default_connections(&mut self) {}
-    fn connect(&mut self, _patch: &crate::patch::Patch) {}
-    fn collect_cables(&self, _sink: &mut Vec<String>) {}
-    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
-    fn mark_glides(
-        &mut self,
-        _old: Option<&Self>,
-        _generation: u64,
-        _ids: &dyn crate::types::PreviousIds,
-    ) {
-    }
+    fresh: Option<FreshBuffers>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -187,14 +160,7 @@ impl Granular {
             voice.allocate();
             voice.voice.granular.buffer = silence.clone();
         }
-        let fresh = (0..self.channel_state.len())
-            .map(|_| {
-                let mut buffer = GrainBuffer::default();
-                buffer.allocate_frames(media.max_delay());
-                buffer
-            })
-            .collect();
-        self.params.fresh = Some(Fresh(fresh));
+        self.params.fresh = Some(FreshBuffers::allocate(self.channel_state.len(), media));
         let state = &mut self.state;
         state.engine_sample_rate = sample_rate;
         state.resampler.allocate(sample_rate);
@@ -298,14 +264,10 @@ impl PatchUpdateHandler for Granular {
         // their own.
         let media = self.params.quality.media();
         let reconfigure = media != self.state.media;
-        if let Some(Fresh(fresh)) = &mut self.params.fresh {
-            for (v, b) in self.channel_state.iter_mut().zip(fresh.iter_mut()) {
-                let buffer = &mut v.voice.granular.buffer;
-                if (reconfigure || !buffer.records()) && b.records() {
-                    std::mem::swap(buffer, b);
-                    if !reconfigure {
-                        v.configure(media);
-                    }
+        if let Some(fresh) = &mut self.params.fresh {
+            for (i, v) in self.channel_state.iter_mut().enumerate() {
+                if fresh.hand_out(i, &mut v.voice.granular.buffer, reconfigure) && !reconfigure {
+                    v.configure(media);
                 }
             }
         }

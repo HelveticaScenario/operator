@@ -515,17 +515,74 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
     }
 
     /**
-     * Apply a power curve to all outputs. Creates a $curve module internally.
+     * Raise all outputs to the power `exponent`, sample by sample; negative
+     * values mirror positive ones.
      */
-    exp(factor: PolySignal = GAIN_CURVE_EXP): Collection {
+    exp(exponent: PolySignal): Collection {
         if (this.items.length === 0) {
             return new Collection();
         }
-        const factory = this.items[0].builder.getFactory('$curve');
-        if (!factory) {
-            throw new Error('Factory for $curve not registered');
+        return arithmetic(this.items[0].builder, this.items, exponent, 'pow');
+    }
+
+    /** Add `operand` to all outputs, sample by sample. */
+    add(operand: PolySignal): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
         }
-        return factory(this.items, factor) as Collection;
+        return arithmetic(this.items[0].builder, this.items, operand, 'add');
+    }
+
+    /** Subtract `operand` from all outputs, sample by sample. */
+    sub(operand: PolySignal): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        return arithmetic(this.items[0].builder, this.items, operand, 'sub');
+    }
+
+    /**
+     * Multiply all outputs by `operand`, sample by sample (2 = double).
+     * To change amplitude with a 0–5 V signal such as `$adsr`, see
+     * {@link amp} and {@link gain}.
+     */
+    mul(operand: PolySignal): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        return arithmetic(this.items[0].builder, this.items, operand, 'mul');
+    }
+
+    /** Divide all outputs by `operand`, sample by sample; dividing by 0 gives 0. */
+    div(operand: PolySignal): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        return arithmetic(this.items[0].builder, this.items, operand, 'div');
+    }
+
+    /** Round all outputs to the nearest whole volt, halves away from zero. */
+    round(): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        return round(this.items[0].builder, this.items, 'round');
+    }
+
+    /** Round all outputs down to a whole volt. */
+    floor(): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        return round(this.items[0].builder, this.items, 'floor');
+    }
+
+    /** Round all outputs up to a whole volt. */
+    ceil(): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        return round(this.items[0].builder, this.items, 'ceil');
     }
 
     /**
@@ -719,6 +776,76 @@ function playPattern(builder: GraphBuilder, value: PolySignal): PolySignal {
         : value;
 }
 
+type ArithmeticOp = 'add' | 'sub' | 'mul' | 'div' | 'pow';
+type RoundMode = 'round' | 'floor' | 'ceil';
+
+/** `input op operand`, sample by sample, through an `_arithmetic` module. */
+function arithmetic(
+    builder: GraphBuilder,
+    input: ModuleOutput | ModuleOutput[],
+    operand: PolySignal,
+    op: ArithmeticOp,
+): Collection {
+    if (operand === undefined) {
+        throw new Error(
+            op === 'pow'
+                ? '.exp() needs an exponent'
+                : `.${op}() needs an operand`,
+        );
+    }
+    return builder.getFactory('_arithmetic')(input, operand, {
+        op,
+    }) as Collection;
+}
+
+/** `x` rounded to a whole number as `_round` rounds it in `mode`. */
+function roundNumber(x: number, mode: RoundMode): number {
+    switch (mode) {
+        case 'floor':
+            return Math.floor(x);
+        case 'ceil':
+            return Math.ceil(x);
+        case 'round':
+            return Math.sign(x) * Math.round(Math.abs(x));
+    }
+}
+
+/**
+ * Round `input` to whole volts through a `_round` module. With a `range`,
+ * the result carries that range rounded the same way: numbers round here,
+ * other bounds through their own `_round`, never through their own methods,
+ * so a ranged bound does not round its range in turn.
+ */
+function round(
+    builder: GraphBuilder,
+    input: ModuleOutput | ModuleOutput[],
+    mode: RoundMode,
+    range?: { min: Signal[]; max: Signal[] },
+): Collection {
+    const factory = builder.getFactory('_round');
+    const rounded = factory(input, { mode }) as Collection;
+    if (!range) {
+        return rounded;
+    }
+    // Outputs sharing a bound signal share its rounding.
+    const roundedBounds = new Map<Signal, Signal>();
+    const roundBound = (bound: Signal): Signal => {
+        if (typeof bound === 'number') {
+            return roundNumber(bound, mode);
+        }
+        let out = roundedBounds.get(bound);
+        if (out === undefined) {
+            out = (factory(bound, { mode }) as Collection).items[0];
+            roundedBounds.set(bound, out);
+        }
+        return out;
+    };
+    return rounded.withRange(
+        range.min.map(roundBound),
+        range.max.map(roundBound),
+    );
+}
+
 /**
  * Apply an `_erratic` random variation to `input`. With a `range`, the variation
  * scales to the range's width, `mode` applies (clamping by default), and the
@@ -826,6 +953,31 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
             return new CollectionWithRange();
         }
         return erratic(this.items[0].builder, this.items, amount, options, {
+            min: this.items.map((o) => o.minValue),
+            max: this.items.map((o) => o.maxValue),
+        }) as CollectionWithRange;
+    }
+
+    /** Round all outputs to the nearest whole volt; the ranges round with them. */
+    round(): CollectionWithRange {
+        return this.rounded('round');
+    }
+
+    /** Round all outputs down to a whole volt; the ranges round with them. */
+    floor(): CollectionWithRange {
+        return this.rounded('floor');
+    }
+
+    /** Round all outputs up to a whole volt; the ranges round with them. */
+    ceil(): CollectionWithRange {
+        return this.rounded('ceil');
+    }
+
+    private rounded(mode: RoundMode): CollectionWithRange {
+        if (this.items.length === 0) {
+            return new CollectionWithRange();
+        }
+        return round(this.items[0].builder, this.items, mode, {
             min: this.items.map((o) => o.minValue),
             max: this.items.map((o) => o.maxValue),
         }) as CollectionWithRange;
@@ -2328,11 +2480,50 @@ export class ModuleOutput {
     }
 
     /**
-     * Apply a power curve to this output. Creates a $curve module internally.
+     * Raise this output to the power `exponent`, sample by sample; negative
+     * values mirror positive ones.
      */
-    exp(factor: PolySignal = GAIN_CURVE_EXP): Collection {
-        const factory = this.builder.getFactory('$curve');
-        return factory(this, factor) as Collection;
+    exp(exponent: PolySignal): Collection {
+        return arithmetic(this.builder, this, exponent, 'pow');
+    }
+
+    /** Add `operand` to this output, sample by sample. */
+    add(operand: PolySignal): Collection {
+        return arithmetic(this.builder, this, operand, 'add');
+    }
+
+    /** Subtract `operand` from this output, sample by sample. */
+    sub(operand: PolySignal): Collection {
+        return arithmetic(this.builder, this, operand, 'sub');
+    }
+
+    /**
+     * Multiply this output by `operand`, sample by sample (2 = double).
+     * To change amplitude with a 0–5 V signal such as `$adsr`, see
+     * {@link amp} and {@link gain}.
+     */
+    mul(operand: PolySignal): Collection {
+        return arithmetic(this.builder, this, operand, 'mul');
+    }
+
+    /** Divide this output by `operand`, sample by sample; dividing by 0 gives 0. */
+    div(operand: PolySignal): Collection {
+        return arithmetic(this.builder, this, operand, 'div');
+    }
+
+    /** Round this output to the nearest whole volt, halves away from zero. */
+    round(): Collection {
+        return round(this.builder, this, 'round');
+    }
+
+    /** Round this output down to a whole volt. */
+    floor(): Collection {
+        return round(this.builder, this, 'floor');
+    }
+
+    /** Round this output up to a whole volt. */
+    ceil(): Collection {
+        return round(this.builder, this, 'ceil');
     }
 
     /**
@@ -2563,6 +2754,28 @@ export class ModuleOutputWithRange extends ModuleOutput {
         return erratic(this.builder, this, amount, options, {
             min: this.minValue,
             max: this.maxValue,
+        }) as CollectionWithRange;
+    }
+
+    /** Round to the nearest whole volt; the range rounds with it. */
+    round(): CollectionWithRange {
+        return this.rounded('round');
+    }
+
+    /** Round down to a whole volt; the range rounds with it. */
+    floor(): CollectionWithRange {
+        return this.rounded('floor');
+    }
+
+    /** Round up to a whole volt; the range rounds with it. */
+    ceil(): CollectionWithRange {
+        return this.rounded('ceil');
+    }
+
+    private rounded(mode: RoundMode): CollectionWithRange {
+        return round(this.builder, this, mode, {
+            min: [this.minValue],
+            max: [this.maxValue],
         }) as CollectionWithRange;
     }
 }

@@ -93,9 +93,9 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             },
             {
                 name: 'exp',
-                signature: 'exp(factor?: Poly<Signal>): Collection',
+                signature: 'exp(exponent: Poly<Signal>): Collection',
                 description:
-                    'Apply a power curve to all signals in the collection. Default exponent is 3.',
+                    'Raise all signals in the collection to the power `exponent`; negative values mirror positive ones.',
                 example: '$c(lfo1, lfo2).exp(2)',
             },
             {
@@ -252,10 +252,10 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             },
             {
                 name: 'exp',
-                signature: 'exp(factor?: Poly<Signal>): ModuleOutput',
+                signature: 'exp(exponent: Poly<Signal>): ModuleOutput',
                 description:
-                    'Apply a power curve to the signal. Creates a $curve module internally. Default exponent is 3.',
-                example: 'lfo.exp(2)  // Quadratic curve',
+                    'Raise the signal to the power `exponent`; negative values mirror positive ones. For a curve that keeps ±5 V at ±5 V, use $curve.',
+                example: 'lfo.exp(2)  // square, keeping the sign',
             },
             {
                 name: 'scope',
@@ -432,7 +432,12 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             "$sine('c').out({ gain: $perc($pulse('8hz')), pan: $sine('1hz') })  // Modulated",
         ],
         name: 'StereoOutOptions',
-        seeAlso: ['MonoOutOptions', 'ModuleOutput', 'Collection', 'Poly<Signal>'],
+        seeAlso: [
+            'MonoOutOptions',
+            'ModuleOutput',
+            'Collection',
+            'Poly<Signal>',
+        ],
     },
 
     MonoOutOptions: {
@@ -446,7 +451,12 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             "$sine('c').outMono(0, { label: 'sub' })         // Labelled VU meter",
         ],
         name: 'MonoOutOptions',
-        seeAlso: ['StereoOutOptions', 'ModuleOutput', 'Collection', 'Poly<Signal>'],
+        seeAlso: [
+            'StereoOutOptions',
+            'ModuleOutput',
+            'Collection',
+            'Poly<Signal>',
+        ],
     },
 };
 

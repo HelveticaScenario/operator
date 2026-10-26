@@ -337,16 +337,11 @@ describe('chaining methods', () => {
         expect(findModules(patch, '$scaleAndShift').length).toBeGreaterThan(0);
     });
 
-    test('.exp() creates a curve module', () => {
+    test('.exp() raises to a plain power', () => {
         const patch = execPatch('$sine("C4").exp(2).out()');
         expect(findModules(patch, '$sine').length).toBe(1);
-        expect(findModules(patch, '$curve').length).toBeGreaterThan(0);
-    });
-
-    test('.exp() with default factor creates a curve module', () => {
-        const patch = execPatch('$sine("C4").exp().out()');
-        expect(findModules(patch, '$sine').length).toBe(1);
-        expect(findModules(patch, '$curve').length).toBeGreaterThan(0);
+        const [pow] = findModules(patch, '_arithmetic');
+        expect(pow.params).toMatchObject({ operand: 2, op: 'pow' });
     });
 
     test('.scope() adds a scope entry', () => {

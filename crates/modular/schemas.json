@@ -1052,6 +1052,12 @@
         "default": false
       },
       {
+        "name": "barLength",
+        "description": "Quarter notes per bar: 4 in 4/4, 3 in 6/8",
+        "polyphonic": false,
+        "default": false
+      },
+      {
         "name": "grooveOffset",
         "description": "Global groove position minus the playhead, in bars",
         "polyphonic": false,
@@ -7946,6 +7952,328 @@
       {
         "name": "intensity",
         "description": "how deep the wobble is: 0 = none, 2.5 = Beads' dirty tape, 5 = twice\nas deep (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ]
+  },
+  {
+    "name": "$clockedDelay",
+    "documentation": "Tempo-synced delay from Mutable Instruments Beads' delay mode. Its repeats\ncome from feedback inside the module, so it needs no feedback loop in the\npatch.\n\nThe delay time is `bars` of the playhead, which follows the transport,\ntimes a multiplier set by `time`. When the time or the tempo changes, the\nold repeats crossfade into the new ones at an unchanged pitch.\n`shape` windows each repeat with an envelope one delay time long, locked\nto the playhead, so the repeats come back as rhythmic slices;\n`grooveAmount` swings the windows with the global groove. `freq`\nshifts their pitch against `rootFreq`, and `tone` filters them. While\n`freeze` is high the delay stops recording and loops slices of what it\nholds, one base delay time long; `time` then picks the slice.\n\nEach input channel gets its own delay. Follow it with `$wowFlutter` and\n`$reverb` for the rest of Beads' sound.\n\n```js\nconst pluck = $saw('c3').amplitude($perc($clock.beatTrigger, { decay: 0.1 }))\n$clockedDelay(pluck, { bars: 3 / 16, feedback: 3 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ClockedDelayParams",
+      "type": "object",
+      "properties": {
+        "bars": {
+          "description": "base delay time in bars (default 0.25)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "feedback": {
+          "description": "feeds the repeats back into the delay, for more of them (0–5,\ndefault 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freeze": {
+          "description": "while high, recording stops and the delay loops slices of the audio\nit holds",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch of the repeats; they play at the input's own pitch when `freq`\nequals `rootFreq` (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grooveAmount": {
+          "description": "how far the `shape` windows follow the global groove: 0 = straight,\n5 = fully grooved; the repeats themselves stay straight (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "audio to delay; each channel gets its own delay",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mix": {
+          "description": "dry/wet: 0 = input only, 5 = repeats only (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "description": "recording character: digital, vintage, cleanTape or dirtyTape\n(default digital)",
+          "$ref": "#/$defs/GranularQuality"
+        },
+        "rootFreq": {
+          "description": "pitch of the input, so `freq` shifts the repeats in tune (default C4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shape": {
+          "description": "window over each repeat: 0 = none, 1 = sharp attack, 2.5 = triangle,\n5 = ramp up (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "time": {
+          "description": "multiplies the base delay time from ×1 at 0 to ×16 at 5; while\nfrozen, picks the slice of the held audio to loop instead (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "filters the repeats: below 2.5 low-passes, above 2.5 high-passes\n(default 2.5, unfiltered)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "GranularQuality": {
+          "description": "Sound character, after Beads' four quality settings. Lower qualities\nsound darker and grittier and hold more audio.",
+          "oneOf": [
+            {
+              "description": "Clean, with 4 s of audio.",
+              "type": "string",
+              "const": "digital"
+            },
+            {
+              "description": "Slightly gritty early digital, with 8 s of audio.",
+              "type": "string",
+              "const": "vintage"
+            },
+            {
+              "description": "Darker, softer grains, with 10.7 s of audio.",
+              "type": "string",
+              "const": "cleanTape"
+            },
+            {
+              "description": "Lo-fi and noisy, with 16 s of audio.",
+              "type": "string",
+              "const": "dirtyTape"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "delayed signal, one channel per delay",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio to delay; each channel gets its own delay",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "bars",
+        "description": "base delay time in bars (default 0.25)",
+        "signalType": "control",
+        "defaultValue": 0.25,
+        "minValue": 0.0,
+        "maxValue": 4.0
+      },
+      {
+        "name": "time",
+        "description": "multiplies the base delay time from ×1 at 0 to ×16 at 5; while\nfrozen, picks the slice of the held audio to loop instead (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "shape",
+        "description": "window over each repeat: 0 = none, 1 = sharp attack, 2.5 = triangle,\n5 = ramp up (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "grooveAmount",
+        "description": "how far the `shape` windows follow the global groove: 0 = straight,\n5 = fully grooved; the repeats themselves stay straight (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freeze",
+        "description": "while high, recording stops and the delay loops slices of the audio\nit holds",
+        "signalType": "gate",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch of the repeats; they play at the input's own pitch when `freq`\nequals `rootFreq` (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "rootFreq",
+        "description": "pitch of the input, so `freq` shifts the repeats in tune (default C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "filters the repeats: below 2.5 low-passes, above 2.5 high-passes\n(default 2.5, unfiltered)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "feedback",
+        "description": "feeds the repeats back into the delay, for more of them (0–5,\ndefault 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "mix",
+        "description": "dry/wet: 0 = input only, 5 = repeats only (default 2.5)",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
@@ -17622,6 +17950,271 @@
     "positionalArgs": [
       {
         "name": "gate"
+      }
+    ]
+  },
+  {
+    "name": "_arithmetic",
+    "documentation": "Adds, subtracts, multiplies, divides or raises one signal to the power of\nanother, sample by sample. Division by zero outputs 0 V.\n\nBacks the DSL's `.add()`, `.sub()`, `.mul()`, `.div()` and `.exp()` signal\nmethods.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ArithmeticParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "left-hand side",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "op": {
+          "description": "operation applied as `input op operand`",
+          "$ref": "#/$defs/ArithmeticOp"
+        },
+        "operand": {
+          "description": "right-hand side",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input",
+        "operand"
+      ],
+      "$defs": {
+        "ArithmeticOp": {
+          "description": "Operation `_arithmetic` applies between its input and operand.",
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "add",
+                "sub",
+                "mul",
+                "div"
+              ]
+            },
+            {
+              "description": "`input` raised to `operand`, mirrored for negative inputs.",
+              "type": "string",
+              "const": "pow"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "result",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "left-hand side",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "operand",
+        "description": "right-hand side",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "operand"
+      }
+    ]
+  },
+  {
+    "name": "_round",
+    "documentation": "Rounds a signal to a whole number of volts.\n\nBacks the DSL's `.round()`, `.floor()` and `.ceil()` signal methods.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "RoundParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "signal to round",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "rounding direction",
+          "$ref": "#/$defs/RoundMode"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "RoundMode": {
+          "description": "How `_round` rounds its input to a whole number.",
+          "oneOf": [
+            {
+              "description": "To the nearest whole number, halves away from zero.",
+              "type": "string",
+              "const": "round"
+            },
+            {
+              "description": "Down, towards negative infinity.",
+              "type": "string",
+              "const": "floor"
+            },
+            {
+              "description": "Up, towards positive infinity.",
+              "type": "string",
+              "const": "ceil"
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "rounded signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal to round",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
       }
     ]
   },

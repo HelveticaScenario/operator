@@ -88,6 +88,24 @@ pub fn parse_signal_attr(attr: &Attribute) -> syn::Result<SignalAttr> {
     Ok(result)
 }
 
+/// Whether the field carries `#[schemars(skip)]`. Such a field is hidden from
+/// patches, so its metadata stays out of the schema too.
+fn is_schema_hidden(field: &syn::Field) -> bool {
+    field.attrs.iter().any(|attr| {
+        if !attr.path().is_ident("schemars") {
+            return false;
+        }
+        let mut skip = false;
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("skip") {
+                skip = true;
+            }
+            Ok(())
+        });
+        skip
+    })
+}
+
 pub fn impl_signal_params_macro(ast: &DeriveInput) -> TokenStream {
     let name = &ast.ident;
 
@@ -104,7 +122,7 @@ pub fn impl_signal_params_macro(ast: &DeriveInput) -> TokenStream {
                         || is_mono_signal_type(&field.ty)
                         || is_option_poly_signal_type(&field.ty)
                         || is_option_mono_signal_type(&field.ty);
-                    if !is_signal {
+                    if !is_signal || is_schema_hidden(field) {
                         continue;
                     }
 

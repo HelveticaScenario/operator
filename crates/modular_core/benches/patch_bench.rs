@@ -406,6 +406,34 @@ fn granular(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
+/// A `$saw` through a `$clockedDelay` in each quality, following the root
+/// clock.
+fn clocked_delays(channels: usize) -> BenchPatch {
+    let mut modules = vec![
+        (
+            "ROOT_CLOCK".to_string(),
+            "_clock",
+            json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),
+        ),
+        (
+            "saw".to_string(),
+            "$saw",
+            json!({ "freq": poly(0.0, channels) }),
+        ),
+    ];
+    for quality in ["digital", "vintage", "cleanTape", "dirtyTape"] {
+        modules.push((
+            format!("delay_{quality}"),
+            "$clockedDelay",
+            json!({
+                "input": poly_cable("saw", "output", channels),
+                "quality": quality,
+            }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
 /// 8 `$wavetable` oscillators: half at a fixed position, half scanned by an LFO.
 fn wavetables(channels: usize) -> BenchPatch {
     let mut modules = vec![(
@@ -551,6 +579,7 @@ fn bench_patches(c: &mut Criterion) {
         ("comp_chain_8", comp_chain),
         ("grains_4", grains),
         ("granular_4", granular),
+        ("clocked_delay_4", clocked_delays),
         ("wavetable_8", wavetables),
         ("eq_8", eqs),
         ("video_tap_16", video_taps),

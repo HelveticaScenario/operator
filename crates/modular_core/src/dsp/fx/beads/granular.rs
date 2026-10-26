@@ -1,11 +1,12 @@
 //! Recording path and grain playback for one voice at the grain engine's
-//! sample rate: input plus limited, soft-clipped feedback is written to the
-//! voice's buffer, and its grains read from it.
+//! sample rate: input plus feedback is written to the voice's buffer, and
+//! its grains read from it.
 
 use super::buffer::{GrainBuffer, Linear12Codec, Linear16Codec, MuLaw8Codec, Resolution};
+use super::feedback::FeedbackPath;
 use super::grain::Grain;
 use super::player::{GrainTrigger, GranularPlayer};
-use super::primitives::{Frame, Limiter, Ramp, SvfHighPass, soft_clip};
+use super::primitives::Frame;
 
 const MAX_FEEDBACK_GAIN: f32 = 3.0;
 
@@ -21,14 +22,7 @@ pub struct GrainStartRequest {
 pub struct GranularCore {
     pub buffer: GrainBuffer,
     pub player: GranularPlayer,
-    feedback: Ramp,
-    previous: f32,
-    dc_blocker: SvfHighPass,
-    input_limiter: Limiter,
-    /// Low-pass coefficient on the feedback signal.
-    lp_coefficient: f32,
-    /// Pre-gain into the feedback soft clipper; 0 disables it.
-    soft_limit_gain: f32,
+    feedback: FeedbackPath,
 }
 
 impl GranularCore {
@@ -36,15 +30,8 @@ impl GranularCore {
     pub fn reset(&mut self, sample_rate: f32, resolution: Resolution, max_delay: usize) {
         self.buffer.reset(resolution, max_delay);
         self.player.init(sample_rate);
-        self.feedback.reset(0.0);
-        self.previous = 0.0;
-        self.dc_blocker.init(40.0 / sample_rate, 0.5);
-        self.input_limiter.init(1.0 / sample_rate);
-        (self.lp_coefficient, self.soft_limit_gain) = match resolution {
-            Resolution::MuLaw8 => (0.75, 1.75),
-            Resolution::Linear12 => (0.9, 1.3),
-            Resolution::Linear16 => (0.999, 0.0),
-        };
+        self.feedback
+            .reset(sample_rate, resolution, MAX_FEEDBACK_GAIN);
     }
 
     /// Allocate a buffer of `frames` samples. Main thread only.
@@ -58,39 +45,19 @@ impl GranularCore {
     }
 
     pub fn start_block(&mut self, feedback: f32, block_size: usize) {
-        self.feedback.start(feedback, block_size);
+        self.feedback.start_block(feedback, block_size);
     }
 
     /// Record `input` plus feedback, and start `start` if given.
     #[inline]
     fn record(&mut self, input: f32, freeze: bool, start: Option<GrainStartRequest>) {
-        let feedback = self.feedback.next();
-        let mut s = input;
-        if self.soft_limit_gain != 0.0 {
-            s += self.previous * feedback * (MAX_FEEDBACK_GAIN / self.soft_limit_gain);
-        } else {
-            s += self.previous * feedback * feedback * MAX_FEEDBACK_GAIN;
-        }
-        s = self.input_limiter.process_mono(s);
-        if self.soft_limit_gain != 0.0 {
-            s *= self.soft_limit_gain;
-            s = soft_clip(s);
-            s = input + (s - input) * feedback;
-        }
-
+        let s = self.feedback.record(input);
         self.buffer.write(s, freeze);
         if let Some(r) = start {
             let t = r.trigger;
             self.player
                 .start(&self.buffer, &t.params, t.fractional_sample, r.gain, r.pan);
         }
-    }
-
-    /// Filter the grains' unpanned sum into the next sample's feedback.
-    #[inline]
-    fn feed_back(&mut self, mono: f32) {
-        let hp = self.dc_blocker.process(mono);
-        self.previous += self.lp_coefficient * (hp - self.previous);
     }
 
     /// Record `input`, start `start` if given, and return this voice's grains
@@ -113,7 +80,7 @@ impl GranularCore {
             Resolution::Linear12 => self.player.render::<Linear12Codec>(buffer, &mut mix),
             Resolution::Linear16 => self.player.render::<Linear16Codec>(buffer, &mut mix),
         }
-        self.feed_back(mono);
+        self.feedback.feed_back(mono);
         (out, mono)
     }
 }

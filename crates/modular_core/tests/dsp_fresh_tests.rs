@@ -350,6 +350,8 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$xover" => json!({ "input": 0.0, "lowMidFreq": 0.0, "midHighFreq": 0.0 }),
         "$comp" => json!({ "input": 0.0, "threshold": 0.0 }),
         "_erratic" => json!({ "input": 0.0, "amount": 1.0 }),
+        "_arithmetic" => json!({ "input": 0.0, "operand": 0.0 }),
+        "_round" => json!({ "input": 0.0 }),
         "$wrap" | "$clamp" => json!({ "input": 0.0, "min": -5.0, "max": 5.0 }),
         "$addHz" => json!({ "input": 0.0, "offset": 0.0 }),
         "$mulHz" => json!({ "input": 0.0, "factor": 1.0 }),
@@ -423,6 +425,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
             json!({ "wav": { "type": "wav_ref", "path": "test", "channels": 1 } })
         }
         "$wowFlutter" => json!({ "input": 0.0 }),
+        "$clockedDelay" => json!({ "input": 0.0 }),
         "$eq" => json!({ "input": 0.0 }),
         "$filterDC" => json!({ "input": 0.0 }),
         "$quantNoise" => json!({ "input": 0.0, "amount": 1.0 }),

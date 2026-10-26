@@ -1,16 +1,23 @@
-//! Port of the granular mode of Mutable Instruments Beads
-//! (beads/dsp, copyright 2017 Emilie Gillet, MIT licence), split into
-//! modules: grain voices (`$granular`, `$granularSampler`), wow and flutter
+//! Port of Mutable Instruments Beads (beads/dsp, copyright 2017 Emilie
+//! Gillet, MIT licence), split into modules: grain voices (`$granular`,
+//! `$granularSampler`), the delay mode (`$clockedDelay`), wow and flutter
 //! (`$wowFlutter`) and the reverb with its limiters (`$reverb`). Grains start
 //! on an external trigger.
 
 mod buffer;
 mod chain;
+mod clocked_delay;
+mod delay_chain;
+mod delay_controller;
+mod delay_windows;
+mod feedback;
 mod flutter;
+mod fresh;
 mod grain;
 mod grains;
 mod grains_chain;
 mod granular;
+mod multitap;
 mod player;
 mod primitives;
 mod queue;
@@ -32,6 +39,7 @@ use crate::dsp::utils::sanitize;
 use crate::poly::{PolySignal, PolySignalExt};
 
 use chain::Media;
+pub use clocked_delay::ClockedDelay;
 pub use flutter::WowFlutter;
 pub use grains::Granular;
 use player::GrainParams;
