@@ -9,10 +9,10 @@ use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct CoinFlipParams {
-    /// triggers or gates to pass at random
+    /// triggers or gates to flip
     #[signal(type = trig, range = (0.0, 5.0))]
     input: PolySignal,
-    /// chance each trigger passes: 0 = never, 2.5 = half the time, 5 = always
+    /// chance of heads: 0 = never, 2.5 = half the time, 5 = always
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     probability: Option<PolySignal>,
@@ -21,10 +21,10 @@ struct CoinFlipParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct CoinFlipOutputs {
-    #[output("output", "triggers that pass", default)]
-    output: PolyOutput,
-    #[output("rejected", "triggers that don't pass")]
-    rejected: PolyOutput,
+    #[output("heads", "triggers that land heads", default)]
+    heads: PolyOutput,
+    #[output("tails", "triggers that land tails")]
+    tails: PolyOutput,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -37,7 +37,7 @@ struct CoinFlipChannelState {
 }
 
 impl CoinFlipChannelState {
-    /// Advance one sample and return the `(output, rejected)` voltages.
+    /// Advance one sample and return the `(heads, tails)` voltages.
     /// `probability` is read only on a rising edge.
     #[inline]
     fn step(&mut self, input: f32, probability: impl FnOnce() -> f32) -> (f32, f32) {
@@ -59,11 +59,12 @@ impl CoinFlipChannelState {
     }
 }
 
-/// Lets triggers through at random.
+/// Sends each trigger to heads or tails at random.
 ///
-/// Each trigger on **input** flips a weighted coin. Heads sends it to the
-/// main output, tails to **rejected**. Gates keep their length, and each
-/// channel flips on its own.
+/// Each trigger on **input** flips a weighted coin, and **probability** sets
+/// the chance of heads. The module itself is the heads output; `.tails`
+/// carries the rest. Gates keep their length, and each channel flips on its
+/// own.
 ///
 /// Place it after `$clockDivider` to turn a steady clock into a loose rhythm,
 /// or use both outputs to split one stream between two sounds.
@@ -72,7 +73,7 @@ impl CoinFlipChannelState {
 /// // Each beat lands on the kick or the snare, 75/25:
 /// const flip = $coinFlip($clock.beatTrigger, 3.75)
 /// $tr808.kick(flip).out()
-/// $tr808.snare(flip.rejected).out()
+/// $tr808.snare(flip.tails).out()
 /// ```
 #[module(name = "$coinFlip", patch_update, args(input, probability))]
 pub struct CoinFlip {
@@ -84,12 +85,12 @@ pub struct CoinFlip {
 impl CoinFlip {
     fn update(&mut self, _sample_rate: f32) {
         for ch in 0..self.channel_count() {
-            let (output, rejected) = self.channel_state[ch]
+            let (heads, tails) = self.channel_state[ch]
                 .step(self.params.input.get_value(ch), || {
                     self.params.probability.value_or(ch, 2.5)
                 });
-            self.outputs.output.set(ch, output);
-            self.outputs.rejected.set(ch, rejected);
+            self.outputs.heads.set(ch, heads);
+            self.outputs.tails.set(ch, tails);
         }
     }
 }
@@ -141,7 +142,7 @@ mod tests {
     }
 
     /// Fire `n` two-sample triggers, each followed by two low samples, and
-    /// return per-channel counts of `(output, rejected)` rising edges.
+    /// return per-channel counts of `(heads, tails)` rising edges.
     fn flip(m: &mut CoinFlip, n: usize) -> Vec<(usize, usize)> {
         let channels = m.channel_count();
         let mut counts = vec![(0, 0); channels];
@@ -150,7 +151,7 @@ mod tests {
             m.params.input = volts(if i % 4 < 2 { 5.0 } else { 0.0 });
             m.update(SR);
             for ch in 0..channels {
-                let now = (m.outputs.output.get(ch), m.outputs.rejected.get(ch));
+                let now = (m.outputs.heads.get(ch), m.outputs.tails.get(ch));
                 assert!(
                     now.0 == 0.0 || now.1 == 0.0,
                     "both outputs high on channel {ch}"
@@ -171,13 +172,13 @@ mod tests {
     }
 
     #[test]
-    fn every_trigger_reaches_exactly_one_output() {
+    fn every_trigger_lands_on_exactly_one_side() {
         let mut m = make(params(volts(2.5)));
-        let [(passed, rejected)] = flip(&mut m, 1000)[..] else {
+        let [(heads, tails)] = flip(&mut m, 1000)[..] else {
             unreachable!()
         };
-        assert_eq!(passed + rejected, 1000);
-        assert!((400..600).contains(&passed), "passed {passed} of 1000");
+        assert_eq!(heads + tails, 1000);
+        assert!((400..600).contains(&heads), "{heads} heads of 1000");
     }
 
     #[test]
@@ -189,12 +190,12 @@ mod tests {
     }
 
     #[test]
-    fn probability_scales_pass_rate() {
+    fn probability_scales_heads_rate() {
         let mut m = make(params(volts(1.0)));
-        let [(passed, _)] = flip(&mut m, 2000)[..] else {
+        let [(heads, _)] = flip(&mut m, 2000)[..] else {
             unreachable!()
         };
-        assert!((320..480).contains(&passed), "passed {passed} of 2000");
+        assert!((320..480).contains(&heads), "{heads} heads of 2000");
     }
 
     #[test]
@@ -203,23 +204,23 @@ mod tests {
             input: volts(0.0),
             probability: None,
         });
-        let [(passed, _)] = flip(&mut m, 1000)[..] else {
+        let [(heads, _)] = flip(&mut m, 1000)[..] else {
             unreachable!()
         };
-        assert!((400..600).contains(&passed), "passed {passed} of 1000");
+        assert!((400..600).contains(&heads), "{heads} heads of 1000");
     }
 
     #[test]
-    fn output_follows_input_gate_length() {
+    fn heads_follows_input_gate_length() {
         let mut m = make(params(volts(5.0)));
         m.params.input = volts(5.0);
         for _ in 0..100 {
             m.update(SR);
-            assert_eq!(m.outputs.output.get(0), GATE_HIGH_VOLTAGE);
+            assert_eq!(m.outputs.heads.get(0), GATE_HIGH_VOLTAGE);
         }
         m.params.input = volts(0.0);
         m.update(SR);
-        assert_eq!(m.outputs.output.get(0), GATE_LOW_VOLTAGE);
+        assert_eq!(m.outputs.heads.get(0), GATE_LOW_VOLTAGE);
     }
 
     #[test]
@@ -228,8 +229,8 @@ mod tests {
         let channels = m.channel_count();
         let mut outcomes = vec![Vec::new(); channels];
         for _ in 0..64 {
-            for (ch, &(passed, _)) in flip(&mut m, 1).iter().enumerate() {
-                outcomes[ch].push(passed);
+            for (ch, &(heads, _)) in flip(&mut m, 1).iter().enumerate() {
+                outcomes[ch].push(heads);
             }
         }
         for (a, b) in (0..channels).flat_map(|a| (a + 1..channels).map(move |b| (a, b))) {

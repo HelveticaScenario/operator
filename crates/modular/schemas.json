@@ -18173,18 +18173,18 @@
   },
   {
     "name": "$coinFlip",
-    "documentation": "Lets triggers through at random.\n\nEach trigger on **input** flips a weighted coin. Heads sends it to the\nmain output, tails to **rejected**. Gates keep their length, and each\nchannel flips on its own.\n\nPlace it after `$clockDivider` to turn a steady clock into a loose rhythm,\nor use both outputs to split one stream between two sounds.\n\n```js\n// Each beat lands on the kick or the snare, 75/25:\nconst flip = $coinFlip($clock.beatTrigger, 3.75)\n$tr808.kick(flip).out()\n$tr808.snare(flip.rejected).out()\n```",
+    "documentation": "Sends each trigger to heads or tails at random.\n\nEach trigger on **input** flips a weighted coin, and **probability** sets\nthe chance of heads. The module itself is the heads output; `.tails`\ncarries the rest. Gates keep their length, and each channel flips on its\nown.\n\nPlace it after `$clockDivider` to turn a steady clock into a loose rhythm,\nor use both outputs to split one stream between two sounds.\n\n```js\n// Each beat lands on the kick or the snare, 75/25:\nconst flip = $coinFlip($clock.beatTrigger, 3.75)\n$tr808.kick(flip).out()\n$tr808.snare(flip.tails).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "CoinFlipParams",
       "type": "object",
       "properties": {
         "input": {
-          "description": "triggers or gates to pass at random",
+          "description": "triggers or gates to flip",
           "$ref": "#/$defs/PolySignal"
         },
         "probability": {
-          "description": "chance each trigger passes: 0 = never, 2.5 = half the time, 5 = always",
+          "description": "chance of heads: 0 = never, 2.5 = half the time, 5 = always",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -18260,14 +18260,14 @@
     },
     "outputs": [
       {
-        "name": "output",
-        "description": "triggers that pass",
+        "name": "heads",
+        "description": "triggers that land heads",
         "polyphonic": true,
         "default": true
       },
       {
-        "name": "rejected",
-        "description": "triggers that don't pass",
+        "name": "tails",
+        "description": "triggers that land tails",
         "polyphonic": true,
         "default": false
       }
@@ -18276,7 +18276,7 @@
     "signalParams": [
       {
         "name": "input",
-        "description": "triggers or gates to pass at random",
+        "description": "triggers or gates to flip",
         "signalType": "trig",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -18284,7 +18284,7 @@
       },
       {
         "name": "probability",
-        "description": "chance each trigger passes: 0 = never, 2.5 = half the time, 5 = always",
+        "description": "chance of heads: 0 = never, 2.5 = half the time, 5 = always",
         "signalType": "control",
         "defaultValue": 2.5,
         "minValue": 0.0,
