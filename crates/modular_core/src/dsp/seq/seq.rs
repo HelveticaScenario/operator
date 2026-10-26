@@ -193,8 +193,8 @@ fn seq_bake_ribbon(
 
 /// Channel count derivation for Seq.
 ///
-/// Analyzes the pattern to determine maximum polyphony by running 90 cycles
-/// of the pattern and counting maximum simultaneous haps.
+/// Analyzes the baked ribbon window to determine maximum polyphony: the most
+/// non-rest haps sounding at once.
 ///
 /// This is called by TypeScript to derive channel count from params.
 /// Inside Seq::update(), we read params.channels directly (which TypeScript
@@ -213,40 +213,25 @@ pub fn seq_derive_channel_count(params: &SeqParams) -> usize {
 
     const MAX_POLYPHONY: usize = 16;
 
-    // Sweep line algorithm using f64 coordinates from cached haps
-    let mut events: Vec<(f64, i32)> = Vec::new();
-
-    for cycle_storage in cached {
-        for hap in cycle_storage.haps.iter() {
-            if hap.value.is_rest() {
-                continue;
-            }
-            events.push((hap.part_begin, 1)); // +1 at start
-            events.push((hap.part_end, -1)); // -1 at end
-        }
-    }
-
-    // Sort by time, with ends (-1) before starts (+1) at same time
-    events.sort_by(|a, b| {
-        match a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal) {
-            Ordering::Equal => a.1.cmp(&b.1), // -1 comes before +1
-            other => other,
-        }
-    });
-
-    // Sweep through events tracking current and max polyphony
-    let mut current: usize = 0;
+    // A baked hap's part never leaves its cycle, so each cycle is swept on its
+    // own. Starts come from the haps, which are sorted by `part_begin`; a part
+    // ending exactly where another starts does not overlap it.
+    let mut ends: Vec<f64> = Vec::new();
     let mut max_simultaneous: usize = 0;
-
-    for (_time, delta) in events {
-        if delta > 0 {
-            current += 1;
-            max_simultaneous = max_simultaneous.max(current);
+    for cycle_storage in cached {
+        let sounding = || cycle_storage.haps.iter().filter(|h| !h.value.is_rest());
+        ends.clear();
+        ends.extend(sounding().map(|h| h.part_end));
+        ends.sort_by(f64::total_cmp);
+        let mut ended = 0;
+        for (started, hap) in sounding().enumerate() {
+            while ended < ends.len() && ends[ended] <= hap.part_begin {
+                ended += 1;
+            }
+            max_simultaneous = max_simultaneous.max((started + 1).saturating_sub(ended));
             if max_simultaneous >= MAX_POLYPHONY {
                 return MAX_POLYPHONY;
             }
-        } else {
-            current = current.saturating_sub(1);
         }
     }
     max_simultaneous.max(1)
@@ -590,7 +575,20 @@ impl Seq {
         events_to_process.clear();
         let storage_opt = self.params.pattern.cached_haps().get(storage_index);
         if let Some(storage) = storage_opt {
-            for (hap_index, hap) in storage.haps.iter().enumerate() {
+            let haps = &storage.haps;
+            // A forward step can only enter haps whose part starts in
+            // `(prev_logical, logical]`: one starting at or before
+            // `prev_logical` that still holds `logical` held `prev_logical`
+            // too. Haps are sorted by `part_begin`, so that is a binary-searched
+            // slice; any other step scans the whole cycle.
+            let candidates = if started && !lap_wrapped && prev_logical <= logical {
+                haps.partition_point(|h| h.part_begin <= prev_logical)
+                    ..haps.partition_point(|h| h.part_begin <= logical)
+            } else {
+                0..haps.len()
+            };
+            for hap_index in candidates {
+                let hap = &haps[hap_index];
                 if !hap.has_onset || logical < hap.part_begin || logical >= hap.part_end {
                     continue;
                 }
