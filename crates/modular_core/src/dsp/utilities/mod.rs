@@ -5,6 +5,7 @@ use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
 pub mod add_hz;
 pub mod adsr;
+pub mod arithmetic;
 pub mod buffer;
 pub mod chord;
 pub mod chord_names;
@@ -40,6 +41,8 @@ pub use scale::{FixedRoot, ScaleSpec};
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     add_hz::AddHz::install_constructor(map);
     adsr::Adsr::install_constructor(map);
+    arithmetic::Arithmetic::install_constructor(map);
+    arithmetic::Round::install_constructor(map);
     buffer::BufRead::install_constructor(map);
     buffer::BufferWrite::install_constructor(map);
     chord::Chord::install_constructor(map);
@@ -72,6 +75,8 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
 pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer>) {
     add_hz::AddHz::install_params_deserializer(map);
     adsr::Adsr::install_params_deserializer(map);
+    arithmetic::Arithmetic::install_params_deserializer(map);
+    arithmetic::Round::install_params_deserializer(map);
     buffer::BufRead::install_params_deserializer(map);
     buffer::BufferWrite::install_params_deserializer(map);
     chord::Chord::install_params_deserializer(map);
@@ -105,6 +110,8 @@ pub fn schemas() -> Vec<ModuleSchema> {
     vec![
         add_hz::AddHz::get_schema(),
         adsr::Adsr::get_schema(),
+        arithmetic::Arithmetic::get_schema(),
+        arithmetic::Round::get_schema(),
         buffer::BufRead::get_schema(),
         buffer::BufferWrite::get_schema(),
         chord::Chord::get_schema(),

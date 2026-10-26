@@ -38,6 +38,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     beads::Granular::install_constructor(map);
     beads::GranularSampler::install_constructor(map);
     beads::WowFlutter::install_constructor(map);
+    beads::ClockedDelay::install_constructor(map);
 }
 
 pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer>) {
@@ -55,6 +56,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     beads::Granular::install_params_deserializer(map);
     beads::GranularSampler::install_params_deserializer(map);
     beads::WowFlutter::install_params_deserializer(map);
+    beads::ClockedDelay::install_params_deserializer(map);
 }
 
 pub fn schemas() -> Vec<ModuleSchema> {
@@ -73,5 +75,6 @@ pub fn schemas() -> Vec<ModuleSchema> {
         beads::Granular::get_schema(),
         beads::GranularSampler::get_schema(),
         beads::WowFlutter::get_schema(),
+        beads::ClockedDelay::get_schema(),
     ]
 }

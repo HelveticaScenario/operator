@@ -2,6 +2,7 @@
 //! its control-block clock and its stereo placement of voices.
 
 use super::buffer::{Resolution, mulaw_round_trip};
+use super::primitives::Limiter;
 
 /// Control blocks per second; parameters are smoothed and ramped per block.
 const BLOCK_RATE: f32 = 4000.0;
@@ -77,6 +78,25 @@ pub fn voice_place(i: usize, n: usize, width: f32) -> [f32; 2] {
     };
     let p = (pan + 5.0) / 10.0;
     [(2.0 * (1.0 - p)).sqrt(), (2.0 * p).sqrt()]
+}
+
+/// The hardware's pre-reverb and output limiters, for one signal.
+#[derive(Clone, Copy, Default)]
+pub struct Limiters {
+    pub pre: Limiter,
+    pub output: Limiter,
+}
+
+impl Limiters {
+    pub fn init(&mut self, sample_rate: f32) {
+        self.pre.init(1.0 / (sample_rate * 4.0));
+        self.output.init(1.0 / (sample_rate * 6.0));
+    }
+
+    #[inline]
+    pub fn process_mono(&mut self, x: f32) -> f32 {
+        self.output.process_mono(self.pre.process_mono(x))
+    }
 }
 
 /// Clock of the control blocks at the rate its owner runs at.

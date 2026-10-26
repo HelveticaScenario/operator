@@ -162,9 +162,21 @@ impl Limiter {
     }
 }
 
-/// Trapezoidal state-variable filter, high-pass output only.
+/// stmlib's fast approximation of `tan(π f)`, tuned for 16 Hz–16 kHz at
+/// 48 kHz.
+#[inline]
+fn fast_tan(f: f32) -> f32 {
+    use std::f32::consts::PI;
+    let a = 3.260e-1 * PI * PI * PI;
+    let b = 1.823e-1 * PI * PI * PI * PI * PI;
+    let f2 = f * f;
+    f * (PI + f2 * (a + b * f2))
+}
+
+/// Trapezoidal state-variable filter whose cutoff can move every sample
+/// without resetting its state.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SvfHighPass {
+pub struct Svf {
     g: f32,
     r: f32,
     h: f32,
@@ -172,29 +184,24 @@ pub struct SvfHighPass {
     state_2: f32,
 }
 
-impl SvfHighPass {
-    /// `f` is the cutoff as a fraction of the sample rate. Uses stmlib's
-    /// fast tangent approximation, tuned for 16 Hz–16 kHz at 48 kHz.
-    pub fn init(&mut self, f: f32, resonance: f32) {
-        use std::f32::consts::PI;
-        let a = 3.260e-1 * PI * PI * PI;
-        let b = 1.823e-1 * PI * PI * PI * PI * PI;
-        let f2 = f * f;
-        self.g = f * (PI + f2 * (a + b * f2));
+impl Svf {
+    /// `f` is the cutoff as a fraction of the sample rate.
+    #[inline]
+    pub fn set_f_q(&mut self, f: f32, resonance: f32) {
+        self.g = fast_tan(f);
         self.r = 1.0 / resonance;
         self.h = 1.0 / (1.0 + self.r * self.g + self.g * self.g);
-        self.state_1 = 0.0;
-        self.state_2 = 0.0;
     }
 
+    /// Low-pass and high-pass outputs for `input`.
     #[inline]
-    pub fn process(&mut self, input: f32) -> f32 {
+    pub fn process(&mut self, input: f32) -> (f32, f32) {
         let hp = (input - self.r * self.state_1 - self.g * self.state_1 - self.state_2) * self.h;
         let bp = self.g * hp + self.state_1;
         self.state_1 = self.g * hp + bp;
         let lp = self.g * bp + self.state_2;
         self.state_2 = self.g * bp + lp;
-        hp
+        (lp, hp)
     }
 }
 

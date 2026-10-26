@@ -2,27 +2,13 @@
 //! each voice's grain engine and dry/wet mix, then limiters both on each
 //! voice alone and on the voices placed in stereo.
 
-use super::chain::{BlockClock, Media, POT_LP, voice_place};
+use super::chain::{BlockClock, Limiters, Media, POT_LP, voice_place};
 use super::granular::GrainStartRequest;
 use super::player::{GrainTrigger, bounded_random};
-use super::primitives::{Frame, Interpolator2, Limiter};
+use super::primitives::{Frame, Interpolator2};
 use super::resample::MonoHistory;
 use super::voice::{Voice, VoiceControls};
 use crate::dsp::utils::rng::LcgRng;
-
-/// The hardware's pre-reverb and output limiters, for one signal.
-#[derive(Clone, Copy, Default)]
-struct Limiters {
-    pre: Limiter,
-    output: Limiter,
-}
-
-impl Limiters {
-    fn init(&mut self, sample_rate: f32) {
-        self.pre.init(1.0 / (sample_rate * 4.0));
-        self.output.init(1.0 / (sample_rate * 6.0));
-    }
-}
 
 #[derive(Default)]
 pub struct GrainsVoice {

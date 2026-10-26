@@ -119,6 +119,8 @@ struct ClockOutputs {
     beat_in_bar: f32,
     #[output("tempo", "Current tempo in beats per minute")]
     tempo: f32,
+    #[output("barLength", "Quarter notes per bar: 4 in 4/4, 3 in 6/8")]
+    bar_length: f32,
     #[output("grooveOffset", "Global groove position minus the playhead, in bars")]
     groove_offset: f32,
     #[output("grooveVelocity", "Velocity of the current global groove step (0-5V)", range = (0.0, 5.0))]
@@ -177,14 +179,18 @@ impl Clock {
     }
 
     fn update(&mut self, sample_rate: f32) {
+        // Time signature: numerator = beats per bar, denominator = beat value,
+        // floored at 1 to avoid division by zero. Like the tempo, the meter is
+        // published even while stopped.
+        let numerator = self.params.numerator.max(1) as f64;
+        let denominator = self.params.denominator.max(1) as f64;
+        self.outputs.bar_length = (numerator * 4.0 / denominator) as f32;
+
         // External clock sync: override free-running clock with Link data.
         if let Some(sync) = self.state.external_sync.take() {
             self.state.running = true;
             self.params.tempo = sync.bpm;
             self.outputs.tempo = sync.bpm as f32;
-
-            let numerator = self.params.numerator.max(1) as f64;
-            let denominator = self.params.denominator.max(1) as f64;
 
             let old_phase = self.state.phase;
             self.state.phase = sync.bar_phase;
@@ -263,11 +269,6 @@ impl Clock {
         }
 
         let frequency_hz = tempo / 60.0;
-
-        // Time signature: numerator = beats per bar, denominator = beat value
-        // Clamp to valid values (minimum 1) to avoid division by zero
-        let numerator = self.params.numerator.max(1) as f64;
-        let denominator = self.params.denominator.max(1) as f64;
 
         // Calculate phase increment per sample
         // BPM tempo is in quarter notes per minute, so frequency_hz = quarter notes per second.
@@ -1046,6 +1047,16 @@ mod tests {
         c.params.tempo = 137.5;
         c.update(48_000.0);
         assert_eq!(c.outputs.tempo, 137.5);
+    }
+
+    #[test]
+    fn clock_bar_length_output_is_published_while_stopped() {
+        let mut c = Clock::default();
+        c.params.numerator = 6;
+        c.params.denominator = 8;
+        let _ = c.on_clock_message(&ClockMessages::Stop);
+        c.update(48_000.0);
+        assert_eq!(c.outputs.bar_length, 3.0);
     }
 
     #[test]
