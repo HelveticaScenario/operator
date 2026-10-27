@@ -20490,6 +20490,107 @@
     ]
   },
   {
+    "name": "_hz",
+    "documentation": "Converts a frequency in Hz to a V/Oct pitch.\n\nBacks the DSL's `$hz()` when its argument is a signal.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "HzParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "frequency in Hz",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "V/Oct pitch output",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "frequency in Hz",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ]
+  },
+  {
     "name": "$remap",
     "documentation": "Linearly rescales a signal from one voltage range to another.\n\nMaps **input** from \\[inMin, inMax\\] to \\[outMin, outMax\\]. Useful for\nconverting between different voltage standards or reshaping control\nsignals.\n\n```js\n// convert a 0–5 V envelope to a -5–5 V bipolar signal\n$remap($adsr($clock.beatTrigger, {attack: 0.3, decay: 0.2, sustain: 4, release: 0.5}), -5, 5, 0, 5)\n\n// convert a -5–5 V signal to 0–1 V\n$remap($sine('1hz'), 0, 1, -5, 5)\n```",
     "paramsSchema": {
