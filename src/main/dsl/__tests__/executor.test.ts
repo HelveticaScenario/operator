@@ -155,6 +155,58 @@ describe('signal input variants', () => {
         expect(findModules(patch, '$sine').length).toBe(1);
     });
 
+    test('$hz() of a signal converts through _hz wired to that signal', () => {
+        const patch = execPatch(
+            "const f = $slider('pitch', 220, 100, 500); $sine($hz(f)).out()",
+        );
+        const [conversion] = findModules(patch, '_hz');
+        expect(conversion.params.input).toEqual([
+            expect.objectContaining({
+                type: 'cable',
+                module: '__slider_pitch',
+            }),
+        ]);
+        const [sine] = findModules(patch, '$sine');
+        expect(sine.params.freq).toEqual([
+            expect.objectContaining({ type: 'cable', module: conversion.id }),
+        ]);
+    });
+
+    test('$hz() of a number array converts each number at script time', () => {
+        const patch = execPatch('$saw($hz([220, 440])).out()');
+        expect(findModules(patch, '_hz')).toHaveLength(0);
+        const [saw] = findModules(patch, '$saw');
+        const freq = saw.params.freq as number[];
+        expect(freq[0]).toBeCloseTo(Math.log2(220 / 261.6255653005986));
+        expect(freq[1]).toBeCloseTo(freq[0] + 1);
+    });
+
+    test('$hz() mixing numbers and signals converts on the audio thread', () => {
+        const patch = execPatch(
+            "$saw($hz([220, $slider('pitch', 330, 100, 500)])).out()",
+        );
+        const [conversion] = findModules(patch, '_hz');
+        expect((conversion.params.input as unknown[])[0]).toBe(220);
+    });
+
+    test.each(['"440hz"', '"C4"', '[220, "440hz"]'])(
+        '$hz(%s) rejects note and Hz strings',
+        (arg) => {
+            expect(() => execPatch(`$sine($hz(${arg})).out()`)).toThrow(
+                /already pitches/,
+            );
+        },
+    );
+
+    test.each(['0', '-5', '[220, 0]'])(
+        '$hz(%s) rejects frequencies at or below 0 Hz',
+        (arg) => {
+            expect(() => execPatch(`$sine($hz(${arg})).out()`)).toThrow(
+                /Frequency must be positive/,
+            );
+        },
+    );
+
     test('$note() helper produces a number', () => {
         const patch = execPatch('$sine($note("A4")).out()');
         expect(findModules(patch, '$sine').length).toBe(1);

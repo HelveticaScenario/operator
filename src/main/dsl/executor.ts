@@ -401,6 +401,29 @@ export function executePatchScript(
         );
     }
     const cycleFactory: CycleFactory = $cycle;
+    // Numbers convert here; a frequency that includes a signal converts on the
+    // audio thread through `_hz`. Note and Hz strings are already pitches, so
+    // they are rejected rather than read as a frequency.
+    const $hz = (frequency: number | PolySignal) => {
+        if (typeof frequency === 'number') {
+            return hz(frequency);
+        }
+        const items = Array.isArray(frequency) ? frequency : [frequency];
+        for (const item of items) {
+            if (typeof item === 'string') {
+                throw new Error(
+                    `$hz takes a frequency in Hz, not "${item}": note and Hz strings are already pitches`,
+                );
+            }
+            if (typeof item === 'number') {
+                hz(item);
+            }
+        }
+        if (items.every((item) => typeof item === 'number')) {
+            return items.map((item) => hz(item));
+        }
+        return builder.getFactory('_hz')(frequency) as Collection;
+    };
     const $mix = userNamespaceTree['$mix'];
     const $delayRead = userNamespaceTree['$delayRead'];
     const $clamp = userNamespaceTree['$clamp'];
@@ -952,7 +975,7 @@ export function executePatchScript(
         // Prefixed namespace tree (modules and namespaces, minus _clock)
         ...userNamespaceTree,
         // Helper functions with $ prefix
-        $hz: hz,
+        $hz,
         $note: note,
         // Mini-notation parser — wraps a string in a ParsedPattern that
         // $cycle consumes as a positional argument. Carries

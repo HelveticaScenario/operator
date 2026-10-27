@@ -351,7 +351,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$comp" => json!({ "input": 0.0, "threshold": 0.0 }),
         "_erratic" => json!({ "input": 0.0, "amount": 1.0 }),
         "_arithmetic" => json!({ "input": 0.0, "operand": 0.0 }),
-        "_round" => json!({ "input": 0.0 }),
+        "_round" | "_hz" => json!({ "input": 0.0 }),
         "$wrap" | "$clamp" => json!({ "input": 0.0, "min": -5.0, "max": 5.0 }),
         "$addHz" => json!({ "input": 0.0, "offset": 0.0 }),
         "$mulHz" => json!({ "input": 0.0, "factor": 1.0 }),

@@ -477,19 +477,26 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
     // ---- Helpers ----
     {
         description:
-            'Convert a frequency in Hertz to a 1V/octave voltage value.',
-        examples: ['$hz(440)    // A4', '$hz(261.63) // ~C4'],
+            'Convert a frequency in Hertz to a 1V/octave voltage value. Numbers and number arrays convert to voltage values; a frequency that includes a signal converts sample by sample, with frequencies at or below 0 Hz read as 0.0001 Hz. Note and Hz strings are already pitches and are rejected.',
+        examples: [
+            '$hz(440)    // A4',
+            '$hz(261.63) // ~C4',
+            '$hz([220, 330]) // two voices',
+            "$hz($slider('pitch', 220, 100, 500)) // a slider in Hz",
+        ],
         group: 'Helpers',
         name: '$hz',
         params: [
             {
                 name: 'frequency',
-                type: 'number',
+                type: 'number | Poly<number | ModuleOutput>',
                 description: 'Frequency in Hz',
             },
         ],
-        returns: 'Voltage value usable as a Signal',
-        signature: '$hz(frequency: number): number',
+        returns:
+            'A voltage value for a number, one per element for a number array, otherwise a Collection',
+        signature:
+            '$hz(frequency: number | Poly<number | ModuleOutput>): number | number[] | Collection',
     },
     {
         description: 'Convert a note name string to a 1V/octave voltage value.',
