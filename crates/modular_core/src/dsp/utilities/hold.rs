@@ -1,4 +1,7 @@
-use crate::dsp::utils::{GATE_HIGH_VOLTAGE, SchmittTrigger, min_gate_samples};
+use crate::dsp::oscillators::sync_edge_fraction;
+use crate::dsp::utils::{
+    GATE_DETECTION_HIGH_THRESHOLD, GATE_HIGH_VOLTAGE, SchmittTrigger, min_gate_samples,
+};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use deserr::Deserr;
 use schemars::JsonSchema;
@@ -20,6 +23,13 @@ struct HoldParams {
     #[serde(default = "default_true")]
     #[deserr(default = default_true())]
     retrigger: bool,
+    /// when true, edges fall between samples: the output's edge samples take
+    /// in-between values that put each edge where a `sync` input finds it,
+    /// 0.2 samples after the input's, and a retrigger gap lasts one sample.
+    /// For audio-rate gates (default false)
+    #[serde(default)]
+    #[deserr(default)]
+    subsample: bool,
 }
 
 fn default_true() -> bool {
@@ -36,13 +46,36 @@ struct HoldOutputs {
 #[derive(Clone, Copy, Default)]
 struct HoldChannelState {
     schmitt: SchmittTrigger,
-    elapsed: f32,
+    /// Samples from the opening edge to the current sample.
+    elapsed: f64,
     active: bool,
     /// Samples left in a retrigger gap, during which the output is held low.
     gap_remaining: u32,
-    /// Whether the previous sample's output was high: a rising edge then needs
+    /// The previous sample's output: a rising edge while it is above 0 needs
     /// a gap for downstream gate inputs to see a new edge.
-    output_high: bool,
+    prev_output: f32,
+    /// The previous input sample, for locating an edge between samples.
+    prev_input: f32,
+}
+
+/// Share of the output's swing at which downstream edge detectors fire.
+const DETECTION_SHARE: f32 = GATE_DETECTION_HIGH_THRESHOLD / GATE_HIGH_VOLTAGE;
+
+/// Level of a gate sample `x` samples on the open side of an edge, for a
+/// detector that interpolates its threshold crossing linearly between
+/// samples, as [`sync_edge_fraction`] does. An edge with no sample within
+/// `DETECTION_SHARE` before it is drawn by the sample on the closed side,
+/// which then sits between 0V and the threshold.
+fn edge_level(x: f32) -> f32 {
+    if x >= 1.0 - DETECTION_SHARE {
+        GATE_HIGH_VOLTAGE
+    } else if x > 0.0 {
+        GATE_DETECTION_HIGH_THRESHOLD / (1.0 - x)
+    } else if x > -DETECTION_SHARE {
+        GATE_HIGH_VOLTAGE - (GATE_HIGH_VOLTAGE - GATE_DETECTION_HIGH_THRESHOLD) / (1.0 + x)
+    } else {
+        0.0
+    }
 }
 
 /// Stretches a trigger into a fixed-length gate.
@@ -59,6 +92,11 @@ struct HoldChannelState {
 /// train, it fires once every `ceil(time / period)` pulses: a hold longer
 /// than the period divides the rate into subharmonics.
 ///
+/// Edges otherwise snap to whole samples, which roughens audio-rate gates.
+/// With `subsample: true` the input edge is located between samples, as a
+/// `sync` input does, and the output carries its edges between samples too,
+/// so a synced oscillator downstream fires on time.
+///
 /// ## Example
 ///
 /// ```js
@@ -71,6 +109,12 @@ struct HoldChannelState {
 /// // a 12 ms hold on a 200 Hz pulse train fires every third pulse
 /// $hold($pulse('200hz'), 0.012, { retrigger: false }).out()
 /// ```
+///
+/// ```js
+/// // formant bursts at a third of 330 Hz
+/// const g = $hold($pulse('330hz'), 2.5 / 330, { retrigger: false, subsample: true })
+/// $sine('1200hz', { sync: g }).amplitude(g).out()
+/// ```
 #[module(name = "$hold", args(input, time))]
 pub struct Hold {
     outputs: HoldOutputs,
@@ -80,40 +124,57 @@ pub struct Hold {
 
 impl Hold {
     fn update(&mut self, sample_rate: f32) {
-        let sample_period = 1.0 / sample_rate;
-        let retrigger_gap = min_gate_samples(sample_rate);
+        let subsample = self.params.subsample;
+        let retrigger_gap = if subsample {
+            1
+        } else {
+            min_gate_samples(sample_rate)
+        };
         for ch in 0..self.channel_count() {
             let state = &mut self.channel_state[ch];
-            let time = self.params.time.value_or(ch, 0.05).max(0.0);
-            let (_, edge) = state
-                .schmitt
-                .process_with_edge(self.params.input.get_value(ch));
-            let holding = state.active && state.elapsed < time;
+            let time = (self.params.time.value_or(ch, 0.05).max(0.0) * sample_rate) as f64;
+            let input = self.params.input.get_value(ch);
+            let (_, edge) = state.schmitt.process_with_edge(input);
+            // Samples from the input edge to the current sample; in subsample
+            // mode the gate lags it by `DETECTION_SHARE`, which leaves every
+            // output edge a sample to draw it.
+            let since_edge = if subsample && edge.is_rising() {
+                1.0 - (sync_edge_fraction(state.prev_input, input) + DETECTION_SHARE) as f64
+            } else {
+                0.0
+            };
+            state.prev_input = input;
+
+            let holding = state.active && state.elapsed - since_edge < time;
             if edge.is_rising() && (self.params.retrigger || !holding) {
-                if state.output_high {
+                if state.prev_output > 0.0 {
                     state.gap_remaining = retrigger_gap;
                 }
-                state.elapsed = 0.0;
+                state.elapsed = since_edge;
                 state.active = true;
             }
-            if state.active && state.elapsed < time {
-                state.elapsed += sample_period;
-                state.output_high = state.gap_remaining == 0;
-                if state.gap_remaining > 0 {
-                    state.gap_remaining -= 1;
-                }
-            } else {
-                state.active = false;
-                state.output_high = false;
-            }
-            self.outputs.sample.set(
-                ch,
-                if state.output_high {
-                    GATE_HIGH_VOLTAGE
+
+            let mut out = 0.0;
+            if state.active {
+                if subsample {
+                    let left = (time - state.elapsed) as f32;
+                    out = edge_level(state.elapsed as f32).min(edge_level(left));
+                    state.active = out > 0.0 || state.elapsed < time;
+                } else if state.elapsed < time {
+                    out = GATE_HIGH_VOLTAGE;
                 } else {
-                    0.0
-                },
-            );
+                    state.active = false;
+                }
+                state.elapsed += 1.0;
+            }
+            if !state.active {
+                state.gap_remaining = 0;
+            } else if state.gap_remaining > 0 {
+                out = 0.0;
+                state.gap_remaining -= 1;
+            }
+            state.prev_output = out;
+            self.outputs.sample.set(ch, out);
         }
     }
 }
@@ -135,6 +196,7 @@ mod tests {
                 input: PolySignal::mono(Signal::Volts(input_volts)),
                 time: time_secs.map(|t| PolySignal::mono(Signal::Volts(t))),
                 retrigger: true,
+                subsample: false,
             },
             outputs,
             _channel_count: 1,
@@ -327,5 +389,102 @@ mod tests {
     fn with_retrigger_a_hold_longer_than_the_period_keeps_every_pulse() {
         let mut hold = make(0.0, Some(250.0 / SR));
         assert_eq!(output_edges(&mut hold, 100, 100 * 120), 120);
+    }
+
+    /// Pulses every `period` samples from `first`, each rising at 1V per
+    /// sample through the 1V threshold so its edge time is exact, held at 5V
+    /// and dropping to 0V 20 samples after the edge.
+    fn ramped_pulse(n: usize, first: f64, period: f64) -> f32 {
+        let x = n as f64 - first;
+        if x < -1.0 {
+            return 0.0;
+        }
+        let since = x.rem_euclid(period);
+        let since = if since >= period - 1.0 {
+            since - period
+        } else {
+            since
+        };
+        if since >= 20.0 {
+            0.0
+        } else {
+            (1.0 + since).clamp(0.0, 5.0) as f32
+        }
+    }
+
+    /// Rising and falling 1V crossings of `out`, interpolated linearly
+    /// between samples, as sample times.
+    fn crossings(out: &[f32]) -> (Vec<f64>, Vec<f64>) {
+        let mut rises = Vec::new();
+        let mut falls = Vec::new();
+        let mut schmitt = SchmittTrigger::default();
+        for (k, w) in out.windows(2).enumerate() {
+            let (prev, cur) = (w[0], w[1]);
+            if schmitt.process(cur) {
+                rises.push(k as f64 + sync_edge_fraction(prev, cur) as f64);
+            }
+            if prev >= 1.0 && cur < 1.0 {
+                falls.push(k as f64 + ((prev - 1.0) / (prev - cur)) as f64);
+            }
+        }
+        (rises, falls)
+    }
+
+    #[test]
+    fn subsample_edges_land_between_samples() {
+        let (first, period, hold) = (10.25, 100.37, 250.0);
+        let mut h = make(0.0, Some(hold / SR));
+        h.params.retrigger = false;
+        h.params.subsample = true;
+        let n = 100 * 120;
+        let out: Vec<f32> = (0..n)
+            .map(|i| {
+                set_input(&mut h, ramped_pulse(i, first, period));
+                h.update(SR);
+                h.outputs.sample.get(0)
+            })
+            .collect();
+        let (rises, falls) = crossings(&out);
+
+        // A 250-sample hold on a 100.37-sample period fires every third pulse.
+        assert!(rises.len() >= 38, "{} rises", rises.len());
+        let lag = DETECTION_SHARE as f64;
+        for (j, &rise) in rises.iter().enumerate() {
+            let edge = first + (3 * j) as f64 * period + lag;
+            assert!((rise - edge).abs() < 1e-3, "rise {j}: {rise} vs {edge}");
+        }
+        for (j, &fall) in falls.iter().enumerate() {
+            let close = first + (3 * j) as f64 * period + lag + hold as f64;
+            assert!((fall - close).abs() < 1e-3, "fall {j}: {fall} vs {close}");
+        }
+    }
+
+    #[test]
+    fn subsample_retrigger_gap_lasts_one_sample() {
+        let mut hold = make(0.0, Some(0.01));
+        hold.params.subsample = true;
+        set_input(&mut hold, 5.0);
+        count_high(&mut hold, 100);
+        set_input(&mut hold, 0.0);
+        count_high(&mut hold, 10);
+        set_input(&mut hold, 5.0);
+        let out = outputs(&mut hold, 2);
+        assert_eq!(out, [0.0, GATE_HIGH_VOLTAGE]);
+    }
+
+    #[test]
+    fn a_gap_left_over_when_the_hold_ends_does_not_delay_the_next_gate() {
+        // A hold shorter than the retrigger gap ends mid-gap.
+        let mut hold = make(0.0, Some(4.0 / SR));
+        set_input(&mut hold, 5.0);
+        count_high(&mut hold, 2);
+        set_input(&mut hold, 0.0);
+        count_high(&mut hold, 1);
+        set_input(&mut hold, 5.0);
+        count_high(&mut hold, 1);
+        set_input(&mut hold, 0.0);
+        count_high(&mut hold, 100);
+        set_input(&mut hold, 5.0);
+        assert_eq!(outputs(&mut hold, 1)[0], GATE_HIGH_VOLTAGE);
     }
 }
