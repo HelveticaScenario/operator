@@ -401,6 +401,18 @@ export function executePatchScript(
         );
     }
     const cycleFactory: CycleFactory = $cycle;
+    const $mulHz = userNamespaceTree['$mulHz'];
+    if (typeof $mulHz !== 'function') {
+        throw new Error(
+            'DSL execution error: "$mulHz" module not found in schemas',
+        );
+    }
+    // A signal frequency converts on the audio thread: 1 Hz scaled by the
+    // frequency in Hz is that frequency as V/Oct.
+    const $hz = (frequency: number | PolySignal) =>
+        typeof frequency === 'number'
+            ? hz(frequency)
+            : ($mulHz(hz(1), frequency) as Collection);
     const $mix = userNamespaceTree['$mix'];
     const $delayRead = userNamespaceTree['$delayRead'];
     const $clamp = userNamespaceTree['$clamp'];
@@ -952,7 +964,7 @@ export function executePatchScript(
         // Prefixed namespace tree (modules and namespaces, minus _clock)
         ...userNamespaceTree,
         // Helper functions with $ prefix
-        $hz: hz,
+        $hz,
         $note: note,
         // Mini-notation parser — wraps a string in a ParsedPattern that
         // $cycle consumes as a positional argument. Carries

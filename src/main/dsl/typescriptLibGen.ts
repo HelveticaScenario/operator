@@ -1603,6 +1603,14 @@ class OutLane extends Collection {
  * @example $hz(261.63)  // ~C4
  */
 function $hz(frequency: number): number;
+/**
+ * Convert a frequency signal in Hertz to a 1V/octave pitch, sample by
+ * sample. Frequencies at or below 0 Hz read as 0.0001 Hz.
+ * @param frequency Frequency in Hz
+ * @returns The pitch as a {@link Collection}
+ * @example const f = $slider('pitch', 220, 100, 500); $saw($hz(f)).out()
+ */
+function $hz(frequency: Poly<Signal>): Collection;
 
 /**
  * Convert a note name string to a voltage value (1V/octave).

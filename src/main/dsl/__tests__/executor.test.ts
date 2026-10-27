@@ -155,6 +155,15 @@ describe('signal input variants', () => {
         expect(findModules(patch, '$sine').length).toBe(1);
     });
 
+    test('$hz() of a signal converts through $mulHz from 1 Hz', () => {
+        const patch = execPatch(
+            "const f = $slider('pitch', 220, 100, 500); $sine($hz(f)).out()",
+        );
+        const [mulHz] = findModules(patch, '$mulHz');
+        expect(mulHz.params.input).toBeCloseTo(Math.log2(1 / 261.6255653005986));
+        expect(findModules(patch, '$sine').length).toBe(1);
+    });
+
     test('$note() helper produces a number', () => {
         const patch = execPatch('$sine($note("A4")).out()');
         expect(findModules(patch, '$sine').length).toBe(1);
