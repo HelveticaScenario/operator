@@ -66,6 +66,29 @@ struct ChannelState {
     tilt_post: OnePole,
     /// DC blocker (one-pole high-pass) on the input before upsampling.
     dc_blocker: DcBlocker,
+    /// The smoothed tone the cached high-band gains were computed for, and
+    /// the `(pre, post)` gains.
+    tone_gains: Option<(f32, f32, f32)>,
+}
+
+impl ChannelState {
+    /// High-band gains `(pre, post)` for `tone` in [-5, 5], cached while the
+    /// smoothed tone holds. 3^(tone/5) maps tone=-5 → pre=1/3, post=3;
+    /// tone=0 → 1, 1; tone=+5 → pre=3, post=1/3. Linear-signal cascade
+    /// (pre · post) = 1 at all settings — true pre-emphasis / de-emphasis
+    /// pair, no dead zone.
+    #[inline(always)]
+    fn high_gains(&mut self, tone: f32) -> (f32, f32) {
+        match self.tone_gains {
+            Some((cached, pre, post)) if cached == tone => (pre, post),
+            _ => {
+                let amount = tone * 0.2;
+                let (pre, post) = (TONE_RANGE.powf(amount), TONE_RANGE.powf(-amount));
+                self.tone_gains = Some((tone, pre, post));
+                (pre, post)
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -141,13 +164,7 @@ impl Overdrive {
             let tone = (*state.tone).clamp(-5.0, 5.0);
 
             let g = 1.0 + drive * ((MAX_DRIVE_GAIN - 1.0) / 5.0);
-            // tone in [-5, 5] maps to symmetric high-band gain pair via 3^(tone/5):
-            // tone=-5 → pre=1/3, post=3; tone=0 → 1, 1; tone=+5 → pre=3, post=1/3.
-            // Linear-signal cascade (pre · post) = 1 at all settings — true
-            // pre-emphasis / de-emphasis pair, no dead zone.
-            let amount = tone * 0.2;
-            let pre_high_gain = TONE_RANGE.powf(amount);
-            let post_high_gain = TONE_RANGE.powf(-amount);
+            let (pre_high_gain, post_high_gain) = state.high_gains(tone);
 
             // DC-block the input at base rate before upsampling.
             let x_norm = input / 5.0;
