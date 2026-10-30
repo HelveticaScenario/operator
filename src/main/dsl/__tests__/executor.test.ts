@@ -1799,12 +1799,12 @@ describe('fx modules', () => {
 
     test('$enosc', () => {
         const patch = execPatch(
-            '$enosc("c3", $enosc.scale.minor, { spread: 2, phase: $phase.pulsar(2), waveDist: 1, waveDistMode: "cheby" }).odd.out()',
+            '$enosc("c3", $enosc.scale.minor, { spread: 2, phase: $phase.pulsar(2), cheby: 1, effectOrder: "scf" }).odd.out()',
         );
         const [enosc] = findModules(patch, '$enosc');
         expect(enosc.params.scale).toEqual({ type: 'minor' });
         expect(enosc.params.phase).toEqual({ type: 'pulsar', amount: 2 });
-        expect(enosc.params.waveDistMode).toBe('cheby');
+        expect(enosc.params.effectOrder).toBe('scf');
     });
 
     test('$enosc.scale.custom parses its notes', () => {

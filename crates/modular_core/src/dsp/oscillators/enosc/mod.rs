@@ -1,6 +1,6 @@
 //! `$enosc` — the core of the 4ms Ensemble Oscillator: per channel, a bank of
-//! sine voices spread across a scale, with cross FM, a phase warp, and a
-//! waveshaper.
+//! sine voices spread across a scale, with cross FM, a phase warp, and the
+//! fold/cheby/segment warps.
 //!
 //! Adapted from the 4ms Ensemble Oscillator. Copyright 4ms Company. Used under
 //! GPL v3.
@@ -21,7 +21,7 @@ use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
 use crate::types::SwapGlide;
 
 use scale::{EnoscScale, ScaleNotes};
-use voice::{CONTROL_BLOCK, ControlContext, Voice, VoiceContext, WaveDist, WaveDistMode};
+use voice::{CONTROL_BLOCK, ControlContext, EffectOrder, Voice, VoiceContext, WarpChain};
 
 /// Most voices per channel.
 const MAX_VOICES: usize = 16;
@@ -124,14 +124,23 @@ struct EnoscParams {
     /// `$phase.*`
     #[deserr(default)]
     phase: Option<PhaseWarp>,
-    /// waveshaping amount (0–5)
+    /// wavefold amount (0–5)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
-    wave_dist: Option<PolySignal>,
-    /// the waveshaper **waveDist** drives: fold (default), cheby, or segment
+    fold: Option<PolySignal>,
+    /// Chebyshev waveshaping amount (0–5)
+    #[signal(default = 0.0, range = (0.0, 5.0))]
+    #[deserr(default)]
+    cheby: Option<PolySignal>,
+    /// triangle-segment waveshaping amount (0–5)
+    #[signal(default = 0.0, range = (0.0, 5.0))]
+    #[deserr(default)]
+    segment: Option<PolySignal>,
+    /// order of the fold (f), cheby (c) and segment (s) warps, e.g. "fcs"
+    /// (default) or "scf"
     #[serde(default)]
     #[deserr(default)]
-    wave_dist_mode: WaveDistMode,
+    effect_order: EffectOrder,
     /// voices per channel (1–16, default 8)
     #[serde(default = "default_count")]
     #[deserr(default = default_count())]
@@ -152,7 +161,9 @@ pub fn enosc_derive_channel_count(params: &EnoscParams) -> usize {
         .max(params.cross_fm.channel_count())
         .max(params.balance.channel_count())
         .max(params.phase.as_ref().map_or(0, PhaseWarp::channels))
-        .max(params.wave_dist.channel_count())
+        .max(params.fold.channel_count())
+        .max(params.cheby.channel_count())
+        .max(params.segment.channel_count())
         .clamp(1, PORT_MAX_CHANNELS)
 }
 
@@ -191,7 +202,9 @@ struct ChannelState {
     dc: [DcBlocker; OUTPUTS],
     cross_fm: SwapGlide,
     balance: SwapGlide,
-    wave_dist: SwapGlide,
+    fold: SwapGlide,
+    cheby: SwapGlide,
+    segment: SwapGlide,
     phase: PhaseWarpGlides,
 }
 
@@ -222,9 +235,9 @@ struct EnoscState {
 ///
 /// **crossFm** routes each voice's output into the others' phase (see
 /// **crossFmMode**), **phase** warps every oscillator's phase with a `$phase.*`
-/// warp, and **waveDist** shapes every voice's waveform with the waveshaper
-/// **waveDistMode** picks. **balance** tilts the mix toward the low or high
-/// voices.
+/// warp, and **fold**, **cheby** and **segment** shape every voice's waveform in
+/// the order **effectOrder** gives. **balance** tilts the mix toward the low or
+/// high voices.
 ///
 /// **output** is the mix of every voice; the other outputs split the voices the
 /// way the hardware's stereo modes do.
@@ -241,8 +254,7 @@ struct EnoscState {
 ///   spread: $sine('0.05hz').range(1, 3),
 ///   crossFm: 1.5,
 ///   phase: $phase.pulsar(2),
-///   waveDist: 1,
-///   waveDistMode: 'cheby',
+///   fold: 1,
 /// })
 /// e.odd.out({ pan: -5 })
 /// e.even.out({ pan: 5 })
@@ -352,12 +364,15 @@ impl Enosc {
             let tilt = (balance / 5.0).clamp(-1.0, 1.0);
             let balance = f32::exp2(4.0 * tilt * tilt * tilt);
 
-            let wave_dist = cs.wave_dist.follow(
-                params.wave_dist.value_or_zero(ch),
-                params.wave_dist.glide_mark(ch),
-                sample_rate,
+            let glided = |glide: &mut SwapGlide, signal: &Option<PolySignal>| {
+                knob(glide.follow(signal.value_or_zero(ch), signal.glide_mark(ch), sample_rate))
+            };
+            let warps = WarpChain::new(
+                params.effect_order,
+                glided(&mut cs.fold, &params.fold),
+                glided(&mut cs.cheby, &params.cheby),
+                glided(&mut cs.segment, &params.segment),
             );
-            let wave_dist = WaveDist::new(params.wave_dist_mode, knob(wave_dist));
 
             let phase = params
                 .phase
@@ -366,7 +381,7 @@ impl Enosc {
 
             let ctx = VoiceContext {
                 phase,
-                wave_dist,
+                warps,
                 cross_fm,
                 fade_inc: state.fade_inc,
             };

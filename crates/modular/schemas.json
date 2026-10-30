@@ -10153,7 +10153,7 @@
   },
   {
     "name": "$enosc",
-    "documentation": "A bank of sine voices on a scale, after the 4ms Ensemble Oscillator.\n\nEach channel is a whole ensemble of **count** voices playing **scale** from\n**pitch**. The lowest voice sits **root** above it, quantized to the scale;\neach voice above adds **spread** to the root before quantizing, so the\nvoices stack up the scale. **detune** pulls the voices apart by small,\ngrowing, alternating amounts.\n\n**scale** takes the hardware's 12-TET and Octave scale banks from\n`$enosc.scale.*`, or `$enosc.scale.custom` for your own. A scale repeats at\nits last note, so some (`fifths`, `harmOdd`) repeat at intervals other than\nthe octave.\n\nA voice whose root falls between two scale notes crossfades between them, so\nsweeping **root** or **spread** morphs smoothly from chord to chord;\n**crossfade** narrows the fade until the voices step from note to note.\n\n**crossFm** routes each voice's output into the others' phase (see\n**crossFmMode**), **phase** warps every oscillator's phase with a `$phase.*`\nwarp, and **waveDist** shapes every voice's waveform with the waveshaper\n**waveDistMode** picks. **balance** tilts the mix toward the low or high\nvoices.\n\n**output** is the mix of every voice; the other outputs split the voices the\nway the hardware's stereo modes do.\n\n```js\n$enosc('c3', $enosc.scale.minor).out()\n$enosc('c2', $enosc.scale.harm4to7, { spread: 1, count: 6 }).out()\n$enosc('c2', $enosc.scale.custom('0 2 3 7 9', true)).out()\n```\n\n```js\n// Stereo: odd voices left, even voices right, with pulsar and cross FM\nconst e = $enosc('a2', $enosc.scale.just6, {\n  spread: $sine('0.05hz').range(1, 3),\n  crossFm: 1.5,\n  phase: $phase.pulsar(2),\n  waveDist: 1,\n  waveDistMode: 'cheby',\n})\ne.odd.out({ pan: -5 })\ne.even.out({ pan: 5 })\n```",
+    "documentation": "A bank of sine voices on a scale, after the 4ms Ensemble Oscillator.\n\nEach channel is a whole ensemble of **count** voices playing **scale** from\n**pitch**. The lowest voice sits **root** above it, quantized to the scale;\neach voice above adds **spread** to the root before quantizing, so the\nvoices stack up the scale. **detune** pulls the voices apart by small,\ngrowing, alternating amounts.\n\n**scale** takes the hardware's 12-TET and Octave scale banks from\n`$enosc.scale.*`, or `$enosc.scale.custom` for your own. A scale repeats at\nits last note, so some (`fifths`, `harmOdd`) repeat at intervals other than\nthe octave.\n\nA voice whose root falls between two scale notes crossfades between them, so\nsweeping **root** or **spread** morphs smoothly from chord to chord;\n**crossfade** narrows the fade until the voices step from note to note.\n\n**crossFm** routes each voice's output into the others' phase (see\n**crossFmMode**), **phase** warps every oscillator's phase with a `$phase.*`\nwarp, and **fold**, **cheby** and **segment** shape every voice's waveform in\nthe order **effectOrder** gives. **balance** tilts the mix toward the low or\nhigh voices.\n\n**output** is the mix of every voice; the other outputs split the voices the\nway the hardware's stereo modes do.\n\n```js\n$enosc('c3', $enosc.scale.minor).out()\n$enosc('c2', $enosc.scale.harm4to7, { spread: 1, count: 6 }).out()\n$enosc('c2', $enosc.scale.custom('0 2 3 7 9', true)).out()\n```\n\n```js\n// Stereo: odd voices left, even voices right, with pulsar and cross FM\nconst e = $enosc('a2', $enosc.scale.just6, {\n  spread: $sine('0.05hz').range(1, 3),\n  crossFm: 1.5,\n  phase: $phase.pulsar(2),\n  fold: 1,\n})\ne.odd.out({ pan: -5 })\ne.even.out({ pan: 5 })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "EnoscParams",
@@ -10161,6 +10161,17 @@
       "properties": {
         "balance": {
           "description": "level tilt across the voices: negative favours the lowest, positive the\nhighest, 0 is even",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cheby": {
+          "description": "Chebyshev waveshaping amount (0–5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -10215,6 +10226,22 @@
             }
           ]
         },
+        "effectOrder": {
+          "description": "order of the fold (f), cheby (c) and segment (s) warps, e.g. \"fcs\"\n(default) or \"scf\"",
+          "$ref": "#/$defs/EffectOrder",
+          "default": "fcs"
+        },
+        "fold": {
+          "description": "wavefold amount (0–5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "phase": {
           "description": "phase warp applied to every oscillator before its sine, built with\n`$phase.*`",
           "anyOf": [
@@ -10252,6 +10279,17 @@
             }
           ]
         },
+        "segment": {
+          "description": "triangle-segment waveshaping amount (0–5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "spread": {
           "description": "root distance between neighbouring voices (0–5, up to 7.5 semitones)",
           "anyOf": [
@@ -10262,22 +10300,6 @@
               "type": "null"
             }
           ]
-        },
-        "waveDist": {
-          "description": "waveshaping amount (0–5)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "waveDistMode": {
-          "description": "the waveshaper **waveDist** drives: fold (default), cheby, or segment",
-          "$ref": "#/$defs/WaveDistMode",
-          "default": "fold"
         }
       },
       "required": [
@@ -10302,6 +10324,18 @@
               "type": "string",
               "const": "down"
             }
+          ]
+        },
+        "EffectOrder": {
+          "description": "The order the fold (`f`), cheby (`c`) and segment (`s`) warps run in.",
+          "type": "string",
+          "enum": [
+            "fcs",
+            "fsc",
+            "cfs",
+            "csf",
+            "sfc",
+            "scf"
           ]
         },
         "EnoscScale": {
@@ -10792,26 +10826,6 @@
               ]
             }
           ]
-        },
-        "WaveDistMode": {
-          "description": "Which waveshaper **waveDist** drives.",
-          "oneOf": [
-            {
-              "description": "Wavefolding.",
-              "type": "string",
-              "const": "fold"
-            },
-            {
-              "description": "Chebyshev polynomials, adding harmonics in turn.",
-              "type": "string",
-              "const": "cheby"
-            },
-            {
-              "description": "Triangle segments.",
-              "type": "string",
-              "const": "segment"
-            }
-          ]
         }
       }
     },
@@ -10932,8 +10946,24 @@
         "maxValue": 5.0
       },
       {
-        "name": "waveDist",
-        "description": "waveshaping amount (0–5)",
+        "name": "fold",
+        "description": "wavefold amount (0–5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cheby",
+        "description": "Chebyshev waveshaping amount (0–5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "segment",
+        "description": "triangle-segment waveshaping amount (0–5)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,

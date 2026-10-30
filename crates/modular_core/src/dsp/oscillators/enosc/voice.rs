@@ -17,47 +17,130 @@ use crate::dsp::utils::{sin_turns, voct_to_hz};
 
 use super::scale::{PitchPair, ScaleNotes};
 
-/// Which waveshaper **waveDist** drives.
+/// The order the fold (`f`), cheby (`c`) and segment (`s`) warps run in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
-pub enum WaveDistMode {
-    /// Wavefolding.
+pub enum EffectOrder {
     #[default]
-    Fold,
-    /// Chebyshev polynomials, adding harmonics in turn.
-    Cheby,
-    /// Triangle segments.
-    Segment,
+    Fcs,
+    Fsc,
+    Cfs,
+    Csf,
+    Sfc,
+    Scf,
 }
 
-/// The waveshaper applied to every oscillator's sine, with its amount as a
-/// 0–1 knob. At 0 it is the identity and is skipped.
-#[derive(Clone, Copy)]
-pub(super) struct WaveDist {
-    mode: WaveDistMode,
-    amount: f32,
-}
+const FOLD: u8 = 1;
+const CHEBY: u8 = 2;
+const SEGMENT: u8 = 3;
 
-impl WaveDist {
-    pub fn new(mode: WaveDistMode, amount: f32) -> Self {
-        Self { mode, amount }
-    }
-
-    pub fn active(&self) -> bool {
-        self.amount > 0.0
-    }
-
-    // Kept out of line: inlined, the table lookups bloat the oscillator loop
-    // and slow it down even while it is off.
-    #[inline(never)]
-    fn apply(&self, x: f32, freq_norm: f32) -> f32 {
-        match self.mode {
-            WaveDistMode::Fold => lookup_fold(x, aa_fold(freq_norm, fold_amount(self.amount))),
-            WaveDistMode::Cheby => interpolate_cheby(x, aa_cheby(freq_norm, self.amount)),
-            WaveDistMode::Segment => interpolate_segment(x, aa_segment(freq_norm, self.amount)),
+impl EffectOrder {
+    fn stages(self) -> [u8; 3] {
+        match self {
+            EffectOrder::Fcs => [FOLD, CHEBY, SEGMENT],
+            EffectOrder::Fsc => [FOLD, SEGMENT, CHEBY],
+            EffectOrder::Cfs => [CHEBY, FOLD, SEGMENT],
+            EffectOrder::Csf => [CHEBY, SEGMENT, FOLD],
+            EffectOrder::Sfc => [SEGMENT, FOLD, CHEBY],
+            EffectOrder::Scf => [SEGMENT, CHEBY, FOLD],
         }
     }
+}
+
+type ChainFn = fn(&WarpChain, f32, f32) -> f32;
+
+/// The fold/cheby/segment chain applied to every oscillator's sine. Each amount
+/// is a 0–1 knob; a stage at 0 is the identity and is skipped.
+#[derive(Clone, Copy)]
+pub(super) struct WarpChain {
+    /// The chain compiled for exactly the active stages in order; `None` when
+    /// every stage is off.
+    run: Option<ChainFn>,
+    fold: f32,
+    cheby: f32,
+    segment: f32,
+}
+
+impl WarpChain {
+    pub fn new(order: EffectOrder, fold: f32, cheby: f32, segment: f32) -> Self {
+        let amount = |stage| match stage {
+            FOLD => fold,
+            CHEBY => cheby,
+            _ => segment,
+        };
+        let mut active = [0u8; 3];
+        let mut len = 0;
+        for stage in order.stages() {
+            if amount(stage) > 0.0 {
+                active[len] = stage;
+                len += 1;
+            }
+        }
+        Self {
+            run: select(active),
+            fold,
+            cheby,
+            segment,
+        }
+    }
+
+    #[inline]
+    pub fn active(&self) -> bool {
+        self.run.is_some()
+    }
+
+    #[inline]
+    fn apply(&self, x: f32, freq_norm: f32) -> f32 {
+        match self.run {
+            Some(run) => run(self, x, freq_norm),
+            None => x,
+        }
+    }
+
+    #[inline(always)]
+    fn stage<const K: u8>(&self, x: f32, freq_norm: f32) -> f32 {
+        match K {
+            FOLD => lookup_fold(x, aa_fold(freq_norm, fold_amount(self.fold))),
+            CHEBY => interpolate_cheby(x, aa_cheby(freq_norm, self.cheby)),
+            SEGMENT => interpolate_segment(x, aa_segment(freq_norm, self.segment)),
+            _ => x,
+        }
+    }
+}
+
+// Kept out of line: inlined, the table lookups bloat the oscillator loop and
+// slow it down even while every stage is off.
+#[inline(never)]
+fn chain<const A: u8, const B: u8, const C: u8>(warps: &WarpChain, x: f32, f: f32) -> f32 {
+    let x = warps.stage::<A>(x, f);
+    let x = warps.stage::<B>(x, f);
+    warps.stage::<C>(x, f)
+}
+
+/// The chain for `active` stages, in order and padded with 0.
+fn select(active: [u8; 3]) -> Option<ChainFn> {
+    const F: u8 = FOLD;
+    const C: u8 = CHEBY;
+    const S: u8 = SEGMENT;
+    Some(match active {
+        [F, 0, 0] => chain::<F, 0, 0>,
+        [C, 0, 0] => chain::<C, 0, 0>,
+        [S, 0, 0] => chain::<S, 0, 0>,
+        [F, C, 0] => chain::<F, C, 0>,
+        [F, S, 0] => chain::<F, S, 0>,
+        [C, F, 0] => chain::<C, F, 0>,
+        [C, S, 0] => chain::<C, S, 0>,
+        [S, F, 0] => chain::<S, F, 0>,
+        [S, C, 0] => chain::<S, C, 0>,
+        [F, C, S] => chain::<F, C, S>,
+        [F, S, C] => chain::<F, S, C>,
+        [C, F, S] => chain::<C, F, S>,
+        [C, S, F] => chain::<C, S, F>,
+        [S, F, C] => chain::<S, F, C>,
+        [S, C, F] => chain::<S, C, F>,
+        _ => return None,
+    })
 }
 
 /// Samples per control block: pitch and crossfade update once per block.
@@ -76,7 +159,7 @@ pub(super) struct ControlContext {
 pub(super) struct VoiceContext<'a> {
     /// The phase warp with its stage values for this channel.
     pub phase: Option<(&'a PhaseWarp, ResolvedWarp)>,
-    pub wave_dist: WaveDist,
+    pub warps: WarpChain,
     /// Cross-FM depth, before per-oscillator antialiasing.
     pub cross_fm: f32,
     pub fade_inc: f32,
@@ -230,8 +313,8 @@ impl Voice {
                     p = warp.evaluate(p, resolved, f, &mut osc.warp);
                 }
                 s = sin_turns(p);
-                if ctx.wave_dist.active() {
-                    s = ctx.wave_dist.apply(s, f);
+                if ctx.warps.active() {
+                    s = ctx.warps.apply(s, f);
                 }
                 s *= fade;
             }

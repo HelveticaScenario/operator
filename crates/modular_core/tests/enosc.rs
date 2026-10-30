@@ -138,7 +138,7 @@ fn spread_stacks_voices_up_the_scale() {
 fn split_outputs_sum_to_the_mix() {
     let patch = build_enosc(json!({
         "pitch": -1.0, "count": 5, "spread": 2.0, "detune": 2.0, "balance": 2.0,
-        "crossFm": 1.0, "waveDist": 1.0,
+        "crossFm": 1.0, "fold": 1.0,
     }));
     let [output, odd, even, low, high, root, other] = render_ports(
         &patch,
@@ -178,7 +178,7 @@ fn widest_input_sets_the_channel_count() {
 
 #[test]
 fn outputs_stay_bounded_across_options() {
-    for (mode, dist) in [("up", "fold"), ("chain", "cheby"), ("down", "segment")] {
+    for (mode, order) in [("up", "fcs"), ("chain", "csf"), ("down", "scf")] {
         for phase in [
             json!({ "type": "pulsar", "amount": 3.0 }),
             json!({ "type": "feedback", "amount": 5.0 }),
@@ -189,7 +189,8 @@ fn outputs_stay_bounded_across_options() {
             let patch = build_enosc(json!({
                 "pitch": poly_cable("src", CHANNELS), "count": 16, "spread": 5.0,
                 "detune": 5.0, "crossFm": 5.0, "crossFmMode": mode, "phase": phase,
-                "waveDist": 5.0, "waveDistMode": dist, "balance": -5.0,
+                "fold": 5.0, "cheby": 5.0, "segment": 5.0, "effectOrder": order,
+                "balance": -5.0,
             }));
             for sample in render_port(&patch, "output", 1) {
                 assert!(
@@ -202,10 +203,10 @@ fn outputs_stay_bounded_across_options() {
 }
 
 #[test]
-fn rejects_an_unknown_wave_dist_mode_or_scale() {
+fn rejects_an_unknown_effect_order_or_scale() {
     let deserializers = modular_core::dsp::get_params_deserializers();
     let parse = &deserializers["$enosc"];
-    assert!(parse(json!({ "pitch": 0.0, "waveDistMode": "crush" })).is_err());
+    assert!(parse(json!({ "pitch": 0.0, "effectOrder": "ffc" })).is_err());
     assert!(parse(json!({ "pitch": 0.0, "scale": { "type": "lydian" } })).is_err());
     assert!(parse(json!({ "pitch": 0.0, "scale": [0.0, 0.25] })).is_err());
 }
@@ -222,7 +223,7 @@ fn allocation_free() {
             "phase": { "type": "pipe",
                        "first": { "type": "feedback", "amount": cable("lfo", 2) },
                        "second": { "type": "pulsar", "amount": 2.0 } },
-            "waveDist": cable("lfo", 3), "waveDistMode": "segment",
+            "fold": 2.0, "cheby": 2.0, "segment": cable("lfo", 3), "effectOrder": "sfc",
         }),
         json!({ "pitch": cable("src", 0), "scale": { "type": "harm8to15" }, "crossFmMode": "down", "crossFm": 2.0 }),
     ] {
