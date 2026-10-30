@@ -892,7 +892,7 @@ export function executePatchScript(
 
     /**
      * $phase.* DSL helpers produce phase-warp descriptors for modules that
-     * accept a `PhaseWarp` (`$wavetable`).
+     * accept a `PhaseWarp` (`$wavetable`, `$pWarp`).
      *
      * Each helper returns a plain JSON object whose shape matches the Rust
      * `PhaseWarp` deserializer (`#[serde(tag = "type", rename_all = "camelCase")]`).
@@ -958,7 +958,7 @@ export function executePatchScript(
         // $p.s(source, scale) for scale-degree patterns (integer degrees
         // resolved through a scale string into voltage atoms for $cycle).
         $p,
-        // Phase-warp descriptors for $wavetable
+        // Phase-warp descriptors for $wavetable and $pWarp
         $phase,
         // Collection helpers
         $c: builder.$c.bind(builder),
