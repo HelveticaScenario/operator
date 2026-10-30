@@ -15,6 +15,7 @@ import {
     qualifiesForDollarChain,
 } from './paramsSchema';
 import type { WavsFolderNode } from './executor';
+import { enoscScalePresets } from '../../shared/dsl/enoscScales';
 import {
     generateVideoChainInterfaces,
     generateVideoChainMembers,
@@ -306,32 +307,42 @@ interface SignalGroup {
 type Mono<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | PatternSource;
 
 /**
- * A phase-warp table descriptor produced by the \`$table.*\` helpers.
+ * A phase warp produced by the \`$phase.*\` helpers.
  *
- * Passed to modules that accept a \`Table\`-typed param (e.g. the
- * \`phase\` config field on \`$wavetable\`) to reshape a raw phase signal
- * before it is used to read a wavetable.
+ * Passed to modules that read a phase through a \`PhaseWarp\`-typed param
+ * (the \`phase\` param of \`$wavetable\`, \`$enosc\` and \`$pWarp\`) to
+ * reshape the phase before it is used.
  *
- * Create one with \`$table.mirror\`, \`$table.bend\`, \`$table.sync\`,
- * \`$table.fold\`, or \`$table.pwm\` — do not construct directly.
+ * Create one with a \`$phase.*\` helper — do not construct directly.
  *
- * Tables are composable: \`table.pipe(next)\` feeds this table's output
- * phase into \`next\` as its input phase. Equivalent to passing \`next\`
- * as the optional second argument to any \`$table.*\` helper.
+ * Warps are composable: \`warp.pipe(fn)\` passes this warp to \`fn\` and
+ * returns the result, and the optional second argument to any \`$phase.*\`
+ * helper feeds this warp's output phase into that warp.
  */
-type TableDescriptor =
+type PhaseWarpDescriptor =
   | { readonly type: "mirror"; readonly amount: Signal }
   | { readonly type: "bend"; readonly amount: Signal }
   | { readonly type: "sync"; readonly ratio: Signal }
   | { readonly type: "fold"; readonly amount: Signal }
   | { readonly type: "pwm"; readonly width: Signal }
+  | { readonly type: "pulsar"; readonly amount: Signal }
+  | { readonly type: "crush"; readonly amount: Signal }
+  | { readonly type: "feedback"; readonly amount: Signal }
   | { readonly type: "identity" }
-  | { readonly type: "pipe"; readonly first: Table; readonly second: Table };
+  | { readonly type: "pipe"; readonly first: PhaseWarp; readonly second: PhaseWarp };
 
-type Table = TableDescriptor & {
-  /** Pass this table to \`pipeFn\` and return the result. Mirrors \`Collection.pipe\`. */
-  pipe<T>(pipeFn: (self: Table) => T): T;
+type PhaseWarp = PhaseWarpDescriptor & {
+  /** Pass this warp to \`pipeFn\` and return the result. Mirrors \`Collection.pipe\`. */
+  pipe<T>(pipeFn: (self: PhaseWarp) => T): T;
 };
+
+/**
+ * A scale for \`$enosc\`'s \`scale\` param. Create one with a
+ * \`$enosc.scale.*\` helper — do not construct directly.
+ */
+type EnoscScale =
+  | { readonly type: Exclude<keyof typeof $enosc.scale, "custom"> }
+  | { readonly type: "custom"; readonly notes: readonly number[]; readonly repeatsOctave: boolean };
 
 /**
  * A buffer output reference — returned by \`$buffer()\`, passed to readers
@@ -2076,37 +2087,53 @@ function $cross(
 ): Collection;
 
 /**
- * Phase-warp table descriptors for modules that accept a {@link Table}
- * (e.g. the \`phase\` config field on \`$wavetable\`).
+ * Phase warps for modules that accept a {@link PhaseWarp} (the \`phase\`
+ * param of \`$wavetable\`, \`$enosc\` and \`$pWarp\`).
  *
- * Each helper returns a {@link Table} whose inner signal-valued field
+ * Each helper returns a {@link PhaseWarp} whose inner signal-valued field
  * accepts a constant, a module output, or any other {@link Signal}.
  *
- * Tables compose via the optional second argument. \`.pipe(fn)\` passes
- * the table to \`fn\` and returns the result — same API as \`Collection.pipe\`.
+ * Warps compose via the optional second argument. \`.pipe(fn)\` passes
+ * the warp to \`fn\` and returns the result — same API as \`Collection.pipe\`.
+ *
+ * \`pulsar\`, \`crush\` and \`feedback\` are the 4ms Ensemble Oscillator's
+ * twist modes. Every amount is a 0–5 knob (bend: -5..5). A warp can hold at
+ * most 8 stages, 4 of them \`feedback\`.
  *
  * @example
- * // Compose two tables (mirror feeds into bend):
- * $table.mirror(0.5, $table.bend(0.3))
+ * // Compose two warps (mirror feeds into bend):
+ * $phase.mirror(2.5, $phase.bend(1.5))
  *
- * // Compose three tables left-to-right:
- * $table.mirror(0.5, $table.bend(0.3, $table.fold(0.2)))
+ * // Compose three warps left-to-right:
+ * $phase.mirror(2.5, $phase.bend(1.5, $phase.fold(1)))
  *
  * // Generic function application via .pipe:
- * const addBend = (t) => $table.bend(0.3, t)
- * $table.mirror(0.5).pipe(addBend)
+ * const addBend = (t) => $phase.bend(1.5, t)
+ * $phase.mirror(2.5).pipe(addBend)
  */
-declare const $table: {
-    /** Reflect the phase around its midpoint by \`amount\` (0..1). */
-    mirror(amount: Poly<Signal>, next?: Table): Table;
-    /** Bend the phase curve by \`amount\` (0..1 = linear..extreme). */
-    bend(amount: Poly<Signal>, next?: Table): Table;
-    /** Hard-sync: restart the phase every \`ratio\` of a cycle. */
-    sync(ratio: Poly<Signal>, next?: Table): Table;
-    /** Fold the phase back on itself by \`amount\`. */
-    fold(amount: Poly<Signal>, next?: Table): Table;
-    /** Pulse-width modulation warp with duty cycle \`width\` (0..1). */
-    pwm(width: Poly<Signal>, next?: Table): Table;
+declare const $phase: {
+    /** Reflect the phase around its midpoint by \`amount\` (0–5). */
+    mirror(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /** Bend the phase curve by \`amount\` (-5..5; 0 is linear, negative bends the other way). */
+    bend(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /** Hard-sync: run the phase 1× to 16× faster, restarting each cycle (0–5). */
+    sync(ratio: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /** Fold the phase back on itself by \`amount\` (0–5). */
+    fold(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /** Pulse-width modulation warp with duty cycle \`width\` (0–5; 2.5 is even). */
+    pwm(width: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /**
+     * Pulsar: play each cycle up to 64× faster, then rest (0–5). Antialiased
+     * when the reading module knows its pitch.
+     */
+    pulsar(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /** Crush: XOR the phase with scaled copies of itself (0–5). */
+    crush(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /**
+     * Feedback: offset the phase by a lowpassed sine of its own output (0–5).
+     * Each stage keeps its own state per channel or voice.
+     */
+    feedback(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
 };
 
 /**
@@ -2715,6 +2742,49 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
     return lines;
 }
 
+/**
+ * `$enosc.scale.*`, merged into the `$enosc` module function: one constant
+ * per preset in the engine's `EnoscScale` schema, plus `custom`. The executor
+ * builds the values.
+ */
+function renderEnoscNamespace(schemas: Schemas): string[] {
+    const presets = enoscScalePresets(schemas).flatMap(({ name, description }) => [
+        `    /** ${description} */`,
+        `    readonly ${name}: EnoscScale;`,
+    ]);
+    return [
+        'export namespace $enosc {',
+        '  /**',
+        "   * The 4ms Ensemble Oscillator's scales for `$enosc`'s `scale` param:",
+        '   * its 12-TET and Octave banks as constants, and `custom`. A scale repeats',
+        '   * at its last note, which is the octave unless noted.',
+        '   *',
+        '   * @example',
+        "   * $enosc('c3', $enosc.scale.harm4to7).out()",
+        '   */',
+        '  export const scale: {',
+        ...presets,
+        '    /**',
+        "     * Your own scale, like the hardware's learn mode.",
+        '     *',
+        '     * @param notes Space-separated notes in semitones, in any order and',
+        '     * fractional if you like (`"0 3 7 10"`); the lowest is the scale\'s first',
+        '     * note. Up to 32 notes (31 when `repeatsOctave` is true), spanning at',
+        '     * most 150 semitones.',
+        '     * @param repeatsOctave `true` repeats the notes every octave (every',
+        '     * two octaves if they span more than one, and so on). `false` makes the',
+        '     * highest note the period the scale repeats at, so `"0 3 7"` repeats',
+        '     * every fifth.',
+        '     *',
+        '     * @example',
+        "     * $enosc('c3', $enosc.scale.custom('0 2 3 7 9', true)).out()",
+        '     */',
+        '    custom(notes: string, repeatsOctave: boolean): EnoscScale;',
+        '  };',
+        '}',
+    ];
+}
+
 export function generateDSL(schemas: Schemas): string {
     // Modules named with a leading `_` are internal, and $buffer has a custom
     // declaration below.
@@ -2739,6 +2809,11 @@ export function generateDSL(schemas: Schemas): string {
         lines.push('/** Global clock module running at 120 BPM by default. */');
         const clockReturnType = getFactoryReturnType(clockSchema);
         lines.push(`export const $clock: ${clockReturnType};`);
+    }
+
+    if (schemas.some((s) => s.name === '$enosc')) {
+        lines.push('');
+        lines.push(...renderEnoscNamespace(schemas));
     }
 
     const signalSchema = schemas.find((s) => s.name === '$signal');

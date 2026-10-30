@@ -15,10 +15,10 @@ describe('migrateWavetableArgs', () => {
 
     test('keeps position and config in place while swapping the first two', () => {
         const result = migrateWavetableArgs(
-            `$wavetable($wavs().wt, 0, 0, { phase: $table.mirror(0.5) }).out()`,
+            `$wavetable($wavs().wt, 0, 0, { phase: $phase.mirror(0.5) }).out()`,
         );
         expect(result.migrated).toBe(
-            `$wavetable(0, $wavs().wt, 0, { phase: $table.mirror(0.5) }).out()`,
+            `$wavetable(0, $wavs().wt, 0, { phase: $phase.mirror(0.5) }).out()`,
         );
         expect(result.callsChanged).toBe(1);
     });
