@@ -25172,6 +25172,414 @@
     "positionalArgs": []
   },
   {
+    "name": "$mi.formant",
+    "documentation": "Granular formant oscillator, from Mutable Instruments Plaits.\n\nEvery cycle of **freq** starts a short grain: a sine at the **formant**\nfrequency inside a window. Two of these grains sound together, the second\nat a **ratio** of the first's formant, giving vowel-like and resonant\ntimbres whose formants stay put as the pitch moves.\n\n- **formant** — V/Oct, the first formant's frequency.\n- **ratio** — 0–5, the second formant from two octaves below (0) to two\n  above (5). Below 2.5 the window itself bleeds in, adding the fundamental.\n- **width** — 0–5, the window's shape, from a narrow pulse to a broad,\n  flat-topped one. It narrows by itself as the pitch rises past ≈2 kHz.\n\nThrough-zero FM plays each grain's window backward.\n\n```js\n$mi.formant('c2', { formant: $sine('0.1hz').range(0, 2) }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "FormantParams",
+      "type": "object",
+      "properties": {
+        "fm": {
+          "description": "FM input signal (pre-scaled by user)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fmMode": {
+          "description": "FM mode: throughZero (default), lin, or exp",
+          "$ref": "#/$defs/FmMode",
+          "default": "throughZero"
+        },
+        "formant": {
+          "description": "formant frequency in V/Oct, independent of `freq` (default 0.5, ≈370 Hz)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch in V/Oct (0V = C4): how often the grains repeat",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "ratio": {
+          "description": "second formant, 0–5: two octaves below the first (0) to two octaves\nabove (5); below 2.5 the bare window bleeds in (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "description": "window shape, 0–5: narrow pulse (0) to broad and flat-topped (5);\nnarrows on its own at high pitches (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "freq"
+      ],
+      "$defs": {
+        "FmMode": {
+          "description": "FM synthesis mode for oscillators.",
+          "oneOf": [
+            {
+              "description": "Through-zero FM: frequency can go negative (phase runs backward)",
+              "type": "string",
+              "const": "throughZero"
+            },
+            {
+              "description": "Linear FM: like through-zero but frequency clamped to >= 0",
+              "type": "string",
+              "const": "lin"
+            },
+            {
+              "description": "Exponential FM: modulator added to pitch in V/Oct space",
+              "type": "string",
+              "const": "exp"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct (0V = C4): how often the grains repeat",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "formant",
+        "description": "formant frequency in V/Oct, independent of `freq` (default 0.5, ≈370 Hz)",
+        "signalType": "frequency",
+        "defaultValue": 0.5,
+        "minValue": -3.0,
+        "maxValue": 4.0
+      },
+      {
+        "name": "ratio",
+        "description": "second formant, 0–5: two octaves below the first (0) to two octaves\nabove (5); below 2.5 the bare window bleeds in (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "width",
+        "description": "window shape, 0–5: narrow pulse (0) to broad and flat-topped (5);\nnarrows on its own at high pitches (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "fm",
+        "description": "FM input signal (pre-scaled by user)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "freq"
+      }
+    ]
+  },
+  {
+    "name": "$mi.zOsc",
+    "documentation": "Z oscillator, the filtered-waveform half of Mutable Instruments Plaits'\ngranular formant engine.\n\nA sine at the **cutoff** frequency restarts every half cycle of **freq** and\nis shaped by a decaying ramp, so it sounds like a waveform through a\nresonant filter without any filter, and the resonance follows the pitch.\n\n- **cutoff** — 0–5, the resonance from the pitch itself up to eight octaves\n  above it.\n- **shape** — 0–5, the carrier's contour.\n- **mode** — 0–5, the response, through low-pass, peaking, band-pass and\n  high-pass characters.\n\nThrough-zero FM runs the waveform backward.\n\n```js\n$mi.zOsc('c2', { cutoff: $sine('0.2hz').range(1, 4), mode: 1 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ZOscParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "resonance frequency, 0–5: at the pitch (0) up to eight octaves above\n(5) (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fm": {
+          "description": "FM input signal (pre-scaled by user)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fmMode": {
+          "description": "FM mode: throughZero (default), lin, or exp",
+          "$ref": "#/$defs/FmMode",
+          "default": "throughZero"
+        },
+        "freq": {
+          "description": "pitch in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "filter response, 0–5: low-pass, peaking, band-pass and high-pass\ncharacters in turn (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shape": {
+          "description": "carrier contour, 0–5: from an unshaped pulse train (0) through a\nsmooth window (2.5) to phase-shifted sines (default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "freq"
+      ],
+      "$defs": {
+        "FmMode": {
+          "description": "FM synthesis mode for oscillators.",
+          "oneOf": [
+            {
+              "description": "Through-zero FM: frequency can go negative (phase runs backward)",
+              "type": "string",
+              "const": "throughZero"
+            },
+            {
+              "description": "Linear FM: like through-zero but frequency clamped to >= 0",
+              "type": "string",
+              "const": "lin"
+            },
+            {
+              "description": "Exponential FM: modulator added to pitch in V/Oct space",
+              "type": "string",
+              "const": "exp"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "freq",
+        "description": "pitch in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "resonance frequency, 0–5: at the pitch (0) up to eight octaves above\n(5) (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "shape",
+        "description": "carrier contour, 0–5: from an unshaped pulse train (0) through a\nsmooth window (2.5) to phase-shifted sines (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "mode",
+        "description": "filter response, 0–5: low-pass, peaking, band-pass and high-pass\ncharacters in turn (default 2.5)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "fm",
+        "description": "FM input signal (pre-scaled by user)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "freq"
+      }
+    ]
+  },
+  {
     "name": "$grains",
     "documentation": "Granular sampler. Continuously spawns short, windowed grains from a WAV\nfile, enabling time-stretching, pitch-shifting independent of time, and\ncloud textures.\n\nEach polyphonic channel maintains up to 64 concurrent grains. Spawned grains\ncapture their pitch, start position, and length at spawn time, so live\nparameter changes only affect new grains.\n\nAmplitude is normalised using the Mutable Instruments Clouds formula:\n`gain = 1/√(max(1, smoothed_active_grains − 1))`.\n\n```js\n$grains('c4', $wavs().pad, $pulse('2hz'))\nconst seq = $cycle($p('c3 e3'))\n$grains(seq, $wavs().strings, seq.gate, { density: 3, shape: 'bell', length: 2 })\n```",
     "paramsSchema": {

@@ -1,9 +1,11 @@
 use deserr::Deserr;
-use mi_plaits_dsp::utils::filter::{FilterMode, FrequencyApproximation, Svf};
 use schemars::JsonSchema;
 
 use crate::{
-    dsp::utils::{SchmittTrigger, changed},
+    dsp::{
+        mi::core::filter::{Svf, tan_dirty},
+        utils::{SchmittTrigger, changed},
+    },
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
 
@@ -181,7 +183,7 @@ impl Lpg {
             if changed(decay, cs.last_decay) || changed(hf, cs.last_color) {
                 cs.last_decay = decay;
                 cs.last_color = hf;
-                cs.short_decay = 200.0 * inv_sr * (-8.0 * decay.max(0.1)).exp2();
+                cs.short_decay = 200.0 * inv_sr * (-8.0 * decay).exp2();
                 cs.decay_tail = 20.0 * inv_sr * (hf - 6.0 * decay).exp2() - cs.short_decay;
             }
 
@@ -216,12 +218,11 @@ impl Lpg {
             let hf_bleed = (tail_2 + (1.0 - tail_2) * hf) * hf * hf;
             let cutoff_hz = PLAITS_SAMPLE_RATE * (0.003 + 0.3 * v4 + 0.04 * hf);
             let cutoff = (cutoff_hz * inv_sr).min(MAX_NORMALIZED_CUTOFF);
-            cs.filter
-                .set_f_q(cutoff, SVF_Q, FrequencyApproximation::Dirty);
+            cs.filter.set_g_q(tan_dirty(cutoff), SVF_Q);
 
             let input = self.params.input.get_value(ch);
             let s = input * cs.vactrol;
-            let lp = cs.filter.process(s, FilterMode::LowPass);
+            let lp = cs.filter.process(s).lp;
             let gated = lp + (s - lp) * hf_bleed;
             self.outputs
                 .sample
