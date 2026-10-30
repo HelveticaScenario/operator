@@ -15,6 +15,7 @@ import {
     qualifiesForDollarChain,
 } from './paramsSchema';
 import type { WavsFolderNode } from './executor';
+import { enoscScalePresets } from '../../shared/dsl/enoscScales';
 import {
     generateVideoChainInterfaces,
     generateVideoChainMembers,
@@ -2718,76 +2719,47 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
 }
 
 /**
- * `$enosc.scale.*`, merged into the `$enosc` module function. Each preset is
- * an {@link EnoscScale}, and `custom` returns one; the executor builds them.
+ * `$enosc.scale.*`, merged into the `$enosc` module function: one constant
+ * per preset in the engine's `EnoscScale` schema, plus `custom`. The executor
+ * builds the values.
  */
-const ENOSC_NAMESPACE = `export namespace $enosc {
-  /**
-   * The 4ms Ensemble Oscillator's scales for \`$enosc\`'s \`scale\` param:
-   * its 12-TET and Octave banks as constants, and \`custom\`. A scale repeats at its last
-   * note, which is the octave unless noted.
-   *
-   * @example
-   * $enosc('c3', $enosc.scale.harm4to7).out()
-   */
-  export const scale: {
-    /** 12-TET: octaves only. */
-    readonly octave: EnoscScale;
-    /** 12-TET: octave and fifth. */
-    readonly octaveFifth: EnoscScale;
-    /** 12-TET: major triad. */
-    readonly major: EnoscScale;
-    /** 12-TET: minor triad. */
-    readonly minor: EnoscScale;
-    /** 12-TET: minor triad with a fourth (0 3 5 7). */
-    readonly minorAdd4: EnoscScale;
-    /** 12-TET: stacked fourths (0 3 5 10). */
-    readonly quartal: EnoscScale;
-    /** 12-TET: 0 1 5 8, from the miyako-bushi scale. */
-    readonly miyako: EnoscScale;
-    /** 12-TET: a spiral of fifths, repeating every fifth. */
-    readonly fifths: EnoscScale;
-    /** 12-TET: 0 3 5, repeating every fifth. */
-    readonly fifthsMinor: EnoscScale;
-    /** 12-TET: every semitone. The default. */
-    readonly chromatic: EnoscScale;
-    /** Octave: harmonics 2–3 (just fifth). */
-    readonly harm2to3: EnoscScale;
-    /** Octave: harmonics 4–7. */
-    readonly harm4to7: EnoscScale;
-    /** Octave: harmonics 8–15. */
-    readonly harm8to15: EnoscScale;
-    /** Octave: the odd harmonics up to 15, repeating every three octaves. */
-    readonly harmOdd: EnoscScale;
-    /** Octave: Pythagorean do, fa, so. */
-    readonly pythag3: EnoscScale;
-    /** Octave: Pythagorean do, re, fa, so, la. */
-    readonly pythag5: EnoscScale;
-    /** Octave: just 1, 4/3, 3/2, 5/3. */
-    readonly just4: EnoscScale;
-    /** Octave: just 1, 5/4, 4/3, 3/2, 5/3, 7/4. */
-    readonly just6: EnoscScale;
-    /** Octave: 5 equal steps per octave. */
-    readonly tet5: EnoscScale;
-    /** Octave: 7 equal steps per octave. */
-    readonly tet7: EnoscScale;
-    /**
-     * Your own scale, like the hardware's learn mode.
-     *
-     * @param notes Space-separated notes in semitones, in any order and
-     * fractional if you like (\`"0 3 7 10"\`); the lowest is the scale's first
-     * note. Up to 32 notes, spanning at most 150 semitones.
-     * @param repeatsOctave \`true\` repeats the notes every octave (every
-     * two octaves if they span more than one, and so on). \`false\` makes the
-     * highest note the period the scale repeats at, so \`"0 3 7"\` repeats
-     * every fifth.
-     *
-     * @example
-     * $enosc('c3', $enosc.scale.custom('0 2 3 7 9', true)).out()
-     */
-    custom(notes: string, repeatsOctave: boolean): EnoscScale;
-  };
-}`;
+function renderEnoscNamespace(schemas: Schemas): string[] {
+    const presets = enoscScalePresets(schemas).flatMap(({ name, description }) => [
+        `    /** ${description} */`,
+        `    readonly ${name}: EnoscScale;`,
+    ]);
+    return [
+        'export namespace $enosc {',
+        '  /**',
+        "   * The 4ms Ensemble Oscillator's scales for `$enosc`'s `scale` param:",
+        '   * its 12-TET and Octave banks as constants, and `custom`. A scale repeats',
+        '   * at its last note, which is the octave unless noted.',
+        '   *',
+        '   * @example',
+        "   * $enosc('c3', $enosc.scale.harm4to7).out()",
+        '   */',
+        '  export const scale: {',
+        ...presets,
+        '    /**',
+        "     * Your own scale, like the hardware's learn mode.",
+        '     *',
+        '     * @param notes Space-separated notes in semitones, in any order and',
+        '     * fractional if you like (`"0 3 7 10"`); the lowest is the scale\'s first',
+        '     * note. Up to 32 notes (31 when `repeatsOctave` is true), spanning at',
+        '     * most 150 semitones.',
+        '     * @param repeatsOctave `true` repeats the notes every octave (every',
+        '     * two octaves if they span more than one, and so on). `false` makes the',
+        '     * highest note the period the scale repeats at, so `"0 3 7"` repeats',
+        '     * every fifth.',
+        '     *',
+        '     * @example',
+        "     * $enosc('c3', $enosc.scale.custom('0 2 3 7 9', true)).out()",
+        '     */',
+        '    custom(notes: string, repeatsOctave: boolean): EnoscScale;',
+        '  };',
+        '}',
+    ];
+}
 
 export function generateDSL(schemas: Schemas): string {
     // Modules named with a leading `_` are internal, and $buffer has a custom
@@ -2817,7 +2789,7 @@ export function generateDSL(schemas: Schemas): string {
 
     if (schemas.some((s) => s.name === '$enosc')) {
         lines.push('');
-        lines.push(...ENOSC_NAMESPACE.split('\n'));
+        lines.push(...renderEnoscNamespace(schemas));
     }
 
     const signalSchema = schemas.find((s) => s.name === '$signal');

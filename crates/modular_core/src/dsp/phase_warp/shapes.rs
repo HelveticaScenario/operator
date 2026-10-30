@@ -69,18 +69,18 @@ pub fn pwm(x: f32, param: f32) -> f32 {
     }
 }
 
-/// Normalize a 0–5 knob value to `[0, 1]`.
+/// Normalize a 0–5 knob value to `[0, 1]`; a non-finite value reads as 0.
 #[inline]
 pub fn knob(amount: f32) -> f32 {
-    (amount / 5.0).clamp(0.0, 1.0)
+    (sanitize(amount) / 5.0).clamp(0.0, 1.0)
 }
 
-/// Shared rolloff of the feedback and pulsar antialiasing: `max(1 − 2f, 0)²`,
-/// with `freq_norm` the oscillator frequency over the sample rate. `freq_norm = 0`
-/// (unknown pitch) applies no rolloff.
+/// Shared rolloff of the feedback and pulsar antialiasing: `max(1 − 2|f|, 0)²`,
+/// with `freq_norm` the oscillator frequency over the sample rate, negative
+/// under through-zero FM. `freq_norm = 0` (unknown pitch) applies no rolloff.
 #[inline]
 fn twist_rolloff(freq_norm: f32) -> f32 {
-    let base = (1.0 - 2.0 * freq_norm).max(0.0);
+    let base = (1.0 - 2.0 * freq_norm.abs()).max(0.0);
     base * base
 }
 
@@ -290,6 +290,30 @@ mod tests {
     fn fold_output_in_range() {
         for p in [0.0, 0.25, 0.5, 0.75, 1.0] {
             assert_in_range(fold, p);
+        }
+    }
+
+    // ---------- twists ----------
+
+    #[test]
+    fn knob_reads_non_finite_as_zero() {
+        assert_eq!(knob(f32::NAN), 0.0);
+        assert_eq!(knob(f32::INFINITY), 0.0);
+        assert_eq!(knob(2.5), 0.5);
+    }
+
+    #[test]
+    fn twist_antialiasing_ignores_the_frequency_sign() {
+        // Through-zero FM gives negative frequencies; they roll off as much as
+        // positive ones and never boost the twist.
+        let multiplier = pulsar_amount(5.0);
+        for f in [0.05, 0.2, 0.45] {
+            assert_eq!(pulsar(0.01, multiplier, -f), pulsar(0.01, multiplier, f));
+            let (mut up, mut down) = (0.3, 0.3);
+            assert_eq!(
+                feedback(0.4, 0.7, -f, &mut down),
+                feedback(0.4, 0.7, f, &mut up)
+            );
         }
     }
 

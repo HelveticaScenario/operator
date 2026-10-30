@@ -10341,6 +10341,7 @@
         "EnoscScale": {
           "oneOf": [
             {
+              "description": "12-TET: octaves only.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10353,6 +10354,7 @@
               ]
             },
             {
+              "description": "12-TET: octave and fifth.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10365,6 +10367,7 @@
               ]
             },
             {
+              "description": "12-TET: major triad.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10377,6 +10380,7 @@
               ]
             },
             {
+              "description": "12-TET: minor triad.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10389,6 +10393,7 @@
               ]
             },
             {
+              "description": "12-TET: minor triad with a fourth (0 3 5 7).",
               "type": "object",
               "properties": {
                 "type": {
@@ -10401,6 +10406,7 @@
               ]
             },
             {
+              "description": "12-TET: stacked fourths (0 3 5 10).",
               "type": "object",
               "properties": {
                 "type": {
@@ -10413,6 +10419,7 @@
               ]
             },
             {
+              "description": "12-TET: 0 1 5 8, from the miyako-bushi scale.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10425,6 +10432,7 @@
               ]
             },
             {
+              "description": "12-TET: a spiral of fifths, repeating every fifth.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10437,6 +10445,7 @@
               ]
             },
             {
+              "description": "12-TET: 0 3 5, repeating every fifth.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10449,6 +10458,7 @@
               ]
             },
             {
+              "description": "12-TET: every semitone. The default.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10461,6 +10471,7 @@
               ]
             },
             {
+              "description": "Octave: harmonics 2–3 (just fifth).",
               "type": "object",
               "properties": {
                 "type": {
@@ -10473,6 +10484,7 @@
               ]
             },
             {
+              "description": "Octave: harmonics 4–7.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10485,6 +10497,7 @@
               ]
             },
             {
+              "description": "Octave: harmonics 8–15.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10497,6 +10510,7 @@
               ]
             },
             {
+              "description": "Octave: the odd harmonics up to 15, repeating every three octaves.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10509,6 +10523,7 @@
               ]
             },
             {
+              "description": "Octave: Pythagorean do, fa, so.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10521,6 +10536,7 @@
               ]
             },
             {
+              "description": "Octave: Pythagorean do, re, fa, so, la.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10533,6 +10549,7 @@
               ]
             },
             {
+              "description": "Octave: just 1, 4/3, 3/2, 5/3.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10545,6 +10562,7 @@
               ]
             },
             {
+              "description": "Octave: just 1, 5/4, 4/3, 3/2, 5/3, 7/4.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10557,6 +10575,7 @@
               ]
             },
             {
+              "description": "Octave: 5 equal steps per octave.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10569,6 +10588,7 @@
               ]
             },
             {
+              "description": "Octave: 7 equal steps per octave.",
               "type": "object",
               "properties": {
                 "type": {
@@ -10581,6 +10601,7 @@
               ]
             },
             {
+              "description": "Your own notes, like the hardware's learn mode.",
               "type": "object",
               "properties": {
                 "notes": {

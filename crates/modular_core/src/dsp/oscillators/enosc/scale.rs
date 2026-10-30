@@ -107,26 +107,47 @@ impl JsonSchema for EnoscScale {
         #[serde(tag = "type", rename_all = "camelCase")]
         #[allow(dead_code)]
         enum EnoscScaleSchema {
+            /// 12-TET: octaves only.
             Octave,
+            /// 12-TET: octave and fifth.
             OctaveFifth,
+            /// 12-TET: major triad.
             Major,
+            /// 12-TET: minor triad.
             Minor,
+            /// 12-TET: minor triad with a fourth (0 3 5 7).
             MinorAdd4,
+            /// 12-TET: stacked fourths (0 3 5 10).
             Quartal,
+            /// 12-TET: 0 1 5 8, from the miyako-bushi scale.
             Miyako,
+            /// 12-TET: a spiral of fifths, repeating every fifth.
             Fifths,
+            /// 12-TET: 0 3 5, repeating every fifth.
             FifthsMinor,
+            /// 12-TET: every semitone. The default.
             Chromatic,
+            /// Octave: harmonics 2–3 (just fifth).
             Harm2to3,
+            /// Octave: harmonics 4–7.
             Harm4to7,
+            /// Octave: harmonics 8–15.
             Harm8to15,
+            /// Octave: the odd harmonics up to 15, repeating every three octaves.
             HarmOdd,
+            /// Octave: Pythagorean do, fa, so.
             Pythag3,
+            /// Octave: Pythagorean do, re, fa, so, la.
             Pythag5,
+            /// Octave: just 1, 4/3, 3/2, 5/3.
             Just4,
+            /// Octave: just 1, 5/4, 4/3, 3/2, 5/3, 7/4.
             Just6,
+            /// Octave: 5 equal steps per octave.
             Tet5,
+            /// Octave: 7 equal steps per octave.
             Tet7,
+            /// Your own notes, like the hardware's learn mode.
             #[serde(rename_all = "camelCase")]
             Custom {
                 notes: Vec<f32>,
@@ -453,6 +474,8 @@ mod tests {
         let schema = serde_json::to_value(schemars::schema_for!(EnoscScale))
             .unwrap()
             .to_string();
+        // Every preset plus `custom`, and nothing else.
+        assert_eq!(schema.matches("\"const\"").count(), PRESETS.len() + 1);
         for &(name, notes) in PRESETS {
             assert!(
                 schema.contains(&format!("\"{name}\"")),

@@ -54,6 +54,7 @@ import type {
 } from '../../shared/video/videoGraph';
 import { compileVideoGraph } from './video/wgslCompiler';
 import { VIDEO_DOCS } from '../../shared/dsl/videoDocs';
+import { enoscScalePresets } from '../../shared/dsl/enoscScales';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {
@@ -930,31 +931,9 @@ export function executePatchScript(
      * param takes: each preset is `{ type: <preset> }`, and `custom` returns
      * `{ type: 'custom', notes, repeatsOctave }`. The engine validates them.
      */
-    const enoscScalePresets = [
-        'octave',
-        'octaveFifth',
-        'major',
-        'minor',
-        'minorAdd4',
-        'quartal',
-        'miyako',
-        'fifths',
-        'fifthsMinor',
-        'chromatic',
-        'harm2to3',
-        'harm4to7',
-        'harm8to15',
-        'harmOdd',
-        'pythag3',
-        'pythag5',
-        'just4',
-        'just6',
-        'tet5',
-        'tet7',
-    ];
     // Each preset is a getter, so every use gets its own descriptor object.
     const enoscScale: Record<string, unknown> = {};
-    for (const type of enoscScalePresets) {
+    for (const { name: type } of enoscScalePresets(schemas)) {
         Object.defineProperty(enoscScale, type, {
             get: () => ({ type }),
             enumerable: true,

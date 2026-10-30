@@ -8,11 +8,12 @@
  */
 
 import { describe, expect, test } from 'vitest';
-import type { PatchGraph } from '@modular/core';
+import type { ModuleSchema, PatchGraph } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { assertControlsPlaced } from '../controls';
 import { type DSLExecutionResult, executePatchScript } from '../executor';
 import { FIRST_LINE_COLUMN_OFFSET } from '../../../shared/dsl/spanTypes';
+import { enoscScalePresets } from '../../../shared/dsl/enoscScales';
 import {
     isBeatPattern,
     isFastPattern,
@@ -1817,6 +1818,18 @@ describe('fx modules', () => {
             notes: [0, 3.5, 7],
             repeatsOctave: false,
         });
+    });
+
+    test('$enosc.scale offers every preset the engine accepts', () => {
+        const presets = enoscScalePresets(schemas as ModuleSchema[]);
+        expect(presets.length).toBe(20);
+        const source = presets
+            .map(({ name }) => `$enosc("c2", $enosc.scale.${name}).out()`)
+            .join('\n');
+        const scales = findModules(execPatch(source), '$enosc').map(
+            (m) => m.params.scale,
+        );
+        expect(scales).toEqual(presets.map(({ name }) => ({ type: name })));
     });
 
     test('$enosc.scale.custom rejects non-numeric notes', () => {

@@ -12,6 +12,7 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::dsp::phase_warp::shapes::knob;
 use crate::dsp::phase_warp::{PhaseWarp, PhaseWarpGlides};
 use crate::dsp::utils::dc_blocker::DcBlocker;
 use crate::dsp::utils::fade::{DEFAULT_FADE_IN_SECS, FadeIn};
@@ -210,6 +211,11 @@ struct ChannelState {
 
 #[derive(Default)]
 struct EnoscState {
+    /// Voices per channel, the cross-FM depth scale for that many, and the mix
+    /// normalization for that many; set from the params in `on_patch_update`.
+    count: usize,
+    depth_scale: f32,
+    normalization: f32,
     inv_sample_rate: f32,
     dc_coeff: f32,
     crossfade_coef: f32,
@@ -263,6 +269,7 @@ struct EnoscState {
     name = "$enosc",
     channels_derive = enosc_derive_channel_count,
     has_init,
+    patch_update,
     args(pitch, scale)
 )]
 pub struct Enosc {
@@ -307,9 +314,7 @@ impl Enosc {
             .as_ref()
             .map_or(&ScaleNotes::CHROMATIC, |s| &s.0);
 
-        let count = params.count.clamp(1, MAX_VOICES);
-        let depth_scale = 6.0 / count as f32 * params.cross_fm_mode.depth_scale();
-        let normalization = NORMALIZATION[count];
+        let count = state.count;
 
         for ch in 0..channels {
             let cs = &mut self.channel_state[ch];
@@ -321,7 +326,6 @@ impl Enosc {
             }
             cs.active_voices = count;
 
-            let knob = |v: f32| (v / 5.0).clamp(0.0, 1.0);
             if cs.control_left == 0 {
                 cs.control_left = CONTROL_BLOCK;
                 let pitch = sanitize(params.pitch.get_value(ch));
@@ -354,7 +358,7 @@ impl Enosc {
                 sample_rate,
             );
             // Ignore the bottom 1% so CV noise cannot add harmonics.
-            let cross_fm = ((knob(cross_fm) - 0.01) / 0.99).max(0.0) * depth_scale;
+            let cross_fm = ((knob(cross_fm) - 0.01) / 0.99).max(0.0) * state.depth_scale;
 
             let balance = cs.balance.follow(
                 params.balance.value_or_zero(ch),
@@ -438,7 +442,7 @@ impl Enosc {
             } else {
                 1.0 / balance
             };
-            let atten = (0.5 + (0.5 + normalization) * evenness) / amplitude_sum;
+            let atten = (0.5 + (0.5 + state.normalization) * evenness) / amplitude_sum;
             let gains = [atten, atten, atten, atten, atten, 0.7, 0.6 * atten];
             let outputs = [
                 &mut self.outputs.output,
@@ -454,6 +458,15 @@ impl Enosc {
                 out.set(ch, dc.process(sum * gain * 5.0, state.dc_coeff));
             }
         }
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Enosc {
+    fn on_patch_update(&mut self) {
+        let count = self.params.count.clamp(1, MAX_VOICES);
+        self.state.count = count;
+        self.state.depth_scale = 6.0 / count as f32 * self.params.cross_fm_mode.depth_scale();
+        self.state.normalization = NORMALIZATION[count];
     }
 }
 

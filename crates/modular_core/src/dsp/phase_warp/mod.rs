@@ -12,7 +12,7 @@ use std::result::Result as StdResult;
 
 use deserr::{DeserializeError, ErrorKind, IntoValue, Map as DeserrMap, ValuePointerRef};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::poly::PolySignal;
 use crate::types::SwapGlide;
@@ -282,61 +282,7 @@ impl PhaseWarp {
     }
 }
 
-// --- Serde Serialize / Deserialize (internally-tagged on "type") ---
-
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-enum PhaseWarpSerde {
-    Identity,
-    Mirror {
-        amount: PolySignal,
-    },
-    Bend {
-        amount: PolySignal,
-    },
-    Sync {
-        ratio: PolySignal,
-    },
-    Fold {
-        amount: PolySignal,
-    },
-    Pwm {
-        width: PolySignal,
-    },
-    Pulsar {
-        amount: PolySignal,
-    },
-    Crush {
-        amount: PolySignal,
-    },
-    Feedback {
-        amount: PolySignal,
-    },
-    Pipe {
-        first: Box<PhaseWarpSerde>,
-        second: Box<PhaseWarpSerde>,
-    },
-}
-
-impl From<PhaseWarpSerde> for PhaseWarp {
-    fn from(s: PhaseWarpSerde) -> Self {
-        match s {
-            PhaseWarpSerde::Identity => PhaseWarp::Identity,
-            PhaseWarpSerde::Mirror { amount } => PhaseWarp::Mirror { amount },
-            PhaseWarpSerde::Bend { amount } => PhaseWarp::Bend { amount },
-            PhaseWarpSerde::Sync { ratio } => PhaseWarp::Sync { ratio },
-            PhaseWarpSerde::Fold { amount } => PhaseWarp::Fold { amount },
-            PhaseWarpSerde::Pwm { width } => PhaseWarp::Pwm { width },
-            PhaseWarpSerde::Pulsar { amount } => PhaseWarp::Pulsar { amount },
-            PhaseWarpSerde::Crush { amount } => PhaseWarp::Crush { amount },
-            PhaseWarpSerde::Feedback { amount } => PhaseWarp::Feedback { amount },
-            PhaseWarpSerde::Pipe { first, second } => PhaseWarp::Pipe {
-                first: Box::new(PhaseWarp::from(*first)),
-                second: Box::new(PhaseWarp::from(*second)),
-            },
-        }
-    }
-}
+// --- Serde Serialize (internally-tagged on "type") ---
 
 impl<'a> From<&'a PhaseWarp> for PhaseWarpSerdeRef<'a> {
     fn from(t: &'a PhaseWarp) -> Self {
@@ -390,15 +336,6 @@ enum PhaseWarpSerdeRef<'a> {
         first: Box<PhaseWarpSerdeRef<'a>>,
         second: Box<PhaseWarpSerdeRef<'a>>,
     },
-}
-
-impl<'de> Deserialize<'de> for PhaseWarp {
-    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        PhaseWarpSerde::deserialize(deserializer).map(PhaseWarp::from)
-    }
 }
 
 impl Serialize for PhaseWarp {

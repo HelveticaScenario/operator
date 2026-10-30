@@ -16,6 +16,12 @@ fn warp_with(
     t.evaluate(x, &resolved, freq_norm, state)
 }
 
+/// Parse `json` the way the engine reads params.
+fn parse(json: &str) -> PhaseWarp {
+    let value: serde_json::Value = serde_json::from_str(json).unwrap();
+    deserr::deserialize::<PhaseWarp, _, deserr::errors::JsonError>(value).unwrap()
+}
+
 fn ev(t: &PhaseWarp, x: f32) -> f32 {
     warp_with(
         t,
@@ -194,13 +200,13 @@ fn connect_resolves_polysignal_for_every_variant() {
 
 #[test]
 fn warp_deserializes_identity() {
-    let t: PhaseWarp = serde_json::from_str(r#"{"type":"identity"}"#).unwrap();
+    let t: PhaseWarp = parse(r#"{"type":"identity"}"#);
     assert!(matches!(t, PhaseWarp::Identity));
 }
 
 #[test]
 fn warp_deserializes_mirror_with_scalar_signal() {
-    let t: PhaseWarp = serde_json::from_str(r#"{"type":"mirror","amount":0.5}"#).unwrap();
+    let t: PhaseWarp = parse(r#"{"type":"mirror","amount":0.5}"#);
     match t {
         PhaseWarp::Mirror { amount } => {
             assert!((amount.get_value(0) - 0.5).abs() < 1e-6);
@@ -211,7 +217,7 @@ fn warp_deserializes_mirror_with_scalar_signal() {
 
 #[test]
 fn warp_deserializes_pwm_with_scalar_signal() {
-    let t: PhaseWarp = serde_json::from_str(r#"{"type":"pwm","width":0.25}"#).unwrap();
+    let t: PhaseWarp = parse(r#"{"type":"pwm","width":0.25}"#);
     match t {
         PhaseWarp::Pwm { width } => {
             assert!((width.get_value(0) - 0.25).abs() < 1e-6);
@@ -233,7 +239,7 @@ fn warp_roundtrips_sync() {
         ratio: constant(0.75),
     };
     let json = serde_json::to_string(&t).unwrap();
-    let back: PhaseWarp = serde_json::from_str(&json).unwrap();
+    let back: PhaseWarp = parse(&json);
     match back {
         PhaseWarp::Sync { ratio } => {
             assert!((ratio.get_value(0) - 0.75).abs() < 1e-6);
@@ -323,7 +329,7 @@ fn pipe_serializes_and_deserializes_via_serde() {
         "missing first: {json}"
     );
     assert!(json.contains("\"type\":\"bend\""), "missing second: {json}");
-    let back: PhaseWarp = serde_json::from_str(&json).unwrap();
+    let back: PhaseWarp = parse(&json);
     match back {
         PhaseWarp::Pipe { first, second } => {
             assert!(matches!(*first, PhaseWarp::Mirror { .. }));

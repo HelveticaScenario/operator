@@ -1,4 +1,4 @@
-//! One `$ensemble` voice: a pair of sine oscillators on adjacent scale notes,
+//! One `$enosc` voice: a pair of sine oscillators on adjacent scale notes,
 //! crossfaded by where the voice's root sits between them.
 //!
 //! Adapted from the 4ms Ensemble Oscillator. Copyright 4ms Company. Used under
