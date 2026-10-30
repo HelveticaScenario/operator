@@ -91,6 +91,11 @@ export interface ParamDescriptor {
      * and takes no part in `$g` signal-group expansion.
      */
     isScaleSignalInput?: boolean;
+    /**
+     * Preset names a scale input also accepts. These strings reach the module
+     * as they are instead of being rewritten into a `$chord`.
+     */
+    scalePresets?: string[];
 }
 
 export type ProcessedModuleSchema = ModuleSchema & {
@@ -359,6 +364,32 @@ function referencesDef(schema: JsonSchema, defName: string): boolean {
     return false;
 }
 
+/**
+ * Whether `schema` is a scale input: a `ScaleSignal`, or a def whose union
+ * pairs a `ScaleSignal` with a string enum of preset names. Returns the preset
+ * names (empty for a plain `ScaleSignal`), or null for any other param.
+ */
+function scaleInputPresets(root: JsonSchema, schema: JsonSchema): string[] | null {
+    if (referencesDef(schema, 'ScaleSignal')) {
+        return [];
+    }
+    const candidates = [schema, ...(schema.anyOf ?? []), ...(schema.oneOf ?? [])];
+    for (const candidate of candidates) {
+        if (typeof candidate.$ref !== 'string') {
+            continue;
+        }
+        const def = deref(root, candidate);
+        if (!referencesDef(def, 'ScaleSignal')) {
+            continue;
+        }
+        const branches = [...(def.anyOf ?? []), ...(def.oneOf ?? [])];
+        return branches.flatMap(
+            (branch) => extractStringEnum(resolveAndMerge(root, branch)) ?? [],
+        );
+    }
+    return null;
+}
+
 function isBufferParamSchema(root: JsonSchema, schema: JsonSchema): boolean {
     if (schema.$ref === '#/$defs/Buffer') {
         return true;
@@ -526,7 +557,8 @@ export function processModuleSchema(
             const signalMeta = signalParamsByName.get(name);
 
             const isMonoSignalInput = referencesDef(s, 'MonoSignal');
-            const isScaleSignalInput = referencesDef(s, 'ScaleSignal');
+            const scalePresets = scaleInputPresets(root, s);
+            const isScaleSignalInput = scalePresets !== null;
             const isPolySignalInput =
                 !isMonoSignalInput &&
                 !isScaleSignalInput &&
@@ -542,6 +574,7 @@ export function processModuleSchema(
                 ...(isPolySignalInput && { isPolySignalInput }),
                 ...(isMonoSignalInput && { isMonoSignalInput }),
                 ...(isScaleSignalInput && { isScaleSignalInput }),
+                ...(scalePresets?.length && { scalePresets }),
                 ...(signalMeta && {
                     defaultValue: signalMeta.defaultValue,
                     maxValue: signalMeta.maxValue,

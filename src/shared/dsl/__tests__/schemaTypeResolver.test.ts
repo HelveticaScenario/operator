@@ -184,14 +184,14 @@ describe('getEnumVariants', () => {
         );
     });
 
-    test('schemaToTypeExpr resolves Table refs to Table', () => {
+    test('schemaToTypeExpr resolves PhaseWarp refs to PhaseWarp', () => {
         const rootSchema = {
             $defs: {
-                Table: { title: 'Table' },
+                PhaseWarp: { title: 'PhaseWarp' },
             },
         };
-        expect(schemaToTypeExpr({ $ref: '#/$defs/Table' }, rootSchema)).toBe(
-            'Table',
+        expect(schemaToTypeExpr({ $ref: '#/$defs/PhaseWarp' }, rootSchema)).toBe(
+            'PhaseWarp',
         );
     });
 

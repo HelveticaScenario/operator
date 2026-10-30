@@ -45,6 +45,28 @@ pub fn changed(a: f32, b: f32) -> bool {
     a.is_nan() || b.is_nan() || (a - b).abs() > 1e-6
 }
 
+/// `sin(2π · turns)` for `turns` in `[0, 1)`, accurate to about 1e-7 and
+/// cheaper than `f32::sin`.
+#[inline]
+pub fn sin_turns(turns: f32) -> f32 {
+    // Fold onto the quarter wave [0, 1/4], where the series converges fast.
+    let x = turns - 0.5;
+    let a = x.abs();
+    let a = a.min(0.5 - a);
+    let z = a * std::f32::consts::TAU;
+    let z2 = z * z;
+    let s = z
+        * (1.0
+            - z2 / 6.0
+                * (1.0
+                    - z2 / 20.0
+                        * (1.0
+                            - z2 / 42.0
+                                * (1.0 - z2 / 72.0 * (1.0 - z2 / 110.0 * (1.0 - z2 / 156.0))))));
+    // sin(2π · turns) = −sin(2π · x).
+    if x < 0.0 { s } else { -s }
+}
+
 /// Replace non-finite values (NaN, ±Inf) with 0.0 to prevent
 /// sticky corruption of recursive filter state.
 #[inline]
@@ -394,6 +416,17 @@ pub fn voct_to_hz(voct: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sin_turns_matches_sin() {
+        let worst = (0..100_000)
+            .map(|i| {
+                let turns = i as f32 / 100_000.0;
+                (sin_turns(turns) as f64 - (turns as f64 * std::f64::consts::TAU).sin()).abs()
+            })
+            .fold(0.0, f64::max);
+        assert!(worst < 3e-7, "worst error {worst}");
+    }
 
     #[test]
     fn catmull_rom_hits_its_knots() {

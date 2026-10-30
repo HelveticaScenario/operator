@@ -571,9 +571,9 @@ describe('sequencing', () => {
         );
     });
 
-    test('$table helpers play patterns as their signals', () => {
+    test('$phase helpers play patterns as their signals', () => {
         const patch = execPatch(`
-            $table.mirror($p("0 1"), $table.pwm($p("1 2")));
+            $phase.mirror($p("0 1"), $phase.pwm($p("1 2")));
         `);
         expect(findModules(patch, '$cycle').length).toBe(2);
     });
@@ -1785,9 +1785,34 @@ describe('built-in modules', () => {
 // ─── FX modules ──────────────────────────────────────────────────────────────
 
 describe('fx modules', () => {
-    test('$crush', () => {
-        const patch = execPatch('$crush($sine("C4"), 3).out()');
-        expect(findModules(patch, '$crush').length).toBe(1);
+    test('$pWarp', () => {
+        const patch = execPatch(
+            '$pSine($pWarp($ramp("C4"), $phase.crush(3, $phase.feedback(1)))).out()',
+        );
+        const [warp] = findModules(patch, '$pWarp');
+        expect(warp.params.phase).toEqual({
+            type: 'pipe',
+            first: { type: 'crush', amount: 3 },
+            second: { type: 'feedback', amount: 1 },
+        });
+    });
+
+    test('$ensemble', () => {
+        const patch = execPatch(
+            '$ensemble("c3", "C(minor)", { spread: 2, phase: $phase.pulsar(2), effectOrder: "scf" }).odd.out()',
+        );
+        const [ensemble] = findModules(patch, '$ensemble');
+        expect(ensemble.params.phase).toEqual({ type: 'pulsar', amount: 2 });
+        expect(ensemble.params.effectOrder).toBe('scf');
+        // The scale spec string becomes a $chord feeding the scale.
+        expect(findModules(patch, '$chord').length).toBe(1);
+    });
+
+    test('$ensemble takes a preset scale as-is', () => {
+        const patch = execPatch('$ensemble("c2", "enosc.bp-minor").out()');
+        const [ensemble] = findModules(patch, '$ensemble');
+        expect(ensemble.params.scale).toBe('enosc.bp-minor');
+        expect(findModules(patch, '$chord').length).toBe(0);
     });
 
     test('$fold', () => {
@@ -2659,9 +2684,9 @@ describe('$wavs() and $sampler', () => {
     });
 });
 
-// ─── $table DSL helpers ──────────────────────────────────────────────────────
+// ─── $phase DSL helpers ──────────────────────────────────────────────────────
 
-describe('$table helpers', () => {
+describe('$phase helpers', () => {
     const wavsFolderTree = { wt: 'file' } as const;
     const loadWav = (path: string) => ({
         channels: 1,
@@ -2688,18 +2713,18 @@ describe('$table helpers', () => {
         });
     }
 
-    test('$table.mirror serializes a numeric amount', () => {
+    test('$phase.mirror serializes a numeric amount', () => {
         const patch = execWithWavs(
-            '$wavetable(0, $wavs().wt, 0, { phase: $table.mirror(0.5) }).out()',
+            '$wavetable(0, $wavs().wt, 0, { phase: $phase.mirror(0.5) }).out()',
         ).patch;
         const wt = findModules(patch, '$wavetable');
         expect(wt.length).toBe(1);
         expect(wt[0].params.phase).toEqual({ type: 'mirror', amount: 0.5 });
     });
 
-    test('$table.bend serializes a ModuleOutput as a cable reference', () => {
+    test('$phase.bend serializes a ModuleOutput as a cable reference', () => {
         const patch = execWithWavs(
-            'const lfo = $sine(0)\n$wavetable(0, $wavs().wt, 0, { phase: $table.bend(lfo) }).out()',
+            'const lfo = $sine(0)\n$wavetable(0, $wavs().wt, 0, { phase: $phase.bend(lfo) }).out()',
         ).patch;
         const wt = findModules(patch, '$wavetable');
         expect(wt.length).toBe(1);
@@ -2717,20 +2742,26 @@ describe('$table helpers', () => {
         });
     });
 
-    test('$table variants use camelCase tags matching Rust deserializer', () => {
+    test('$phase variants use camelCase tags matching Rust deserializer', () => {
         const patch = execWithWavs(
-            `const a = $wavetable(0, $wavs().wt, 0, { phase: $table.sync(1) }).out()
-             const b = $wavetable(0, $wavs().wt, 0, { phase: $table.fold(0.2) }).out()
-             const c = $wavetable(0, $wavs().wt, 0, { phase: $table.pwm(0.5) }).out()`,
+            `const a = $wavetable(0, $wavs().wt, 0, { phase: $phase.sync(1) }).out()
+             const b = $wavetable(0, $wavs().wt, 0, { phase: $phase.fold(0.2) }).out()
+             const c = $wavetable(0, $wavs().wt, 0, { phase: $phase.pwm(0.5) }).out()
+             const d = $wavetable(0, $wavs().wt, 0, { phase: $phase.pulsar(1) }).out()
+             const e = $wavetable(0, $wavs().wt, 0, { phase: $phase.crush(2) }).out()
+             const f = $wavetable(0, $wavs().wt, 0, { phase: $phase.feedback(3) }).out()`,
         ).patch;
-        const tables = findModules(patch, '$wavetable').map(
+        const warps = findModules(patch, '$wavetable').map(
             (m) => m.params.phase,
         );
-        expect(tables).toEqual(
+        expect(warps).toEqual(
             expect.arrayContaining([
                 { type: 'sync', ratio: 1 },
                 { type: 'fold', amount: 0.2 },
                 { type: 'pwm', width: 0.5 },
+                { type: 'pulsar', amount: 1 },
+                { type: 'crush', amount: 2 },
+                { type: 'feedback', amount: 3 },
             ]),
         );
     });
@@ -2738,7 +2769,7 @@ describe('$table helpers', () => {
     test('optional second param composes two tables into a pipe descriptor', () => {
         const patch = execWithWavs(
             `$wavetable(0, $wavs().wt, 0, {
-                phase: $table.mirror(0.5, $table.bend(0.3))
+                phase: $phase.mirror(0.5, $phase.bend(0.3))
             }).out()`,
         ).patch;
         const wt = findModules(patch, '$wavetable');
@@ -2753,7 +2784,7 @@ describe('$table helpers', () => {
     test('second param chains left-to-right: mirror -> bend -> fold', () => {
         const patch = execWithWavs(
             `$wavetable(0, $wavs().wt, 0, {
-                phase: $table.mirror(0.5, $table.bend(0.3, $table.fold(0.2)))
+                phase: $phase.mirror(0.5, $phase.bend(0.3, $phase.fold(0.2)))
             }).out()`,
         ).patch;
         const wt = findModules(patch, '$wavetable');
@@ -2771,7 +2802,7 @@ describe('$table helpers', () => {
     test('.pipe passes table to closure and returns result', () => {
         const patch = execWithWavs(
             `$wavetable(0, $wavs().wt, 0, {
-                phase: $table.mirror(0.5).pipe(t => t)
+                phase: $phase.mirror(0.5).pipe(t => t)
             }).out()`,
         ).patch;
         const wt = findModules(patch, '$wavetable');
@@ -2781,11 +2812,11 @@ describe('$table helpers', () => {
     test('.pipe closure can build a pipe descriptor', () => {
         const patch = execWithWavs(
             `$wavetable(0, $wavs().wt, 0, {
-                phase: $table.mirror(0.5).pipe(t => $table.bend(0.3, t))
+                phase: $phase.mirror(0.5).pipe(t => $phase.bend(0.3, t))
             }).out()`,
         ).patch;
         const wt = findModules(patch, '$wavetable');
-        // t is mirror; $table.bend(0.3, t) = pipe(bend, mirror) — bend feeds into mirror
+        // t is mirror; $phase.bend(0.3, t) = pipe(bend, mirror) — bend feeds into mirror
         expect(wt[0].params.phase).toEqual({
             type: 'pipe',
             first: { type: 'bend', amount: 0.3 },

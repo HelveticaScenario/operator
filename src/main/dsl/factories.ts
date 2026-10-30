@@ -436,9 +436,9 @@ export class DSLContext {
     private createInstantiator(schema: ModuleSchema): Instantiator {
         const outputs = schema.outputs || [];
         const processed = processModuleSchema(schema);
-        const scaleParamNames = processed.params
-            .filter((p) => p.isScaleSignalInput)
-            .map((p) => p.name);
+        const scaleParams = processed.params.filter(
+            (p) => p.isScaleSignalInput,
+        );
         const patternSignalParamNames = processed.params
             .filter(
                 (p) =>
@@ -514,11 +514,13 @@ export class DSLContext {
 
             // The engine only accepts a signal scale; a spec string is
             // shorthand for the notes of `$chord(spec)`.
-            for (const name of scaleParamNames) {
-                if (typeof params[name] === 'string') {
-                    params[name] = this.builder.getFactory('$chord')(
-                        params[name],
-                    );
+            for (const { name, scalePresets } of scaleParams) {
+                const value = params[name];
+                if (
+                    typeof value === 'string' &&
+                    !scalePresets?.includes(value)
+                ) {
+                    params[name] = this.builder.getFactory('$chord')(value);
                 }
             }
 

@@ -6,7 +6,7 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::dsp::fx::enosc_tables::{aa_fold, lookup_fold};
+use crate::dsp::fx::enosc_tables::{aa_fold, fold_amount, lookup_fold};
 use crate::dsp::utils::fade::{DEFAULT_FADE_IN_SECS, FadeIn};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
@@ -86,8 +86,7 @@ impl Fold {
                 .update(amount_raw, self.params.amount.glide_mark(ch), sample_rate);
             let amount = *state.amount;
 
-            // Normalize amount from [0, 5] to [0, 1] for table lookup
-            let amount_norm = (amount / 5.0).clamp(0.0, 1.0);
+            let amount_norm = fold_amount((amount / 5.0).clamp(0.0, 1.0));
 
             // Apply anti-aliasing when freq is connected
             let amount_norm = if freq_connected {
@@ -140,8 +139,8 @@ mod tests {
     }
 
     /// Largest single-sample output jump while `amount` is stepped from 0 to a
-    /// low target that crosses the old passthrough threshold (param 0.025). A
-    /// constant input means any jump is a transition artifact, not signal.
+    /// low target across the bypass hand-off. A constant input means any jump
+    /// is a transition artifact, not signal.
     fn max_step_through_threshold(input: f32, target_amount: f32) -> f32 {
         let mut fold = make(input, 0.0);
         // Settle at amount 0.
@@ -167,10 +166,8 @@ mod tests {
 
     #[test]
     fn no_click_sweeping_through_low_amount() {
-        // Regression: stepping `amount` to a low setting used to cross a hard
-        // passthrough/fold discontinuity (~2.7 V jump) around param 0.025. The
-        // crossfade in `lookup_fold` keeps the transition continuous. Worst-case
-        // input is full-scale (input_norm = -1).
+        // Stepping `amount` from 0 to a low setting crosses the bypass hand-off
+        // without a jump. Worst-case input is full-scale (input_norm = -1).
         for &input in &[-5.0f32, -2.5, 2.5, 5.0] {
             for &target in &[0.05f32, 0.1, 0.2] {
                 let step = max_step_through_threshold(input, target);

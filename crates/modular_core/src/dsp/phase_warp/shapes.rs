@@ -1,10 +1,16 @@
-//! Pure warp functions for table phase distortion.
+//! Pure phase-shaping functions behind the [`PhaseWarp`](super::PhaseWarp) variants.
 //!
-//! Each function has the signature `(x: f32, param: f32) -> f32`.
-//! `x` is a normalized phase in `[0, 1]`, the output is clamped to `[0, 1]`.
-//! `param` range depends on the function.
+//! The geometric warps have the signature `(x: f32, param: f32) -> f32`: `x` is a
+//! normalized phase in `[0, 1]`, the output is clamped to `[0, 1]`, and `param`'s range
+//! depends on the function. The Ensemble Oscillator twists (pulsar, crush, feedback) take
+//! a 0–5 knob value and the oscillator frequency for antialiasing.
 //!
-//! These functions are pure and allocation-free — safe to call from the audio thread.
+//! Twists adapted from the 4ms Ensemble Oscillator. Copyright 4ms Company. Used under
+//! GPL v3.
+//!
+//! These functions are allocation-free — safe to call from the audio thread.
+
+use crate::dsp::utils::{sanitize, sin_turns};
 
 /// Identity — pass through unchanged.
 #[inline]
@@ -61,6 +67,85 @@ pub fn pwm(x: f32, param: f32) -> f32 {
     } else {
         0.5 + (x - width) / (1.0 - width) * 0.5
     }
+}
+
+/// Normalize a 0–5 knob value to `[0, 1]`.
+#[inline]
+pub fn knob(amount: f32) -> f32 {
+    (amount / 5.0).clamp(0.0, 1.0)
+}
+
+/// Shared rolloff of the feedback and pulsar antialiasing: `max(1 − 2f, 0)²`,
+/// with `freq_norm` the oscillator frequency over the sample rate. `freq_norm = 0`
+/// (unknown pitch) applies no rolloff.
+#[inline]
+fn twist_rolloff(freq_norm: f32) -> f32 {
+    let base = (1.0 - 2.0 * freq_norm).max(0.0);
+    base * base
+}
+
+// The twists take their knob prepared once per channel by the matching
+// `*_amount` function, leaving only the per-oscillator antialiasing here.
+
+/// Pulsar speed-up for a 0–5 knob: `2^(6·k²)`, 1× to 64×.
+#[inline]
+pub fn pulsar_amount(knob_value: f32) -> f32 {
+    let k = knob(knob_value);
+    f32::exp2(k * k * 6.0)
+}
+
+/// Pulsar — plays each cycle `multiplier` times faster and rests at phase 0
+/// for the remainder.
+#[inline]
+pub fn pulsar(x: f32, multiplier: f32, freq_norm: f32) -> f32 {
+    // Ensemble Oscillator antialiasing: (m − 1)·max(1 − 2f, 0)¹⁶ + 1.
+    let rolloff = twist_rolloff(freq_norm);
+    let rolloff = rolloff * rolloff;
+    let rolloff = rolloff * rolloff;
+    let multiplier = (multiplier - 1.0) * rolloff * rolloff + 1.0;
+    let y = x * multiplier;
+    // The reference saturates at 1.0 and then wraps, which lands on 0.
+    if y < 1.0 { y } else { 0.0 }
+}
+
+/// Crush depth for a 0–5 knob: `0.5·k²`.
+#[inline]
+pub fn crush_amount(knob_value: f32) -> f32 {
+    let k = knob(knob_value);
+    k * k * 0.5
+}
+
+/// Crush — XORs the 32-bit phase with scaled copies of itself, a glitchy
+/// bit-level distortion. Not antialiased.
+#[inline]
+pub fn crush(x: f32, depth: f32) -> f32 {
+    let am = (depth * 65535.0) as u32;
+    let phase = (x.clamp(0.0, 1.0) * 4_294_967_295.0) as u32;
+    let mut y = phase;
+    y ^= (phase >> 16).wrapping_mul(am);
+    // 0.25 in u0.16 fixed point.
+    y ^= 16384u32.wrapping_mul(am);
+    y as f32 / 4_294_967_295.0
+}
+
+/// Feedback depth for a 0–5 knob: `0.7·k²`.
+#[inline]
+pub fn feedback_amount(knob_value: f32) -> f32 {
+    let k = knob(knob_value);
+    k * k * 0.7
+}
+
+/// Feedback — offsets the phase by a one-pole-lowpassed sine of its own output,
+/// scaled by `depth`, plus `depth` as a constant offset. `lp` is the lowpass
+/// state, carried from sample to sample.
+#[inline]
+pub fn feedback(x: f32, depth: f32, freq_norm: f32, lp: &mut f32) -> f32 {
+    let depth = depth * twist_rolloff(freq_norm);
+    let y = x + *lp * depth + depth;
+    let y = y - y.floor();
+    // One-pole lowpass with coefficient 1/4.
+    *lp = sanitize(*lp + (sin_turns(y) - *lp) * 0.25);
+    y
 }
 
 #[cfg(test)]

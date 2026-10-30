@@ -34,8 +34,8 @@ struct ChannelState {
 ///
 /// Produces a rising sawtooth phase signal from 0 to 1 at the given frequency.
 /// This is the fundamental building block for phase-based synthesis:
-/// feed its output into phase-distortion modules (crush, feedback, pulsar)
-/// and then into a waveshaper (e.g. `$pSine`) to produce audio.
+/// reshape it with `$pWarp` and a `$phase.*` warp, then feed it into a
+/// waveshaper (e.g. `$pSine`) to produce audio.
 #[module(name = "$ramp", args(freq))]
 pub struct Ramp {
     outputs: RampOutputs,

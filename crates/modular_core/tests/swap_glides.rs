@@ -224,3 +224,42 @@ fn block_path_hands_an_edit_to_the_glide() {
     }
     assert_eq!(prev, 4.0, "settles exactly on the new value");
 }
+
+/// A `$pWarp` reading phase 0.3 through a mirror of `amount`: its output is
+/// `0.3 · (1 + amount / 5)`, so it shows the amount the warp reads.
+fn mirrored(amount: f32) -> PatchGraph {
+    graph(vec![(
+        "warp",
+        "$pWarp",
+        json!({ "input": 0.3, "phase": { "type": "mirror", "amount": amount } }),
+    )])
+}
+
+#[test]
+fn edited_phase_warp_amount_glides() {
+    let patch = build(&mirrored(0.0));
+    patch.connect_all();
+    step(&patch);
+    let patch = swap(&patch, &mirrored(5.0), &SameIds);
+    let mut prev = 0.3;
+    for frame in 0..4800 {
+        step(&patch);
+        let y = out(&patch, "warp");
+        assert!(
+            y >= prev && y - prev < 0.01,
+            "frame {frame}: {prev} → {y} is not a glide"
+        );
+        prev = y;
+    }
+    assert!((prev - 0.6).abs() < 1e-4);
+}
+
+#[test]
+fn unchanged_phase_warp_amount_does_not_glide() {
+    let patch = build(&mirrored(5.0));
+    patch.connect_all();
+    step(&patch);
+    let patch = swap(&patch, &mirrored(5.0), &SameIds);
+    step(&patch);
+    assert!((out(&patch, "warp") - 0.6).abs() < 1e-6);
+}

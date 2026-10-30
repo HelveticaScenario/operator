@@ -10152,15 +10152,15 @@
     ]
   },
   {
-    "name": "$wavetable",
-    "documentation": "A band-limited wavetable oscillator.\n\nReads a pre-built mipmap pyramid (FFT-filtered frame copies) and\nselects a level appropriate for the playback frequency to suppress\naliasing. Frame position can be swept across multi-frame tables for\nclassic wavetable timbral sweeps, and an optional phase-warp `Table`\nreshapes the read phase before sampling.\n\n## Example\n\n```js\n$wavetable('c4', $wavs().tables.pad).out()\n$wavetable('c2', $wavs().tables.pad, $sine('0.2hz').range(0, 5)).out()\n```",
+    "name": "$ensemble",
+    "documentation": "A bank of sine voices on a scale, after the 4ms Ensemble Oscillator.\n\nEach channel is a whole ensemble of **count** voices playing **scale** from\n**pitch**. The lowest voice sits **root** above it, quantized to the scale;\neach voice above adds **spread** to the root before quantizing, so the\nvoices stack up the scale. **detune** pulls the voices apart by small,\ngrowing, alternating amounts.\n\n**scale** takes the Ensemble Oscillator's Octave and Free banks as presets\n(`enosc.harm2-3`, `enosc.harm4-7`, `enosc.harm8-15`, `enosc.harm-odd`,\n`enosc.pythag3`, `enosc.pythag5`, `enosc.just4`, `enosc.just6`,\n`enosc.5tet`, `enosc.7tet`, `enosc.fifths`, `enosc.mlt1`–`enosc.mlt4`,\n`enosc.bp`, `enosc.bp-major`, `enosc.bp-minor`, `enosc.alpha`,\n`enosc.beta`). Free scales repeat at their own interval (a fifth, a\ntritave, …) rather than the octave.\n\nA voice whose root falls between two scale notes crossfades between them, so\nsweeping **root** or **spread** morphs smoothly from chord to chord;\n**crossfade** narrows the fade until the voices step from note to note.\n\n**crossFm** routes each voice's output into the others' phase (see\n**crossFmMode**), **phase** warps every oscillator's phase with a `$phase.*`\nwarp, and **fold**, **cheby** and **segment** shape every voice's waveform in\nthe order **effectOrder** gives. **balance** tilts the mix toward the low or\nhigh voices.\n\n**output** is the mix of every voice; the other outputs split the voices the\nway the hardware's stereo modes do.\n\n```js\n$ensemble('c3', 'C(minor)').out()\n$ensemble('c2', 'enosc.bp', { spread: 1, count: 6 }).out()\n```\n\n```js\n// Stereo: odd voices left, even voices right, with pulsar and cross FM\nconst e = $ensemble('a2', 'A(dorian)', {\n  spread: $sine('0.05hz').range(1, 3),\n  crossFm: 1.5,\n  phase: $phase.pulsar(2),\n  fold: 1,\n})\ne.odd.out({ pan: -5 })\ne.even.out({ pan: 5 })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "WavetableOscParams",
+      "title": "EnsembleParams",
       "type": "object",
       "properties": {
-        "fm": {
-          "description": "FM input signal (pre-scaled by user).",
+        "balance": {
+          "description": "level tilt across the voices: negative favours the lowest, positive the\nhighest, 0 is even",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -10170,27 +10170,83 @@
             }
           ]
         },
-        "fmMode": {
-          "description": "FM mode: throughZero (default), lin, or exp.",
-          "$ref": "#/$defs/FmMode",
-          "default": "throughZero"
+        "cheby": {
+          "description": "Chebyshev waveshaping amount (0–5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "count": {
+          "description": "voices per channel (1–16, default 8)",
+          "type": "integer",
+          "format": "uint",
+          "default": 8,
+          "minimum": 0
+        },
+        "crossFm": {
+          "description": "cross-FM depth (0–5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "crossFmMode": {
+          "description": "cross-FM routing: up (default), chain, or down",
+          "$ref": "#/$defs/CrossFmMode",
+          "default": "up"
+        },
+        "crossfade": {
+          "description": "how much of each step between scale notes crossfades rather than jumps\n(0 = hard steps, 5 = always crossfading)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detune": {
+          "description": "unquantized detuning that grows and alternates in sign up the voices\n(0–5, up to 0.625 semitones between the first two)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effectOrder": {
+          "description": "order of the fold (f), cheby (c) and segment (s) warps, e.g. \"fcs\"\n(default) or \"scf\"",
+          "$ref": "#/$defs/EffectOrder",
+          "default": "fcs"
+        },
+        "fold": {
+          "description": "wavefold amount (0–5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "phase": {
-          "description": "Optional phase-warp table applied before sampling.",
+          "description": "phase warp applied to every oscillator before its sine, built with\n`$phase.*`",
           "anyOf": [
             {
-              "$ref": "#/$defs/Table"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "phaseOffset": {
-          "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
+              "$ref": "#/$defs/PhaseWarp"
             },
             {
               "type": "null"
@@ -10198,11 +10254,11 @@
           ]
         },
         "pitch": {
-          "description": "Pitch in V/Oct (0V = C4).",
+          "description": "pitch in V/Oct of the scale's first note; every voice moves with it",
           "$ref": "#/$defs/PolySignal"
         },
-        "position": {
-          "description": "Frame position as a signal. 0V maps to the first frame, 5V maps to\nthe last frame. Values are clamped to [0, 5] before being normalized.",
+        "root": {
+          "description": "position of the lowest voice in V above **pitch**, quantized to\n**scale**; each voice above adds **spread**",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -10212,8 +10268,19 @@
             }
           ]
         },
-        "sync": {
-          "description": "hard sync source — rising edges reset the oscillator phase.",
+        "scale": {
+          "description": "the scale the voices sit on: an Ensemble Oscillator preset such as\n\"enosc.harm4-7\" or \"enosc.bp\", notes as one V/Oct pitch per channel, or\na spec string like \"C(major)\" / \"C[maj7]\". Only the intervals above the\nfirst note matter. Semitones if omitted.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnsembleScale"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "segment": {
+          "description": "triangle-segment waveshaping amount (0–5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -10223,94 +10290,65 @@
             }
           ]
         },
-        "wav": {
-          "description": "Loaded WAV reference containing the wavetable data.",
-          "$ref": "#/$defs/Wav"
+        "spread": {
+          "description": "root distance between neighbouring voices (0–5, up to 7.5 semitones)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
-        "wav",
         "pitch"
       ],
       "$defs": {
-        "FmMode": {
-          "description": "FM synthesis mode for oscillators.",
+        "CrossFmMode": {
+          "description": "How each voice's cross-FM output reaches the others.",
           "oneOf": [
             {
-              "description": "Through-zero FM: frequency can go negative (phase runs backward)",
+              "description": "The lowest voice modulates every other voice.",
               "type": "string",
-              "const": "throughZero"
+              "const": "up"
             },
             {
-              "description": "Linear FM: like through-zero but frequency clamped to >= 0",
+              "description": "Each voice modulates the next one up.",
               "type": "string",
-              "const": "lin"
+              "const": "chain"
             },
             {
-              "description": "Exponential FM: modulator added to pitch in V/Oct space",
+              "description": "The highest voice modulates every other voice, one sample late.",
               "type": "string",
-              "const": "exp"
+              "const": "down"
             }
           ]
         },
-        "PolySignal": {
+        "EffectOrder": {
+          "description": "The order the fold (`f`), cheby (`c`) and segment (`s`) warps run in.",
+          "type": "string",
+          "enum": [
+            "fcs",
+            "fsc",
+            "cfs",
+            "csf",
+            "sfc",
+            "scf"
+          ]
+        },
+        "EnsembleScale": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Signal"
+              "$ref": "#/$defs/Preset"
             },
             {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
+              "$ref": "#/$defs/ScaleSignal"
             }
           ]
         },
-        "Signal": {
-          "anyOf": [
-            {
-              "type": "number",
-              "format": "double"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/SignalTaggedSchema"
-            }
-          ]
-        },
-        "SignalTaggedSchema": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "channel": {
-                  "type": "integer",
-                  "format": "uint",
-                  "default": 0,
-                  "minimum": 0
-                },
-                "module": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string",
-                  "const": "cable"
-                }
-              },
-              "required": [
-                "type",
-                "module",
-                "port"
-              ]
-            }
-          ]
-        },
-        "Table": {
+        "PhaseWarp": {
           "oneOf": [
             {
               "type": "object",
@@ -10407,11 +10445,59 @@
             {
               "type": "object",
               "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "pulsar"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "crush"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "feedback"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
                 "first": {
-                  "$ref": "#/$defs/Table"
+                  "$ref": "#/$defs/PhaseWarp"
                 },
                 "second": {
-                  "$ref": "#/$defs/Table"
+                  "$ref": "#/$defs/PhaseWarp"
                 },
                 "type": {
                   "type": "string",
@@ -10422,6 +10508,656 @@
                 "type",
                 "first",
                 "second"
+              ]
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Preset": {
+          "description": "The Ensemble Oscillator's Octave and Free scale banks. Each lists its notes\nin semitones from the first, and the interval at which the scale repeats.",
+          "oneOf": [
+            {
+              "description": "Harmonics 2–3: root and perfect fifth.",
+              "type": "string",
+              "const": "enosc.harm2-3"
+            },
+            {
+              "description": "Harmonics 4–7.",
+              "type": "string",
+              "const": "enosc.harm4-7"
+            },
+            {
+              "description": "Harmonics 8–15.",
+              "type": "string",
+              "const": "enosc.harm8-15"
+            },
+            {
+              "description": "The odd harmonics up to 15, repeating every three octaves.",
+              "type": "string",
+              "const": "enosc.harm-odd"
+            },
+            {
+              "description": "Pythagorean do, fa, so.",
+              "type": "string",
+              "const": "enosc.pythag3"
+            },
+            {
+              "description": "Pythagorean do, re, fa, so, la.",
+              "type": "string",
+              "const": "enosc.pythag5"
+            },
+            {
+              "description": "Just 1, 4/3, 3/2, 5/3.",
+              "type": "string",
+              "const": "enosc.just4"
+            },
+            {
+              "description": "Just 1, 5/4, 4/3, 3/2, 5/3, 7/4.",
+              "type": "string",
+              "const": "enosc.just6"
+            },
+            {
+              "description": "5 equal steps per octave.",
+              "type": "string",
+              "const": "enosc.5tet"
+            },
+            {
+              "description": "7 equal steps per octave.",
+              "type": "string",
+              "const": "enosc.7tet"
+            },
+            {
+              "description": "A spiral of just perfect fifths.",
+              "type": "string",
+              "const": "enosc.fifths"
+            },
+            {
+              "description": "Messiaen's first mode of limited transposition: the whole-tone scale.",
+              "type": "string",
+              "const": "enosc.mlt1"
+            },
+            {
+              "description": "Messiaen's second mode: half step, whole step.",
+              "type": "string",
+              "const": "enosc.mlt2"
+            },
+            {
+              "description": "Messiaen's third mode.",
+              "type": "string",
+              "const": "enosc.mlt3"
+            },
+            {
+              "description": "Messiaen's fourth mode.",
+              "type": "string",
+              "const": "enosc.mlt4"
+            },
+            {
+              "description": "The Bohlen–Pierce scale: 13 equal steps per tritave (3:1).",
+              "type": "string",
+              "const": "enosc.bp"
+            },
+            {
+              "description": "The Bohlen–Pierce major triad, repeating every tritave.",
+              "type": "string",
+              "const": "enosc.bp-major"
+            },
+            {
+              "description": "The Bohlen–Pierce minor triad, repeating every tritave.",
+              "type": "string",
+              "const": "enosc.bp-minor"
+            },
+            {
+              "description": "Wendy Carlos's alpha scale: equal steps of 78 cents.",
+              "type": "string",
+              "const": "enosc.alpha"
+            },
+            {
+              "description": "Wendy Carlos's beta scale: equal steps of 63.8 cents.",
+              "type": "string",
+              "const": "enosc.beta"
+            }
+          ]
+        },
+        "ScaleSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScaleSpec"
+            },
+            {
+              "$ref": "#/$defs/PolySignal"
+            }
+          ]
+        },
+        "ScaleSpec": {
+          "type": "string"
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "mix of every voice",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "odd",
+        "description": "mix of voices 1, 3, 5, …",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "even",
+        "description": "mix of voices 2, 4, 6, …",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "low",
+        "description": "mix of the lower half of the voices",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "high",
+        "description": "mix of the upper half of the voices",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "root",
+        "description": "the lowest voice alone",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "other",
+        "description": "mix of every voice but the lowest",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "pitch",
+        "description": "pitch in V/Oct of the scale's first note; every voice moves with it",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "root",
+        "description": "position of the lowest voice in V above **pitch**, quantized to\n**scale**; each voice above adds **spread**",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "spread",
+        "description": "root distance between neighbouring voices (0–5, up to 7.5 semitones)",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "detune",
+        "description": "unquantized detuning that grows and alternates in sign up the voices\n(0–5, up to 0.625 semitones between the first two)",
+        "signalType": "control",
+        "defaultValue": 1.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "crossfade",
+        "description": "how much of each step between scale notes crossfades rather than jumps\n(0 = hard steps, 5 = always crossfading)",
+        "signalType": "control",
+        "defaultValue": 4.33,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "crossFm",
+        "description": "cross-FM depth (0–5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "balance",
+        "description": "level tilt across the voices: negative favours the lowest, positive the\nhighest, 0 is even",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "fold",
+        "description": "wavefold amount (0–5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cheby",
+        "description": "Chebyshev waveshaping amount (0–5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "segment",
+        "description": "triangle-segment waveshaping amount (0–5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "pitch"
+      },
+      {
+        "name": "scale"
+      }
+    ]
+  },
+  {
+    "name": "$wavetable",
+    "documentation": "A band-limited wavetable oscillator.\n\nReads a pre-built mipmap pyramid (FFT-filtered frame copies) and\nselects a level appropriate for the playback frequency to suppress\naliasing. Frame position can be swept across multi-frame tables for\nclassic wavetable timbral sweeps, and an optional `PhaseWarp`\nreshapes the read phase before sampling.\n\n## Example\n\n```js\n$wavetable('c4', $wavs().tables.pad).out()\n$wavetable('c2', $wavs().tables.pad, $sine('0.2hz').range(0, 5)).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "WavetableOscParams",
+      "type": "object",
+      "properties": {
+        "fm": {
+          "description": "FM input signal (pre-scaled by user).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fmMode": {
+          "description": "FM mode: throughZero (default), lin, or exp.",
+          "$ref": "#/$defs/FmMode",
+          "default": "throughZero"
+        },
+        "phase": {
+          "description": "Optional phase warp applied before sampling, built with `$phase.*`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PhaseWarp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pitch": {
+          "description": "Pitch in V/Oct (0V = C4).",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "position": {
+          "description": "Frame position as a signal. 0V maps to the first frame, 5V maps to\nthe last frame. Values are clamped to [0, 5] before being normalized.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wav": {
+          "description": "Loaded WAV reference containing the wavetable data.",
+          "$ref": "#/$defs/Wav"
+        }
+      },
+      "required": [
+        "wav",
+        "pitch"
+      ],
+      "$defs": {
+        "FmMode": {
+          "description": "FM synthesis mode for oscillators.",
+          "oneOf": [
+            {
+              "description": "Through-zero FM: frequency can go negative (phase runs backward)",
+              "type": "string",
+              "const": "throughZero"
+            },
+            {
+              "description": "Linear FM: like through-zero but frequency clamped to >= 0",
+              "type": "string",
+              "const": "lin"
+            },
+            {
+              "description": "Exponential FM: modulator added to pitch in V/Oct space",
+              "type": "string",
+              "const": "exp"
+            }
+          ]
+        },
+        "PhaseWarp": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "identity"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "mirror"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "bend"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ratio": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "sync"
+                }
+              },
+              "required": [
+                "type",
+                "ratio"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "fold"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "pwm"
+                },
+                "width": {
+                  "$ref": "#/$defs/PolySignal"
+                }
+              },
+              "required": [
+                "type",
+                "width"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "pulsar"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "crush"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "feedback"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "first": {
+                  "$ref": "#/$defs/PhaseWarp"
+                },
+                "second": {
+                  "$ref": "#/$defs/PhaseWarp"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "pipe"
+                }
+              },
+              "required": [
+                "type",
+                "first",
+                "second"
+              ]
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
               ]
             }
           ]
@@ -17099,151 +17835,15 @@
     ]
   },
   {
-    "name": "$crush",
-    "documentation": "Phase effect: digital bit-crush distortion.\n\nTransforms a 0–1 phase signal by quantizing it into coarse steps,\ncreating glitchy, staircase-like phase patterns. Feed the output into\na phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear the result\nas gritty digital artifacts — fractured harmonics at low settings,\naggressive bit-reduction at high settings.\n\n# Example\n\n```js\n// Bit-crush a ramp phase and convert to audio with $pSine\n$pSine($crush($ramp('c3'), 2)).out()\n```",
+    "name": "$pWarp",
+    "documentation": "Phase effect: reshapes a 0–1 phase signal with a `$phase.*` warp.\n\nFeed the output into a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to\nhear the result. Warps compose with `.pipe()` or their optional second\nargument; `$phase.feedback` stages keep their own state per channel.\n\n# Example\n\n```js\n// Ensemble Oscillator-style pulsar and crush on a ramp\n$pSine($pWarp($ramp('c3'), $phase.pulsar(3))).out()\n$pSine($pWarp($ramp('c3'), $phase.crush(2, $phase.feedback(1)))).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "CrushParams",
+      "title": "PWarpParams",
       "type": "object",
       "properties": {
-        "amount": {
-          "description": "crush amount (0-5, where 0 = clean, 5 = maximum distortion)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "input": {
-          "description": "input phase (0 to 1)",
-          "$ref": "#/$defs/PolySignal"
-        }
-      },
-      "required": [
-        "input"
-      ],
-      "$defs": {
-        "PolySignal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Signal"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
-            }
-          ]
-        },
-        "Signal": {
-          "anyOf": [
-            {
-              "type": "number",
-              "format": "double"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/SignalTaggedSchema"
-            }
-          ]
-        },
-        "SignalTaggedSchema": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "channel": {
-                  "type": "integer",
-                  "format": "uint",
-                  "default": 0,
-                  "minimum": 0
-                },
-                "module": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string",
-                  "const": "cable"
-                }
-              },
-              "required": [
-                "type",
-                "module",
-                "port"
-              ]
-            }
-          ]
-        }
-      }
-    },
-    "outputs": [
-      {
-        "name": "output",
-        "description": "crushed phase output",
-        "polyphonic": true,
-        "default": true,
-        "minValue": 0.0,
-        "maxValue": 1.0
-      }
-    ],
-    "bufferOutputs": [],
-    "signalParams": [
-      {
-        "name": "input",
-        "description": "input phase (0 to 1)",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 1.0
-      },
-      {
-        "name": "amount",
-        "description": "crush amount (0-5, where 0 = clean, 5 = maximum distortion)",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 5.0
-      }
-    ],
-    "positionalArgs": [
-      {
-        "name": "input"
-      },
-      {
-        "name": "amount"
-      }
-    ]
-  },
-  {
-    "name": "$feedback",
-    "documentation": "Phase effect: FM feedback distortion.\n\nTransforms a 0–1 phase signal by feeding the output back into itself,\nprogressively adding harmonic complexity and chaotic motion. Feed the\nresult into a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear\nthe effect. At low amounts the timbre gains subtle overtones; at high\namounts it becomes chaotic and noisy.\n\n# Example\n\n```js\n// Apply feedback distortion to a ramp phase and convert to audio\n$pSine($feedback($ramp('c3'), 3)).out()\n```",
-    "paramsSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "FeedbackParams",
-      "type": "object",
-      "properties": {
-        "amount": {
-          "description": "feedback amount (0-5, where 0 = no feedback, 5 = maximum feedback FM)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "freq": {
-          "description": "pitch in V/Oct (optional, reduces aliasing at high frequencies)",
+          "description": "pitch of the phase in V/Oct (optional, reduces aliasing of the pulsar\nand feedback warps at high frequencies)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -17256,12 +17856,181 @@
         "input": {
           "description": "input phase (0 to 1)",
           "$ref": "#/$defs/PolySignal"
+        },
+        "phase": {
+          "description": "the warp to apply, built with `$phase.*`",
+          "$ref": "#/$defs/PhaseWarp"
         }
       },
       "required": [
-        "input"
+        "input",
+        "phase"
       ],
       "$defs": {
+        "PhaseWarp": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "identity"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "mirror"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "bend"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ratio": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "sync"
+                }
+              },
+              "required": [
+                "type",
+                "ratio"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "fold"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "pwm"
+                },
+                "width": {
+                  "$ref": "#/$defs/PolySignal"
+                }
+              },
+              "required": [
+                "type",
+                "width"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "pulsar"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "crush"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "feedback"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "first": {
+                  "$ref": "#/$defs/PhaseWarp"
+                },
+                "second": {
+                  "$ref": "#/$defs/PhaseWarp"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "pipe"
+                }
+              },
+              "required": [
+                "type",
+                "first",
+                "second"
+              ]
+            }
+          ]
+        },
         "PolySignal": {
           "anyOf": [
             {
@@ -17324,7 +18093,7 @@
     "outputs": [
       {
         "name": "output",
-        "description": "feedback-distorted phase output",
+        "description": "warped phase output",
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
@@ -17340,18 +18109,10 @@
         "defaultValue": 0.0,
         "minValue": 0.0,
         "maxValue": 1.0
-      },
-      {
-        "name": "amount",
-        "description": "feedback amount (0-5, where 0 = no feedback, 5 = maximum feedback FM)",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 5.0
       },
       {
         "name": "freq",
-        "description": "pitch in V/Oct (optional, reduces aliasing at high frequencies)",
+        "description": "pitch of the phase in V/Oct (optional, reduces aliasing of the pulsar\nand feedback warps at high frequencies)",
         "signalType": "pitch",
         "defaultValue": 0.0,
         "minValue": -5.0,
@@ -17363,157 +18124,13 @@
         "name": "input"
       },
       {
-        "name": "amount"
-      }
-    ]
-  },
-  {
-    "name": "$pulsar",
-    "documentation": "Phase effect: pulsar synthesis distortion.\n\nTransforms a 0–1 phase signal by compressing the active portion of each\ncycle into a narrower window, leaving the rest silent. Feed the output\ninto a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear pulsed\nwaveforms — at higher amounts the pulse becomes extremely narrow,\nproducing bright, impulse-like timbres useful for excitation signals\nand metallic tones.\n\n# Example\n\n```js\n// Compress the phase with pulsar and convert to audio\n$pSine($pulsar($ramp('c3'), 3)).out()\n```",
-    "paramsSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "PulsarParams",
-      "type": "object",
-      "properties": {
-        "amount": {
-          "description": "compression amount (0-5, where 0 = no compression, 5 = maximum compression)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "freq": {
-          "description": "pitch in V/Oct (optional, reduces aliasing at high frequencies)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "input": {
-          "description": "input phase (0 to 1)",
-          "$ref": "#/$defs/PolySignal"
-        }
-      },
-      "required": [
-        "input"
-      ],
-      "$defs": {
-        "PolySignal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Signal"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
-            }
-          ]
-        },
-        "Signal": {
-          "anyOf": [
-            {
-              "type": "number",
-              "format": "double"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/SignalTaggedSchema"
-            }
-          ]
-        },
-        "SignalTaggedSchema": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "channel": {
-                  "type": "integer",
-                  "format": "uint",
-                  "default": 0,
-                  "minimum": 0
-                },
-                "module": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string",
-                  "const": "cable"
-                }
-              },
-              "required": [
-                "type",
-                "module",
-                "port"
-              ]
-            }
-          ]
-        }
-      }
-    },
-    "outputs": [
-      {
-        "name": "output",
-        "description": "pulsar phase output",
-        "polyphonic": true,
-        "default": true,
-        "minValue": 0.0,
-        "maxValue": 1.0
-      }
-    ],
-    "bufferOutputs": [],
-    "signalParams": [
-      {
-        "name": "input",
-        "description": "input phase (0 to 1)",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 1.0
-      },
-      {
-        "name": "amount",
-        "description": "compression amount (0-5, where 0 = no compression, 5 = maximum compression)",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 5.0
-      },
-      {
-        "name": "freq",
-        "description": "pitch in V/Oct (optional, reduces aliasing at high frequencies)",
-        "signalType": "pitch",
-        "defaultValue": 0.0,
-        "minValue": -5.0,
-        "maxValue": 5.0
-      }
-    ],
-    "positionalArgs": [
-      {
-        "name": "input"
-      },
-      {
-        "name": "amount"
+        "name": "phase"
       }
     ]
   },
   {
     "name": "$ramp",
-    "documentation": "Phase ramp generator.\n\nProduces a rising sawtooth phase signal from 0 to 1 at the given frequency.\nThis is the fundamental building block for phase-based synthesis:\nfeed its output into phase-distortion modules (crush, feedback, pulsar)\nand then into a waveshaper (e.g. `$pSine`) to produce audio.",
+    "documentation": "Phase ramp generator.\n\nProduces a rising sawtooth phase signal from 0 to 1 at the given frequency.\nThis is the fundamental building block for phase-based synthesis:\nreshape it with `$pWarp` and a `$phase.*` warp, then feed it into a\nwaveshaper (e.g. `$pSine`) to produce audio.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "RampParams",

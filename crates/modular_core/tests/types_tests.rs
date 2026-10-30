@@ -342,9 +342,10 @@ fn collect_cables_buffer_emits_source_module() {
 
 #[test]
 fn collect_cables_table_with_signal_cable() {
+    use modular_core::dsp::phase_warp::PhaseWarp;
     use modular_core::poly::PolySignal;
-    use modular_core::types::{Connect, Table};
-    let table = Table::Bend {
+    use modular_core::types::Connect;
+    let table = PhaseWarp::Bend {
         amount: PolySignal::mono(Signal::cable("LFO", "out", 0)),
     };
     let mut sink = Vec::new();
@@ -354,14 +355,15 @@ fn collect_cables_table_with_signal_cable() {
 
 #[test]
 fn collect_cables_table_pipe_recurses() {
+    use modular_core::dsp::phase_warp::PhaseWarp;
     use modular_core::poly::PolySignal;
-    use modular_core::types::{Connect, Table};
+    use modular_core::types::Connect;
     // Pipe(Bend{amount: cable→A}, Sync{ratio: cable→B})
-    let table = Table::Pipe {
-        first: Box::new(Table::Bend {
+    let table = PhaseWarp::Pipe {
+        first: Box::new(PhaseWarp::Bend {
             amount: PolySignal::mono(Signal::cable("A", "out", 0)),
         }),
-        second: Box::new(Table::Sync {
+        second: Box::new(PhaseWarp::Sync {
             ratio: PolySignal::mono(Signal::cable("B", "out", 0)),
         }),
     };
@@ -372,9 +374,10 @@ fn collect_cables_table_pipe_recurses() {
 
 #[test]
 fn collect_cables_table_identity_emits_nothing() {
-    use modular_core::types::{Connect, Table};
+    use modular_core::dsp::phase_warp::PhaseWarp;
+    use modular_core::types::Connect;
     let mut sink = Vec::new();
-    Table::Identity.collect_cables(&mut sink);
+    PhaseWarp::Identity.collect_cables(&mut sink);
     assert!(sink.is_empty());
 }
 
@@ -443,29 +446,30 @@ fn inject_index_ptr_through_polysignal_reaches_inner_cables() {
 
 #[test]
 fn inject_index_ptr_through_table_pipe_reaches_nested_cables() {
+    use modular_core::dsp::phase_warp::PhaseWarp;
     use modular_core::poly::PolySignal;
-    use modular_core::types::{Connect, Table};
+    use modular_core::types::Connect;
     use std::cell::Cell;
 
     let cell = Cell::new(99usize);
     let ptr: *const Cell<usize> = &cell;
 
-    let mut table = Table::Pipe {
-        first: Box::new(Table::Bend {
+    let mut table = PhaseWarp::Pipe {
+        first: Box::new(PhaseWarp::Bend {
             amount: PolySignal::mono(Signal::cable("A", "out", 0)),
         }),
-        second: Box::new(Table::Sync {
+        second: Box::new(PhaseWarp::Sync {
             ratio: PolySignal::mono(Signal::cable("B", "out", 0)),
         }),
     };
     table.inject_index_ptr(ptr);
 
     // Reach into nested cables and verify both got the pointer.
-    if let Table::Pipe { first, second } = &table {
+    if let PhaseWarp::Pipe { first, second } = &table {
         for inner in [first.as_ref(), second.as_ref()] {
             let cable = match inner {
-                Table::Bend { amount } => amount.get(0),
-                Table::Sync { ratio } => ratio.get(0),
+                PhaseWarp::Bend { amount } => amount.get(0),
+                PhaseWarp::Sync { ratio } => ratio.get(0),
                 _ => panic!("unexpected inner variant"),
             };
             if let Some(Signal::Cable { index_ptr, .. }) = cable {
