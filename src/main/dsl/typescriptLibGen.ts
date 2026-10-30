@@ -306,31 +306,30 @@ interface SignalGroup {
 type Mono<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | PatternSource;
 
 /**
- * A phase-warp table descriptor produced by the \`$table.*\` helpers.
+ * A phase warp produced by the \`$phase.*\` helpers.
  *
- * Passed to modules that accept a \`Table\`-typed param (e.g. the
- * \`phase\` config field on \`$wavetable\`) to reshape a raw phase signal
- * before it is used to read a wavetable.
+ * Passed to modules that read a phase through a \`PhaseWarp\`-typed param
+ * (the \`phase\` param of \`$wavetable\`) to reshape the phase before it is
+ * used.
  *
- * Create one with \`$table.mirror\`, \`$table.bend\`, \`$table.sync\`,
- * \`$table.fold\`, or \`$table.pwm\` — do not construct directly.
+ * Create one with a \`$phase.*\` helper — do not construct directly.
  *
- * Tables are composable: \`table.pipe(next)\` feeds this table's output
- * phase into \`next\` as its input phase. Equivalent to passing \`next\`
- * as the optional second argument to any \`$table.*\` helper.
+ * Warps are composable: \`warp.pipe(fn)\` passes this warp to \`fn\` and
+ * returns the result, and the optional second argument to any \`$phase.*\`
+ * helper feeds this warp's output phase into that warp.
  */
-type TableDescriptor =
+type PhaseWarpDescriptor =
   | { readonly type: "mirror"; readonly amount: Signal }
   | { readonly type: "bend"; readonly amount: Signal }
   | { readonly type: "sync"; readonly ratio: Signal }
   | { readonly type: "fold"; readonly amount: Signal }
   | { readonly type: "pwm"; readonly width: Signal }
   | { readonly type: "identity" }
-  | { readonly type: "pipe"; readonly first: Table; readonly second: Table };
+  | { readonly type: "pipe"; readonly first: PhaseWarp; readonly second: PhaseWarp };
 
-type Table = TableDescriptor & {
-  /** Pass this table to \`pipeFn\` and return the result. Mirrors \`Collection.pipe\`. */
-  pipe<T>(pipeFn: (self: Table) => T): T;
+type PhaseWarp = PhaseWarpDescriptor & {
+  /** Pass this warp to \`pipeFn\` and return the result. Mirrors \`Collection.pipe\`. */
+  pipe<T>(pipeFn: (self: PhaseWarp) => T): T;
 };
 
 /**
@@ -2076,37 +2075,37 @@ function $cross(
 ): Collection;
 
 /**
- * Phase-warp table descriptors for modules that accept a {@link Table}
- * (e.g. the \`phase\` config field on \`$wavetable\`).
+ * Phase warps for modules that accept a {@link PhaseWarp} (the \`phase\`
+ * param of \`$wavetable\`).
  *
- * Each helper returns a {@link Table} whose inner signal-valued field
+ * Each helper returns a {@link PhaseWarp} whose inner signal-valued field
  * accepts a constant, a module output, or any other {@link Signal}.
  *
- * Tables compose via the optional second argument. \`.pipe(fn)\` passes
- * the table to \`fn\` and returns the result — same API as \`Collection.pipe\`.
+ * Warps compose via the optional second argument. \`.pipe(fn)\` passes
+ * the warp to \`fn\` and returns the result — same API as \`Collection.pipe\`.
  *
  * @example
- * // Compose two tables (mirror feeds into bend):
- * $table.mirror(0.5, $table.bend(0.3))
+ * // Compose two warps (mirror feeds into bend):
+ * $phase.mirror(0.5, $phase.bend(0.3))
  *
- * // Compose three tables left-to-right:
- * $table.mirror(0.5, $table.bend(0.3, $table.fold(0.2)))
+ * // Compose three warps left-to-right:
+ * $phase.mirror(0.5, $phase.bend(0.3, $phase.fold(0.2)))
  *
  * // Generic function application via .pipe:
- * const addBend = (t) => $table.bend(0.3, t)
- * $table.mirror(0.5).pipe(addBend)
+ * const addBend = (t) => $phase.bend(0.3, t)
+ * $phase.mirror(0.5).pipe(addBend)
  */
-declare const $table: {
+declare const $phase: {
     /** Reflect the phase around its midpoint by \`amount\` (0..1). */
-    mirror(amount: Poly<Signal>, next?: Table): Table;
+    mirror(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
     /** Bend the phase curve by \`amount\` (0..1 = linear..extreme). */
-    bend(amount: Poly<Signal>, next?: Table): Table;
+    bend(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
     /** Hard-sync: restart the phase every \`ratio\` of a cycle. */
-    sync(ratio: Poly<Signal>, next?: Table): Table;
+    sync(ratio: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
     /** Fold the phase back on itself by \`amount\`. */
-    fold(amount: Poly<Signal>, next?: Table): Table;
+    fold(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
     /** Pulse-width modulation warp with duty cycle \`width\` (0..1). */
-    pwm(width: Poly<Signal>, next?: Table): Table;
+    pwm(width: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
 };
 
 /**

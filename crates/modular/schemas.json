@@ -10153,7 +10153,7 @@
   },
   {
     "name": "$wavetable",
-    "documentation": "A band-limited wavetable oscillator.\n\nReads a pre-built mipmap pyramid (FFT-filtered frame copies) and\nselects a level appropriate for the playback frequency to suppress\naliasing. Frame position can be swept across multi-frame tables for\nclassic wavetable timbral sweeps, and an optional phase-warp `Table`\nreshapes the read phase before sampling.\n\n## Example\n\n```js\n$wavetable('c4', $wavs().tables.pad).out()\n$wavetable('c2', $wavs().tables.pad, $sine('0.2hz').range(0, 5)).out()\n```",
+    "documentation": "A band-limited wavetable oscillator.\n\nReads a pre-built mipmap pyramid (FFT-filtered frame copies) and\nselects a level appropriate for the playback frequency to suppress\naliasing. Frame position can be swept across multi-frame tables for\nclassic wavetable timbral sweeps, and an optional `PhaseWarp`\nreshapes the read phase before sampling.\n\n## Example\n\n```js\n$wavetable('c4', $wavs().tables.pad).out()\n$wavetable('c2', $wavs().tables.pad, $sine('0.2hz').range(0, 5)).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "WavetableOscParams",
@@ -10176,10 +10176,10 @@
           "default": "throughZero"
         },
         "phase": {
-          "description": "Optional phase-warp table applied before sampling.",
+          "description": "Optional phase warp applied before sampling, built with `$phase.*`.",
           "anyOf": [
             {
-              "$ref": "#/$defs/Table"
+              "$ref": "#/$defs/PhaseWarp"
             },
             {
               "type": "null"
@@ -10253,64 +10253,7 @@
             }
           ]
         },
-        "PolySignal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Signal"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
-            }
-          ]
-        },
-        "Signal": {
-          "anyOf": [
-            {
-              "type": "number",
-              "format": "double"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/SignalTaggedSchema"
-            }
-          ]
-        },
-        "SignalTaggedSchema": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "channel": {
-                  "type": "integer",
-                  "format": "uint",
-                  "default": 0,
-                  "minimum": 0
-                },
-                "module": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string",
-                  "const": "cable"
-                }
-              },
-              "required": [
-                "type",
-                "module",
-                "port"
-              ]
-            }
-          ]
-        },
-        "Table": {
+        "PhaseWarp": {
           "oneOf": [
             {
               "type": "object",
@@ -10408,10 +10351,10 @@
               "type": "object",
               "properties": {
                 "first": {
-                  "$ref": "#/$defs/Table"
+                  "$ref": "#/$defs/PhaseWarp"
                 },
                 "second": {
-                  "$ref": "#/$defs/Table"
+                  "$ref": "#/$defs/PhaseWarp"
                 },
                 "type": {
                   "type": "string",
@@ -10422,6 +10365,63 @@
                 "type",
                 "first",
                 "second"
+              ]
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
               ]
             }
           ]

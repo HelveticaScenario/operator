@@ -1,4 +1,4 @@
-//! Pure warp functions for table phase distortion.
+//! Pure phase-shaping functions behind the [`PhaseWarp`](super::PhaseWarp) variants.
 //!
 //! Each function has the signature `(x: f32, param: f32) -> f32`.
 //! `x` is a normalized phase in `[0, 1]`, the output is clamped to `[0, 1]`.
