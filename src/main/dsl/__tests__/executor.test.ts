@@ -1837,9 +1837,16 @@ describe('built-in modules', () => {
 // ─── FX modules ──────────────────────────────────────────────────────────────
 
 describe('fx modules', () => {
-    test('$crush', () => {
-        const patch = execPatch('$crush($sine("C4"), 3).out()');
-        expect(findModules(patch, '$crush').length).toBe(1);
+    test('$pWarp', () => {
+        const patch = execPatch(
+            '$pSine($pWarp($ramp("C4"), $phase.crush(3, $phase.feedback(1)))).out()',
+        );
+        const [warp] = findModules(patch, '$pWarp');
+        expect(warp.params.phase).toEqual({
+            type: 'pipe',
+            first: { type: 'crush', amount: 3 },
+            second: { type: 'feedback', amount: 1 },
+        });
     });
 
     test('$fold', () => {

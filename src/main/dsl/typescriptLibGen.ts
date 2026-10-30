@@ -309,8 +309,8 @@ type Mono<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | Pat
  * A phase warp produced by the \`$phase.*\` helpers.
  *
  * Passed to modules that read a phase through a \`PhaseWarp\`-typed param
- * (the \`phase\` param of \`$wavetable\`) to reshape the phase before it is
- * used.
+ * (the \`phase\` param of \`$wavetable\` and \`$pWarp\`) to reshape the
+ * phase before it is used.
  *
  * Create one with a \`$phase.*\` helper — do not construct directly.
  *
@@ -2079,7 +2079,7 @@ function $cross(
 
 /**
  * Phase warps for modules that accept a {@link PhaseWarp} (the \`phase\`
- * param of \`$wavetable\`).
+ * param of \`$wavetable\` and \`$pWarp\`).
  *
  * Each helper returns a {@link PhaseWarp} whose inner signal-valued field
  * accepts a constant, a module output, or any other {@link Signal}.

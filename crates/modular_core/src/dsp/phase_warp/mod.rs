@@ -84,7 +84,8 @@ pub struct ResolvedWarp {
     values: [f32; MAX_SIGNAL_STAGES],
 }
 
-/// A parameterized phase warp, used by modules that read a phase (`$wavetable`).
+/// A parameterized phase warp, used by modules that read a phase (`$wavetable`,
+/// `$pWarp`).
 ///
 /// JSON shape (serialized/deserialized):
 /// ```json

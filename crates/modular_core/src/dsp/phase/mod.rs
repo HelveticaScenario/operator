@@ -8,30 +8,19 @@ use std::collections::HashMap;
 use crate::params::ParamsDeserializer;
 use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
-pub mod crush;
-pub mod feedback;
-pub mod pulsar;
+pub mod p_warp;
 pub mod ramp;
 
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
-    crush::Crush::install_constructor(map);
-    feedback::Feedback::install_constructor(map);
-    pulsar::Pulsar::install_constructor(map);
+    p_warp::PWarp::install_constructor(map);
     ramp::Ramp::install_constructor(map);
 }
 
 pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer>) {
-    crush::Crush::install_params_deserializer(map);
-    feedback::Feedback::install_params_deserializer(map);
-    pulsar::Pulsar::install_params_deserializer(map);
+    p_warp::PWarp::install_params_deserializer(map);
     ramp::Ramp::install_params_deserializer(map);
 }
 
 pub fn schemas() -> Vec<ModuleSchema> {
-    vec![
-        crush::Crush::get_schema(),
-        feedback::Feedback::get_schema(),
-        pulsar::Pulsar::get_schema(),
-        ramp::Ramp::get_schema(),
-    ]
+    vec![p_warp::PWarp::get_schema(), ramp::Ramp::get_schema()]
 }

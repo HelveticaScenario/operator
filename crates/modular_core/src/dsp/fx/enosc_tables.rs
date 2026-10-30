@@ -1,4 +1,4 @@
-//! Lookup tables for ENOSC-based warp and twist effects.
+//! Lookup tables for the Ensemble Oscillator warp effects (fold, cheby, segment).
 //!
 //! Adapted from the 4ms Ensemble Oscillator.
 //! Copyright 4ms Company. Used under GPL v3.
@@ -254,23 +254,6 @@ pub fn aa_cheby(freq_norm: f32, amount: f32) -> f32 {
 pub fn aa_segment(freq_norm: f32, amount: f32) -> f32 {
     let base = (1.0 - 4.0 * freq_norm).max(0.0);
     amount * base * base * base
-}
-
-/// AA for feedback twist: `amount × max(1−2f, 0)²`.
-/// Quadratic rolloff.
-#[inline]
-pub fn aa_feedback(freq_norm: f32, amount: f32) -> f32 {
-    let base = (1.0 - 2.0 * freq_norm).max(0.0);
-    amount * base * base
-}
-
-/// AA for pulsar twist: `(amount−1) × max(1−2f, 0)¹⁶ + 1`.
-/// Very aggressive rolloff, preserving multiplier floor of 1.
-/// `amount` is the pulsar multiplier (1..64).
-#[inline]
-pub fn aa_pulsar(freq_norm: f32, amount: f32) -> f32 {
-    let base = (1.0 - 2.0 * freq_norm).max(0.0);
-    (amount - 1.0) * base.powi(16) + 1.0
 }
 
 #[cfg(test)]
