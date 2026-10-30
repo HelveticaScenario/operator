@@ -308,7 +308,8 @@ fn scale_and_shift_applies() {
 /// succeeds. Modules with all-optional params can use `{}`.
 fn minimal_params(module_type: &str) -> serde_json::Value {
     match module_type {
-        "$sine" | "$saw" | "$pulse" | "$supersaw" | "$ramp" | "$swell" => json!({ "freq": 0.0 }),
+        "$sine" | "$saw" | "$pulse" | "$supersaw" | "$ramp" | "$swell" | "$mi.formant"
+        | "$mi.zOsc" => json!({ "freq": 0.0 }),
         "$pSine" | "$pSaw" | "$pPulse" => json!({ "phase": 0.0 }),
         "$macro" => json!({ "freq": 0.0, "engine": "virtualAnalog" }),
         "$lpf" | "$hpf" | "$jup6f" | "$multimode" | "$apf" => {
