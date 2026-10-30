@@ -360,6 +360,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$lpg" | "$slew" | "$hold" | "$motionFollower" | "$quantizer" | "$unison" | "$rising"
         | "$falling" | "$stereoMix" | "$mixDown" => json!({ "input": 0.0 }),
         "$pWarp" => json!({ "input": 0.0, "phase": { "type": "identity" } }),
+        "$enosc" => json!({ "pitch": 0.0 }),
         "$track" => json!({ "keyframes": [] }),
         "$math" => json!({ "expression": "1+1" }),
         "$spread" => json!({ "min": -1.0, "max": 1.0, "count": 3 }),

@@ -36,22 +36,24 @@ fn fast_sine(x: f32) -> f32 {
 /// Wavefolding lookup table.
 /// Input is normalized phase [0, 1], output is folded value [-1, 1].
 /// Implements 6x overfolding with sine-based smoothing.
+///
+/// Entry `i` holds curve sample `i − 1` (entry 0 repeats sample 0), which puts
+/// the zero crossing on the centre entry so the fold is odd-symmetric: no DC,
+/// no even harmonics.
 pub static FOLD_TABLE: LazyLock<[f32; FOLD_SIZE]> = LazyLock::new(|| {
-    let mut table = [0.0f32; FOLD_SIZE];
-    let folds = 6.0f32;
-
-    for i in 0..FOLD_SIZE {
-        // Match reference: dynamic_data.cc fold generation
-        let x = i as f32 / (FOLD_SIZE - 3) as f32; // 0..1 (the -3 makes the curve symmetrical)
+    let curve = |i: usize| {
+        let folds = 6.0f32;
+        let x = i as f32 / (FOLD_SIZE - 3) as f32;
         let x = folds * (2.0 * x - 1.0); // -folds..folds
         let g = 1.0 / (1.0 + x.abs()); // gain envelope
-        let p = 16.0 / (2.0 * PI) * x * g;
-        // Wrap phase to [0, 1] — handles negative values correctly
-        let p = p.rem_euclid(1.0);
-        // Folded value: -g * (x + fast_sine(p))
-        table[i] = -g * (x + fast_sine(p));
-    }
+        let p = (16.0 / (2.0 * PI) * x * g).rem_euclid(1.0);
+        -g * (x + fast_sine(p))
+    };
 
+    let mut table = [0.0f32; FOLD_SIZE];
+    for (i, entry) in table.iter_mut().enumerate() {
+        *entry = curve(i.saturating_sub(1));
+    }
     table
 });
 
@@ -191,20 +193,27 @@ pub fn interpolate_segment(x: f32, amount: f32) -> f32 {
     s1 + frac * (s2 - s1)
 }
 
-/// Upper edge (in normalized `amount`) of the low-amount crossfade band.
-/// Below this, the folded output is blended with the dry signal; at and above
-/// it the output is fully folded. See [`lookup_fold`].
-const FOLD_FADE_IN: f32 = 0.02;
+/// At or below this `amount` the fold is a clean passthrough, as in the reference.
+const FOLD_BYPASS: f32 = 0.005;
+
+/// Width of the band above [`FOLD_BYPASS`] over which the output blends from dry
+/// to folded. Just above the bypass the fold is a near-unity linear gain
+/// (about 0.95), so the blend makes the hand-off continuous.
+const FOLD_BLEND: f32 = 0.005;
+
+/// The reference's mapping from a 0–1 warp knob to the fold `amount`:
+/// quadratic, with a floor that sits in the bypass.
+#[inline]
+pub fn fold_amount(knob: f32) -> f32 {
+    knob * knob * 0.9 + 0.004
+}
 
 /// Lookup folded value from table.
 /// `x` is input signal in [-1, 1].
-/// `amount` scales the folding intensity [0, 1].
+/// `amount` scales the folding intensity [0, 1]; see [`fold_amount`].
 #[inline]
 pub fn lookup_fold(x: f32, amount: f32) -> f32 {
-    // Exact-zero (or disconnected) amount is a clean passthrough — skip the
-    // table lookups. The crossfade below already returns `x` at amount 0, so
-    // this is purely a fast path, not a behavioural threshold (no discontinuity).
-    if amount <= 0.0 {
+    if amount <= FOLD_BYPASS {
         return x;
     }
 
@@ -219,26 +228,22 @@ pub fn lookup_fold(x: f32, amount: f32) -> f32 {
     let norm = interpolate_table(&*FOLD_MAX_TABLE, amount);
     let wet = folded * norm;
 
-    // The folded output does not converge to the dry signal as `amount` → 0
-    // (it tends toward a roughly constant value), so a hard switch to clean
-    // passthrough at a low-amount threshold would step discontinuously — an
-    // audible click as `amount` sweeps through it. Crossfade dry → wet over a
-    // short low-amount band with a smoothstep so the fold eases in continuously.
-    let t = (amount / FOLD_FADE_IN).clamp(0.0, 1.0);
+    let t = ((amount - FOLD_BYPASS) / FOLD_BLEND).clamp(0.0, 1.0);
     let blend = t * t * (3.0 - 2.0 * t);
     x + blend * (wet - x)
 }
 
-/// Per-effect anti-aliasing functions matching the 4ms Ensemble Oscillator.
-/// `freq_norm` = freq_hz / sample_rate (normalized frequency).
-/// Each function takes `(freq_norm, amount)` and returns the AA-scaled amount.
+// Per-effect anti-aliasing functions matching the 4ms Ensemble Oscillator.
+// `freq_norm` = freq_hz / sample_rate (normalized frequency). Each function takes
+// `(freq_norm, amount)` and returns the AA-scaled amount.
 
 /// AA for fold warp: `max(amount × max(1−8f, 0)⁴, 0.004)`.
-/// Most aggressive rolloff with floor to prevent silence.
+/// It is the steepest of the three rolloffs, and its floor lands in the fold's
+/// bypass.
 #[inline]
 pub fn aa_fold(freq_norm: f32, amount: f32) -> f32 {
     let base = (1.0 - 8.0 * freq_norm).max(0.0);
-    amount * base * base * base * base
+    (amount * base * base * base * base).max(0.004)
 }
 
 /// AA for cheby warp: `amount × max(1−6f, 0)`.
@@ -311,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_interpolate_segment_boundary_no_spike() {
-        // Regression: x=1.0 must not produce a spike (was returning 0.75 instead of 1.0)
+        // The boundary sample x=1.0 reads the last table point, not a spike.
         let y = interpolate_segment(1.0, 0.0);
         assert!(
             (y - 1.0).abs() < 0.001,
@@ -371,9 +376,8 @@ mod tests {
 
     #[test]
     fn test_fold_continuous_across_low_amounts() {
-        // Regression: the old hard passthrough threshold at amount=0.005 stepped
-        // discontinuously into the folded output (a ~0.55 jump → audible click).
-        // Sweep amount finely and assert no large single-step jump for any input.
+        // Sweeping amount finely through the bypass hand-off and the first folds
+        // never jumps by a large single step, for any input.
         let da = 0.0002_f32;
         for i in 0..5 {
             let x = -1.0 + i as f32 * 0.5; // -1, -0.5, 0, 0.5, 1
@@ -389,6 +393,34 @@ mod tests {
                 prev = cur;
                 a += da;
             }
+        }
+    }
+
+    #[test]
+    fn test_fold_is_odd_symmetric() {
+        for &amount in &[0.006f32, 0.05, 0.2, 0.5, 0.904] {
+            assert!(lookup_fold(0.0, amount).abs() < 1e-6, "amount {amount}");
+            for &x in &[0.1f32, 0.5, 1.0] {
+                let (pos, neg) = (lookup_fold(x, amount), lookup_fold(-x, amount));
+                assert!(
+                    (pos + neg).abs() < 1e-4,
+                    "fold({x}, {amount}) = {pos}, fold(-{x}) = {neg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fold_matches_reference_values() {
+        // Values from a float model of the reference `Distortion::warp<FOLD>`.
+        for &(x, amount, expected) in &[
+            (0.5f32, 0.2f32, -0.502f32),
+            (1.0, 0.2, -0.236),
+            (0.5, 0.9, -0.864),
+            (1.0, 0.9, -0.661),
+        ] {
+            let y = lookup_fold(x, amount);
+            assert!((y - expected).abs() < 2e-3, "fold({x}, {amount}) = {y}");
         }
     }
 }

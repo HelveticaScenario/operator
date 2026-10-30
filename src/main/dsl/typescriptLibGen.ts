@@ -15,6 +15,7 @@ import {
     qualifiesForDollarChain,
 } from './paramsSchema';
 import type { WavsFolderNode } from './executor';
+import { enoscScalePresets } from '../../shared/dsl/enoscScales';
 import {
     generateVideoChainInterfaces,
     generateVideoChainMembers,
@@ -309,8 +310,8 @@ type Mono<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | Pat
  * A phase warp produced by the \`$phase.*\` helpers.
  *
  * Passed to modules that read a phase through a \`PhaseWarp\`-typed param
- * (the \`phase\` param of \`$wavetable\` and \`$pWarp\`) to reshape the
- * phase before it is used.
+ * (the \`phase\` param of \`$wavetable\`, \`$enosc\` and \`$pWarp\`) to
+ * reshape the phase before it is used.
  *
  * Create one with a \`$phase.*\` helper — do not construct directly.
  *
@@ -334,6 +335,14 @@ type PhaseWarp = PhaseWarpDescriptor & {
   /** Pass this warp to \`pipeFn\` and return the result. Mirrors \`Collection.pipe\`. */
   pipe<T>(pipeFn: (self: PhaseWarp) => T): T;
 };
+
+/**
+ * A scale for \`$enosc\`'s \`scale\` param. Create one with a
+ * \`$enosc.scale.*\` helper — do not construct directly.
+ */
+type EnoscScale =
+  | { readonly type: Exclude<keyof typeof $enosc.scale, "custom"> }
+  | { readonly type: "custom"; readonly notes: readonly number[]; readonly repeatsOctave: boolean };
 
 /**
  * A buffer output reference — returned by \`$buffer()\`, passed to readers
@@ -2079,7 +2088,7 @@ function $cross(
 
 /**
  * Phase warps for modules that accept a {@link PhaseWarp} (the \`phase\`
- * param of \`$wavetable\` and \`$pWarp\`).
+ * param of \`$wavetable\`, \`$enosc\` and \`$pWarp\`).
  *
  * Each helper returns a {@link PhaseWarp} whose inner signal-valued field
  * accepts a constant, a module output, or any other {@link Signal}.
@@ -2733,6 +2742,49 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
     return lines;
 }
 
+/**
+ * `$enosc.scale.*`, merged into the `$enosc` module function: one constant
+ * per preset in the engine's `EnoscScale` schema, plus `custom`. The executor
+ * builds the values.
+ */
+function renderEnoscNamespace(schemas: Schemas): string[] {
+    const presets = enoscScalePresets(schemas).flatMap(({ name, description }) => [
+        `    /** ${description} */`,
+        `    readonly ${name}: EnoscScale;`,
+    ]);
+    return [
+        'export namespace $enosc {',
+        '  /**',
+        "   * The 4ms Ensemble Oscillator's scales for `$enosc`'s `scale` param:",
+        '   * its 12-TET and Octave banks as constants, and `custom`. A scale repeats',
+        '   * at its last note, which is the octave unless noted.',
+        '   *',
+        '   * @example',
+        "   * $enosc('c3', $enosc.scale.harm4to7).out()",
+        '   */',
+        '  export const scale: {',
+        ...presets,
+        '    /**',
+        "     * Your own scale, like the hardware's learn mode.",
+        '     *',
+        '     * @param notes Space-separated notes in semitones, in any order and',
+        '     * fractional if you like (`"0 3 7 10"`); the lowest is the scale\'s first',
+        '     * note. Up to 32 notes (31 when `repeatsOctave` is true), spanning at',
+        '     * most 150 semitones.',
+        '     * @param repeatsOctave `true` repeats the notes every octave (every',
+        '     * two octaves if they span more than one, and so on). `false` makes the',
+        '     * highest note the period the scale repeats at, so `"0 3 7"` repeats',
+        '     * every fifth.',
+        '     *',
+        '     * @example',
+        "     * $enosc('c3', $enosc.scale.custom('0 2 3 7 9', true)).out()",
+        '     */',
+        '    custom(notes: string, repeatsOctave: boolean): EnoscScale;',
+        '  };',
+        '}',
+    ];
+}
+
 export function generateDSL(schemas: Schemas): string {
     // Modules named with a leading `_` are internal, and $buffer has a custom
     // declaration below.
@@ -2757,6 +2809,11 @@ export function generateDSL(schemas: Schemas): string {
         lines.push('/** Global clock module running at 120 BPM by default. */');
         const clockReturnType = getFactoryReturnType(clockSchema);
         lines.push(`export const $clock: ${clockReturnType};`);
+    }
+
+    if (schemas.some((s) => s.name === '$enosc')) {
+        lines.push('');
+        lines.push(...renderEnoscNamespace(schemas));
     }
 
     const signalSchema = schemas.find((s) => s.name === '$signal');

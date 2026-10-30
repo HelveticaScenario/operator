@@ -85,7 +85,7 @@ pub struct ResolvedWarp {
 }
 
 /// A parameterized phase warp, used by modules that read a phase (`$wavetable`,
-/// `$pWarp`).
+/// `$pWarp`, `$enosc`).
 ///
 /// JSON shape (serialized/deserialized):
 /// ```json
