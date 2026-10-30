@@ -2789,7 +2789,7 @@ describe('$phase helpers', () => {
         );
     });
 
-    test('optional second param composes two tables into a pipe descriptor', () => {
+    test('optional second param composes two warps into a pipe descriptor', () => {
         const patch = execWithWavs(
             `$wavetable(0, $wavs().wt, 0, {
                 phase: $phase.mirror(0.5, $phase.bend(0.3))
@@ -2822,7 +2822,7 @@ describe('$phase helpers', () => {
         });
     });
 
-    test('.pipe passes table to closure and returns result', () => {
+    test('.pipe passes the warp to the closure and returns the result', () => {
         const patch = execWithWavs(
             `$wavetable(0, $wavs().wt, 0, {
                 phase: $phase.mirror(0.5).pipe(t => t)

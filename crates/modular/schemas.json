@@ -18291,7 +18291,7 @@
   },
   {
     "name": "$ramp",
-    "documentation": "Phase ramp generator.\n\nProduces a rising sawtooth phase signal from 0 to 1 at the given frequency.\nThis is the fundamental building block for phase-based synthesis:\nreshape it with `$pWarp` and a `$phase.*` warp, then feed it into a\nwaveshaper (e.g. `$pSine`) to produce audio.",
+    "documentation": "Phase ramp generator.\n\nProduces a rising sawtooth phase signal from 0 to 1 at the given frequency.\nReshape it with `$pWarp` and a `$phase.*` warp, then feed it into a\nwaveshaper (e.g. `$pSine`) to produce audio.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "RampParams",

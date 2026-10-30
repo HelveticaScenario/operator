@@ -140,7 +140,7 @@ fn evaluate_output_in_range_across_sweep() {
             let y = ev(t, x);
             assert!(
                 (0.0..=1.0).contains(&y),
-                "table variant output {} out of range for x={}",
+                "warp output {} out of range for x={}",
                 y,
                 x
             );

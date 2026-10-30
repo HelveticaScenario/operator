@@ -238,7 +238,8 @@ pub fn lookup_fold(x: f32, amount: f32) -> f32 {
 // `(freq_norm, amount)` and returns the AA-scaled amount.
 
 /// AA for fold warp: `max(amount × max(1−8f, 0)⁴, 0.004)`.
-/// Most aggressive rolloff; the floor lands in the fold's bypass.
+/// It is the steepest of the three rolloffs, and its floor lands in the fold's
+/// bypass.
 #[inline]
 pub fn aa_fold(freq_norm: f32, amount: f32) -> f32 {
     let base = (1.0 - 8.0 * freq_norm).max(0.0);

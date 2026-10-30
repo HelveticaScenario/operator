@@ -877,8 +877,7 @@ export function executePatchScript(
      *
      * Inner signal-valued fields are passed through `replaceSignals` so that
      * ModuleOutputs / Collections are converted to the same wire format used
-     * for module-factory params. This matches the existing mechanism used by
-     * `_setParam` in GraphBuilder.
+     * for module-factory params.
      *
      * Warps are composable: each returned descriptor has a `.pipe(fn)` method,
      * and the optional second argument to each helper feeds this warp's output

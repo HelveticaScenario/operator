@@ -554,7 +554,7 @@ pub trait Connect {
     fn connect(&mut self, patch: &Patch);
 
     /// Walk this value and push every producer module ID it references
-    /// (cables, buffer sources, table-internal signals) into `sink`.
+    /// (cables, buffer sources, signals inside phase warps) into `sink`.
     ///
     /// Used by graph_analysis to build SCC adjacency before module
     /// construction.
