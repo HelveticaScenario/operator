@@ -324,6 +324,9 @@ type PhaseWarpDescriptor =
   | { readonly type: "sync"; readonly ratio: Signal }
   | { readonly type: "fold"; readonly amount: Signal }
   | { readonly type: "pwm"; readonly width: Signal }
+  | { readonly type: "pulsar"; readonly amount: Signal }
+  | { readonly type: "crush"; readonly amount: Signal }
+  | { readonly type: "feedback"; readonly amount: Signal }
   | { readonly type: "identity" }
   | { readonly type: "pipe"; readonly first: PhaseWarp; readonly second: PhaseWarp };
 
@@ -2084,28 +2087,44 @@ function $cross(
  * Warps compose via the optional second argument. \`.pipe(fn)\` passes
  * the warp to \`fn\` and returns the result — same API as \`Collection.pipe\`.
  *
+ * \`pulsar\`, \`crush\` and \`feedback\` are the 4ms Ensemble Oscillator's
+ * twist modes. Every amount is a 0–5 knob (bend: -5..5). A warp can hold at
+ * most 8 stages, 4 of them \`feedback\`.
+ *
  * @example
  * // Compose two warps (mirror feeds into bend):
- * $phase.mirror(0.5, $phase.bend(0.3))
+ * $phase.mirror(2.5, $phase.bend(1.5))
  *
  * // Compose three warps left-to-right:
- * $phase.mirror(0.5, $phase.bend(0.3, $phase.fold(0.2)))
+ * $phase.mirror(2.5, $phase.bend(1.5, $phase.fold(1)))
  *
  * // Generic function application via .pipe:
- * const addBend = (t) => $phase.bend(0.3, t)
- * $phase.mirror(0.5).pipe(addBend)
+ * const addBend = (t) => $phase.bend(1.5, t)
+ * $phase.mirror(2.5).pipe(addBend)
  */
 declare const $phase: {
-    /** Reflect the phase around its midpoint by \`amount\` (0..1). */
+    /** Reflect the phase around its midpoint by \`amount\` (0–5). */
     mirror(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
-    /** Bend the phase curve by \`amount\` (0..1 = linear..extreme). */
+    /** Bend the phase curve by \`amount\` (-5..5; 0 is linear, negative bends the other way). */
     bend(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
-    /** Hard-sync: restart the phase every \`ratio\` of a cycle. */
+    /** Hard-sync: run the phase 1× to 16× faster, restarting each cycle (0–5). */
     sync(ratio: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
-    /** Fold the phase back on itself by \`amount\`. */
+    /** Fold the phase back on itself by \`amount\` (0–5). */
     fold(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
-    /** Pulse-width modulation warp with duty cycle \`width\` (0..1). */
+    /** Pulse-width modulation warp with duty cycle \`width\` (0–5; 2.5 is even). */
     pwm(width: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /**
+     * Pulsar: play each cycle up to 64× faster, then rest (0–5). Antialiased
+     * when the reading module knows its pitch.
+     */
+    pulsar(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /** Crush: XOR the phase with scaled copies of itself (0–5). */
+    crush(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
+    /**
+     * Feedback: offset the phase by a lowpassed sine of its own output (0–5).
+     * Each stage keeps its own state per channel or voice.
+     */
+    feedback(amount: Poly<Signal>, next?: PhaseWarp): PhaseWarp;
 };
 
 /**
