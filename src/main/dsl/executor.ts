@@ -869,7 +869,7 @@ export function executePatchScript(
 
     /**
      * $phase.* DSL helpers produce phase-warp descriptors for modules that
-     * accept a `PhaseWarp` (`$wavetable`, `$ensemble`, `$pWarp`).
+     * accept a `PhaseWarp` (`$wavetable`, `$enosc`, `$pWarp`).
      *
      * Each helper returns a plain JSON object whose shape matches the Rust
      * `PhaseWarp` deserializer (`#[serde(tag = "type", rename_all = "camelCase")]`).
@@ -925,6 +925,68 @@ export function executePatchScript(
         feedback: warpHelper('feedback', 'amount'),
     };
 
+    /**
+     * `$enosc.scale.*` holds the `EnoscScale` descriptors `$enosc`'s `scale`
+     * param takes: each preset is `{ type: <preset> }`, and `custom` returns
+     * `{ type: 'custom', notes, repeatsOctave }`. The engine validates them.
+     */
+    const enoscScalePresets = [
+        'octave',
+        'octaveFifth',
+        'major',
+        'minor',
+        'minorAdd4',
+        'quartal',
+        'miyako',
+        'fifths',
+        'fifthsMinor',
+        'chromatic',
+        'harm2to3',
+        'harm4to7',
+        'harm8to15',
+        'harmOdd',
+        'pythag3',
+        'pythag5',
+        'just4',
+        'just6',
+        'tet5',
+        'tet7',
+    ];
+    // Each preset is a getter, so every use gets its own descriptor object.
+    const enoscScale: Record<string, unknown> = {};
+    for (const type of enoscScalePresets) {
+        Object.defineProperty(enoscScale, type, {
+            get: () => ({ type }),
+            enumerable: true,
+        });
+    }
+    enoscScale.custom = (notes: string, repeatsOctave: boolean) => {
+        if (typeof notes !== 'string') {
+            throw new TypeError(
+                '$enosc.scale.custom: notes must be a space-separated string of semitones, e.g. "0 3 7"',
+            );
+        }
+        const values = notes.trim().split(/\s+/).filter(Boolean).map(Number);
+        if (values.some((v) => !Number.isFinite(v))) {
+            throw new TypeError(
+                `$enosc.scale.custom: "${notes}" is not a space-separated list of numbers`,
+            );
+        }
+        return {
+            type: 'custom',
+            notes: values,
+            repeatsOctave: repeatsOctave === true,
+        };
+    };
+    const enoscFactory = userNamespaceTree['$enosc'];
+    if (typeof enoscFactory === 'function') {
+        Object.defineProperty(enoscFactory, 'scale', {
+            value: Object.freeze(enoscScale),
+            enumerable: true,
+            configurable: true,
+        });
+    }
+
     const dslGlobals = {
         // Prefixed namespace tree (modules and namespaces, minus _clock)
         ...userNamespaceTree,
@@ -936,7 +998,7 @@ export function executePatchScript(
         // $p.s(source, scale) for scale-degree patterns (integer degrees
         // resolved through a scale string into voltage atoms for $cycle).
         $p,
-        // Phase-warp descriptors for $wavetable, $ensemble and $pWarp
+        // Phase-warp descriptors for $wavetable, $enosc and $pWarp
         $phase,
         // Collection helpers
         $c: builder.$c.bind(builder),

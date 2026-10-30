@@ -1,6 +1,6 @@
-//! `$ensemble` — the core of the 4ms Ensemble Oscillator: per channel, a bank of
-//! sine voices spread across a scale, with cross FM, a phase warp, and the
-//! fold/cheby/segment warps.
+//! `$enosc` — the core of the 4ms Ensemble Oscillator: per channel, a bank of
+//! sine voices spread across a scale, with cross FM, a phase warp, and a
+//! waveshaper.
 //!
 //! Adapted from the 4ms Ensemble Oscillator. Copyright 4ms Company. Used under
 //! GPL v3.
@@ -20,8 +20,8 @@ use crate::dsp::utils::sanitize;
 use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
 use crate::types::SwapGlide;
 
-use scale::{EnsembleScale, ScaleNotes};
-use voice::{EffectOrder, Voice, VoiceContext, WarpChain};
+use scale::{EnoscScale, ScaleNotes};
+use voice::{CONTROL_BLOCK, ControlContext, Voice, VoiceContext, WaveDist, WaveDistMode};
 
 /// Most voices per channel.
 const MAX_VOICES: usize = 16;
@@ -80,16 +80,14 @@ fn default_count() -> usize {
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
-struct EnsembleParams {
+struct EnoscParams {
     /// pitch in V/Oct of the scale's first note; every voice moves with it
     #[signal(type = pitch)]
     pitch: PolySignal,
-    /// the scale the voices sit on: an Ensemble Oscillator preset such as
-    /// "enosc.harm4-7" or "enosc.bp", notes as one V/Oct pitch per channel, or
-    /// a spec string like "C(major)" / "C[maj7]". Only the intervals above the
-    /// first note matter. Semitones if omitted.
+    /// the scale the voices sit on, built with `$enosc.scale.*`. Every
+    /// semitone if omitted.
     #[deserr(default)]
-    scale: Option<EnsembleScale>,
+    scale: Option<EnoscScale>,
     /// position of the lowest voice in V above **pitch**, quantized to
     /// **scale**; each voice above adds **spread**
     #[signal(default = 0.0)]
@@ -126,23 +124,14 @@ struct EnsembleParams {
     /// `$phase.*`
     #[deserr(default)]
     phase: Option<PhaseWarp>,
-    /// wavefold amount (0–5)
+    /// waveshaping amount (0–5)
     #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
-    fold: Option<PolySignal>,
-    /// Chebyshev waveshaping amount (0–5)
-    #[signal(default = 0.0, range = (0.0, 5.0))]
-    #[deserr(default)]
-    cheby: Option<PolySignal>,
-    /// triangle-segment waveshaping amount (0–5)
-    #[signal(default = 0.0, range = (0.0, 5.0))]
-    #[deserr(default)]
-    segment: Option<PolySignal>,
-    /// order of the fold (f), cheby (c) and segment (s) warps, e.g. "fcs"
-    /// (default) or "scf"
+    wave_dist: Option<PolySignal>,
+    /// the waveshaper **waveDist** drives: fold (default), cheby, or segment
     #[serde(default)]
     #[deserr(default)]
-    effect_order: EffectOrder,
+    wave_dist_mode: WaveDistMode,
     /// voices per channel (1–16, default 8)
     #[serde(default = "default_count")]
     #[deserr(default = default_count())]
@@ -152,7 +141,7 @@ struct EnsembleParams {
 /// As wide as the widest input. The scale is one shared set of notes, so it
 /// does not widen the module.
 #[allow(private_interfaces)]
-pub fn ensemble_derive_channel_count(params: &EnsembleParams) -> usize {
+pub fn enosc_derive_channel_count(params: &EnoscParams) -> usize {
     params
         .pitch
         .channels()
@@ -163,15 +152,13 @@ pub fn ensemble_derive_channel_count(params: &EnsembleParams) -> usize {
         .max(params.cross_fm.channel_count())
         .max(params.balance.channel_count())
         .max(params.phase.as_ref().map_or(0, PhaseWarp::channels))
-        .max(params.fold.channel_count())
-        .max(params.cheby.channel_count())
-        .max(params.segment.channel_count())
+        .max(params.wave_dist.channel_count())
         .clamp(1, PORT_MAX_CHANNELS)
 }
 
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct EnsembleOutputs {
+struct EnoscOutputs {
     #[output("output", "mix of every voice", default, range = (-5.0, 5.0))]
     output: PolyOutput,
     #[output("odd", "mix of voices 1, 3, 5, …", range = (-5.0, 5.0))]
@@ -196,21 +183,20 @@ struct ChannelState {
     voices: [Voice; MAX_VOICES],
     /// Voices that sounded on the previous sample; the rest restart silent.
     active_voices: usize,
+    /// Samples left in the current control block; 0 starts a new one.
+    control_left: usize,
     /// The highest voice's cross-FM output from the previous sample, for
     /// [`CrossFmMode::Down`].
     down_bus: f32,
     dc: [DcBlocker; OUTPUTS],
     cross_fm: SwapGlide,
     balance: SwapGlide,
-    fold: SwapGlide,
-    cheby: SwapGlide,
-    segment: SwapGlide,
+    wave_dist: SwapGlide,
     phase: PhaseWarpGlides,
 }
 
 #[derive(Default)]
-struct EnsembleState {
-    scale: ScaleNotes,
+struct EnoscState {
     inv_sample_rate: f32,
     dc_coeff: f32,
     crossfade_coef: f32,
@@ -225,13 +211,10 @@ struct EnsembleState {
 /// voices stack up the scale. **detune** pulls the voices apart by small,
 /// growing, alternating amounts.
 ///
-/// **scale** takes the Ensemble Oscillator's Octave and Free banks as presets
-/// (`enosc.harm2-3`, `enosc.harm4-7`, `enosc.harm8-15`, `enosc.harm-odd`,
-/// `enosc.pythag3`, `enosc.pythag5`, `enosc.just4`, `enosc.just6`,
-/// `enosc.5tet`, `enosc.7tet`, `enosc.fifths`, `enosc.mlt1`–`enosc.mlt4`,
-/// `enosc.bp`, `enosc.bp-major`, `enosc.bp-minor`, `enosc.alpha`,
-/// `enosc.beta`). Free scales repeat at their own interval (a fifth, a
-/// tritave, …) rather than the octave.
+/// **scale** takes the hardware's 12-TET and Octave scale banks from
+/// `$enosc.scale.*`, or `$enosc.scale.custom` for your own. A scale repeats at
+/// its last note, so some (`fifths`, `harmOdd`) repeat at intervals other than
+/// the octave.
 ///
 /// A voice whose root falls between two scale notes crossfades between them, so
 /// sweeping **root** or **spread** morphs smoothly from chord to chord;
@@ -239,43 +222,45 @@ struct EnsembleState {
 ///
 /// **crossFm** routes each voice's output into the others' phase (see
 /// **crossFmMode**), **phase** warps every oscillator's phase with a `$phase.*`
-/// warp, and **fold**, **cheby** and **segment** shape every voice's waveform in
-/// the order **effectOrder** gives. **balance** tilts the mix toward the low or
-/// high voices.
+/// warp, and **waveDist** shapes every voice's waveform with the waveshaper
+/// **waveDistMode** picks. **balance** tilts the mix toward the low or high
+/// voices.
 ///
 /// **output** is the mix of every voice; the other outputs split the voices the
 /// way the hardware's stereo modes do.
 ///
 /// ```js
-/// $ensemble('c3', 'C(minor)').out()
-/// $ensemble('c2', 'enosc.bp', { spread: 1, count: 6 }).out()
+/// $enosc('c3', $enosc.scale.minor).out()
+/// $enosc('c2', $enosc.scale.harm4to7, { spread: 1, count: 6 }).out()
+/// $enosc('c2', $enosc.scale.custom('0 2 3 7 9', true)).out()
 /// ```
 ///
 /// ```js
 /// // Stereo: odd voices left, even voices right, with pulsar and cross FM
-/// const e = $ensemble('a2', 'A(dorian)', {
+/// const e = $enosc('a2', $enosc.scale.just6, {
 ///   spread: $sine('0.05hz').range(1, 3),
 ///   crossFm: 1.5,
 ///   phase: $phase.pulsar(2),
-///   fold: 1,
+///   waveDist: 1,
+///   waveDistMode: 'cheby',
 /// })
 /// e.odd.out({ pan: -5 })
 /// e.even.out({ pan: 5 })
 /// ```
 #[module(
-    name = "$ensemble",
-    channels_derive = ensemble_derive_channel_count,
+    name = "$enosc",
+    channels_derive = enosc_derive_channel_count,
     has_init,
     args(pitch, scale)
 )]
-pub struct Ensemble {
-    outputs: EnsembleOutputs,
-    state: EnsembleState,
+pub struct Enosc {
+    outputs: EnoscOutputs,
+    state: EnoscState,
     channel_state: Box<[ChannelState]>,
-    params: EnsembleParams,
+    params: EnoscParams,
 }
 
-impl Ensemble {
+impl Enosc {
     /// Sample-rate-only constants and the random starting phases. Phases live in
     /// `channel_state`, which a patch update carries over channel by channel, so
     /// only fresh channels keep these.
@@ -284,8 +269,10 @@ impl Ensemble {
         // The reference's DC blocker pole is 0.995 at 48 kHz.
         self.state.dc_coeff = 0.995f32.powf(48_000.0 / sample_rate);
         // Matches the reference's crossfade glide: coefficient 0.1 applied 6,000
-        // times a second (once per 8 samples at 48 kHz), spread over every sample.
-        self.state.crossfade_coef = 1.0 - 0.9f32.powf(6_000.0 / sample_rate);
+        // times a second (once per 8 samples at 48 kHz), scaled to this
+        // module's control rate.
+        let control_rate = sample_rate / CONTROL_BLOCK as f32;
+        self.state.crossfade_coef = 1.0 - 0.9f32.powf(6_000.0 / control_rate);
         self.state.fade_inc = FadeIn::increment(DEFAULT_FADE_IN_SECS, sample_rate);
 
         let mut rng = LcgRng::default();
@@ -302,9 +289,11 @@ impl Ensemble {
     fn update(&mut self, sample_rate: f32) {
         let channels = self.channel_count();
         let params = &self.params;
-        let state = &mut self.state;
-        state.scale.update(params.scale.as_ref());
-        let scale = &state.scale;
+        let state = &self.state;
+        let scale = params
+            .scale
+            .as_ref()
+            .map_or(&ScaleNotes::CHROMATIC, |s| &s.0);
 
         let count = params.count.clamp(1, MAX_VOICES);
         let depth_scale = 6.0 / count as f32 * params.cross_fm_mode.depth_scale();
@@ -316,16 +305,36 @@ impl Ensemble {
                 for voice in &mut cs.voices[cs.active_voices..count] {
                     voice.restart();
                 }
+                cs.control_left = 0;
             }
             cs.active_voices = count;
 
             let knob = |v: f32| (v / 5.0).clamp(0.0, 1.0);
-            let pitch = sanitize(params.pitch.get_value(ch));
-            let root = sanitize(params.root.value_or_zero(ch));
-            let spread = knob(params.spread.value_or(ch, 2.5)) * 7.5 / 12.0;
-            let detune = knob(params.detune.value_or(ch, 1.5)).powi(4) * (10.0 / 16.0) / 12.0;
-            let crossfade = knob(params.crossfade.value_or(ch, 4.33));
-            let crossfade_factor = 0.5 * (1.0 - crossfade * crossfade);
+            if cs.control_left == 0 {
+                cs.control_left = CONTROL_BLOCK;
+                let pitch = sanitize(params.pitch.get_value(ch));
+                let root = sanitize(params.root.value_or_zero(ch));
+                let spread = knob(params.spread.value_or(ch, 2.5)) * 7.5 / 12.0;
+                let detune = knob(params.detune.value_or(ch, 1.5)).powi(4) * (10.0 / 16.0) / 12.0;
+                let crossfade = knob(params.crossfade.value_or(ch, 4.33));
+                let ctx = ControlContext {
+                    inv_sample_rate: state.inv_sample_rate,
+                    crossfade_factor: 0.5 * (1.0 - crossfade * crossfade),
+                    crossfade_coef: state.crossfade_coef,
+                };
+                let mut voice_root = root;
+                let mut detune_step = detune;
+                let mut detune_offset = 0.0f32;
+                for voice in &mut cs.voices[..count] {
+                    let pair = voice.pitch_pair(scale, voice_root);
+                    let offset = pitch + detune_offset;
+                    voice_root += spread;
+                    detune_step *= -1.2;
+                    detune_offset += detune_step;
+                    voice.control([pair.p1 + offset, pair.p2 + offset], pair.crossfade, &ctx);
+                }
+            }
+            cs.control_left -= 1;
 
             let cross_fm = cs.cross_fm.follow(
                 params.cross_fm.value_or_zero(ch),
@@ -343,15 +352,12 @@ impl Ensemble {
             let tilt = (balance / 5.0).clamp(-1.0, 1.0);
             let balance = f32::exp2(4.0 * tilt * tilt * tilt);
 
-            let glided = |glide: &mut SwapGlide, signal: &Option<PolySignal>| {
-                knob(glide.follow(signal.value_or_zero(ch), signal.glide_mark(ch), sample_rate))
-            };
-            let warps = WarpChain::new(
-                params.effect_order,
-                glided(&mut cs.fold, &params.fold),
-                glided(&mut cs.cheby, &params.cheby),
-                glided(&mut cs.segment, &params.segment),
+            let wave_dist = cs.wave_dist.follow(
+                params.wave_dist.value_or_zero(ch),
+                params.wave_dist.glide_mark(ch),
+                sample_rate,
             );
+            let wave_dist = WaveDist::new(params.wave_dist_mode, knob(wave_dist));
 
             let phase = params
                 .phase
@@ -359,12 +365,9 @@ impl Ensemble {
                 .map(|warp| (warp, warp.resolve(ch, sample_rate, &mut cs.phase)));
 
             let ctx = VoiceContext {
-                inv_sample_rate: state.inv_sample_rate,
                 phase,
-                warps,
+                wave_dist,
                 cross_fm,
-                crossfade_factor,
-                crossfade_coef: state.crossfade_coef,
                 fade_inc: state.fade_inc,
             };
 
@@ -372,19 +375,10 @@ impl Ensemble {
             let [all, odd, even, low, high, lowest, other] = &mut sums;
             let mut amplitude = 1.0f32;
             let mut amplitude_sum = 0.0f32;
-            let mut voice_root = root;
-            let mut detune_step = detune;
-            let mut detune_offset = 0.0f32;
             let mut bus = 0.0f32;
             let mut next_down_bus = 0.0f32;
 
             for (i, voice) in cs.voices[..count].iter_mut().enumerate() {
-                let pair = voice.pitch_pair(scale, voice_root);
-                let offset = pitch + detune_offset;
-                voice_root += spread;
-                detune_step *= -1.2;
-                detune_offset += detune_step;
-
                 let top = i == count - 1;
                 let mod_in = match params.cross_fm_mode {
                     CrossFmMode::Up | CrossFmMode::Chain if i == 0 => 0.0,
@@ -392,12 +386,7 @@ impl Ensemble {
                     CrossFmMode::Down if top => 0.0,
                     CrossFmMode::Down => cs.down_bus,
                 };
-                let (sample, mod_out) = voice.process(
-                    [pair.p1 + offset, pair.p2 + offset],
-                    pair.crossfade,
-                    mod_in,
-                    &ctx,
-                );
+                let (sample, mod_out) = voice.process(mod_in, &ctx);
                 match params.cross_fm_mode {
                     CrossFmMode::Up if i == 0 => bus = mod_out,
                     CrossFmMode::Chain => bus = mod_out,
@@ -453,4 +442,4 @@ impl Ensemble {
     }
 }
 
-message_handlers!(impl Ensemble {});
+message_handlers!(impl Enosc {});

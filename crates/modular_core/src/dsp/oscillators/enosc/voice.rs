@@ -17,98 +17,68 @@ use crate::dsp::utils::{sin_turns, voct_to_hz};
 
 use super::scale::{PitchPair, ScaleNotes};
 
-/// The order the fold (`f`), cheby (`c`) and segment (`s`) warps run in.
+/// Which waveshaper **waveDist** drives.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
-pub enum EffectOrder {
+pub enum WaveDistMode {
+    /// Wavefolding.
     #[default]
-    Fcs,
-    Fsc,
-    Cfs,
-    Csf,
-    Sfc,
-    Scf,
-}
-
-#[derive(Clone, Copy)]
-enum Warp {
     Fold,
+    /// Chebyshev polynomials, adding harmonics in turn.
     Cheby,
+    /// Triangle segments.
     Segment,
 }
 
-impl EffectOrder {
-    fn stages(self) -> [Warp; 3] {
-        use Warp::*;
-        match self {
-            EffectOrder::Fcs => [Fold, Cheby, Segment],
-            EffectOrder::Fsc => [Fold, Segment, Cheby],
-            EffectOrder::Cfs => [Cheby, Fold, Segment],
-            EffectOrder::Csf => [Cheby, Segment, Fold],
-            EffectOrder::Sfc => [Segment, Fold, Cheby],
-            EffectOrder::Scf => [Segment, Cheby, Fold],
-        }
-    }
-}
-
-/// The fold/cheby/segment chain applied to every oscillator's sine. Each amount
-/// is a 0–1 knob; a stage at 0 is the identity and is skipped.
+/// The waveshaper applied to every oscillator's sine, with its amount as a
+/// 0–1 knob. At 0 it is the identity and is skipped.
 #[derive(Clone, Copy)]
-pub(super) struct WarpChain {
-    stages: [Warp; 3],
-    /// Whether any stage is non-zero.
-    pub active: bool,
-    fold: f32,
-    cheby: f32,
-    segment: f32,
+pub(super) struct WaveDist {
+    mode: WaveDistMode,
+    amount: f32,
 }
 
-impl WarpChain {
-    pub fn new(order: EffectOrder, fold: f32, cheby: f32, segment: f32) -> Self {
-        Self {
-            stages: order.stages(),
-            active: fold > 0.0 || cheby > 0.0 || segment > 0.0,
-            fold,
-            cheby,
-            segment,
-        }
+impl WaveDist {
+    pub fn new(mode: WaveDistMode, amount: f32) -> Self {
+        Self { mode, amount }
+    }
+
+    pub fn active(&self) -> bool {
+        self.amount > 0.0
     }
 
     // Kept out of line: inlined, the table lookups bloat the oscillator loop
-    // and slow it down even while every stage is off.
+    // and slow it down even while it is off.
     #[inline(never)]
-    fn apply(&self, mut x: f32, freq_norm: f32) -> f32 {
-        for stage in self.stages {
-            x = match stage {
-                Warp::Fold if self.fold > 0.0 => {
-                    lookup_fold(x, aa_fold(freq_norm, fold_amount(self.fold)))
-                }
-                Warp::Cheby if self.cheby > 0.0 => {
-                    interpolate_cheby(x, aa_cheby(freq_norm, self.cheby))
-                }
-                Warp::Segment if self.segment > 0.0 => {
-                    interpolate_segment(x, aa_segment(freq_norm, self.segment))
-                }
-                _ => x,
-            };
+    fn apply(&self, x: f32, freq_norm: f32) -> f32 {
+        match self.mode {
+            WaveDistMode::Fold => lookup_fold(x, aa_fold(freq_norm, fold_amount(self.amount))),
+            WaveDistMode::Cheby => interpolate_cheby(x, aa_cheby(freq_norm, self.amount)),
+            WaveDistMode::Segment => interpolate_segment(x, aa_segment(freq_norm, self.amount)),
         }
-        x
     }
+}
+
+/// Samples per control block: pitch and crossfade update once per block.
+pub(super) const CONTROL_BLOCK: usize = 8;
+
+/// Settings shared by every voice of a channel for one control block.
+pub(super) struct ControlContext {
+    pub inv_sample_rate: f32,
+    /// How much of each interval is a hard step rather than a crossfade, 0–0.5.
+    pub crossfade_factor: f32,
+    /// Per-block coefficient of the crossfade lowpass.
+    pub crossfade_coef: f32,
 }
 
 /// Settings shared by every voice of a channel for one sample.
 pub(super) struct VoiceContext<'a> {
-    pub inv_sample_rate: f32,
     /// The phase warp with its stage values for this channel.
     pub phase: Option<(&'a PhaseWarp, ResolvedWarp)>,
-    pub warps: WarpChain,
+    pub wave_dist: WaveDist,
     /// Cross-FM depth, before per-oscillator antialiasing.
     pub cross_fm: f32,
-    /// How much of each interval is a hard step rather than a crossfade, 0–0.5.
-    pub crossfade_factor: f32,
-    /// Per-sample coefficient of the crossfade lowpass.
-    pub crossfade_coef: f32,
     pub fade_inc: f32,
 }
 
@@ -129,9 +99,13 @@ pub(super) struct Oscillator {
 #[derive(Clone, Copy)]
 pub(super) struct Voice {
     pub osc: [Oscillator; 2],
-    /// Lowpassed crossfade; `NaN` until the voice first sounds, so it starts on
-    /// its target.
+    /// Lowpassed crossfade at the end of the current block; `NaN` until the
+    /// voice first sounds, so it starts on its target.
     crossfade: f32,
+    /// This sample's crossfade, ramping linearly to `crossfade` by
+    /// `crossfade_step` per sample over the block.
+    crossfade_now: f32,
+    crossfade_step: f32,
     pub fade: FadeIn,
     /// The scale lookup for `pair_root` in scale generation `pair_generation`;
     /// a `NaN` root forces a fresh lookup.
@@ -149,6 +123,8 @@ impl Default for Voice {
         Self {
             osc: [osc; 2],
             crossfade: f32::NAN,
+            crossfade_now: 0.0,
+            crossfade_step: 0.0,
             fade: FadeIn::default(),
             pair: PitchPair {
                 p1: 0.0,
@@ -180,18 +156,9 @@ impl Voice {
         self.fade = FadeIn::default();
     }
 
-    /// Advance one sample. `pitches` are the pair's V/Oct pitches, `crossfade`
-    /// the scale position between them, and `mod_in` the incoming cross-FM
-    /// phase offset. Returns the voice's sample in `[-1, 1]` and its cross-FM
-    /// output.
-    #[inline]
-    pub fn process(
-        &mut self,
-        pitches: [f32; 2],
-        crossfade: f32,
-        mod_in: f32,
-        ctx: &VoiceContext,
-    ) -> (f32, f32) {
+    /// Start a control block. `pitches` are the pair's V/Oct pitches and
+    /// `crossfade` the scale position between them.
+    pub fn control(&mut self, pitches: [f32; 2], crossfade: f32, ctx: &ControlContext) {
         // Shape the crossfade so that notes are easier to find: the middle
         // `1 − 2·factor` of each interval fades, the rest holds a note.
         let width = 1.0 - 2.0 * ctx.crossfade_factor;
@@ -202,17 +169,39 @@ impl Voice {
         } else {
             1.0
         };
-        let cf = if self.crossfade.is_nan() {
-            target
+        let (from, to) = if self.crossfade.is_nan() {
+            (target, target)
         } else {
             let next = self.crossfade + (target - self.crossfade) * ctx.crossfade_coef;
-            if (target - next).abs() < 1e-6 {
+            let next = if (target - next).abs() < 1e-6 {
                 target
             } else {
                 next
-            }
+            };
+            (self.crossfade, next)
         };
-        self.crossfade = cf;
+        self.crossfade = to;
+        self.crossfade_now = from;
+        self.crossfade_step = (to - from) / CONTROL_BLOCK as f32;
+
+        for (osc, pitch) in self.osc.iter_mut().zip(pitches) {
+            if pitch != osc.pitch {
+                let f = voct_to_hz(pitch) * ctx.inv_sample_rate;
+                let rolloff = (1.0 - 2.0 * f).max(0.0);
+                osc.pitch = pitch;
+                osc.freq_norm = f;
+                osc.nyquist_fade = (1.0 - 4.0 * f * f).max(0.0);
+                osc.fm_rolloff = rolloff * rolloff;
+            }
+        }
+    }
+
+    /// Advance one sample. `mod_in` is the incoming cross-FM phase offset.
+    /// Returns the voice's sample in `[-1, 1]` and its cross-FM output.
+    #[inline]
+    pub fn process(&mut self, mod_in: f32, ctx: &VoiceContext) -> (f32, f32) {
+        self.crossfade_now += self.crossfade_step;
+        let cf = self.crossfade_now;
 
         // The silent oscillator follows the sounding one, so it fades in
         // phase-aligned.
@@ -225,15 +214,7 @@ impl Voice {
         let fades = [1.0 - cf, cf];
         let mut sample = 0.0;
         let mut mod_out = 0.0;
-        for ((osc, pitch), fade) in self.osc.iter_mut().zip(pitches).zip(fades) {
-            if pitch != osc.pitch {
-                let f = voct_to_hz(pitch) * ctx.inv_sample_rate;
-                let rolloff = (1.0 - 2.0 * f).max(0.0);
-                osc.pitch = pitch;
-                osc.freq_norm = f;
-                osc.nyquist_fade = (1.0 - 4.0 * f * f).max(0.0);
-                osc.fm_rolloff = rolloff * rolloff;
-            }
+        for (osc, fade) in self.osc.iter_mut().zip(fades) {
             let f = osc.freq_norm;
             osc.phase += f;
             osc.phase -= osc.phase.floor();
@@ -249,8 +230,8 @@ impl Voice {
                     p = warp.evaluate(p, resolved, f, &mut osc.warp);
                 }
                 s = sin_turns(p);
-                if ctx.warps.active {
-                    s = ctx.warps.apply(s, f);
+                if ctx.wave_dist.active() {
+                    s = ctx.wave_dist.apply(s, f);
                 }
                 s *= fade;
             }

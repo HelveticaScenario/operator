@@ -10152,26 +10152,15 @@
     ]
   },
   {
-    "name": "$ensemble",
-    "documentation": "A bank of sine voices on a scale, after the 4ms Ensemble Oscillator.\n\nEach channel is a whole ensemble of **count** voices playing **scale** from\n**pitch**. The lowest voice sits **root** above it, quantized to the scale;\neach voice above adds **spread** to the root before quantizing, so the\nvoices stack up the scale. **detune** pulls the voices apart by small,\ngrowing, alternating amounts.\n\n**scale** takes the Ensemble Oscillator's Octave and Free banks as presets\n(`enosc.harm2-3`, `enosc.harm4-7`, `enosc.harm8-15`, `enosc.harm-odd`,\n`enosc.pythag3`, `enosc.pythag5`, `enosc.just4`, `enosc.just6`,\n`enosc.5tet`, `enosc.7tet`, `enosc.fifths`, `enosc.mlt1`–`enosc.mlt4`,\n`enosc.bp`, `enosc.bp-major`, `enosc.bp-minor`, `enosc.alpha`,\n`enosc.beta`). Free scales repeat at their own interval (a fifth, a\ntritave, …) rather than the octave.\n\nA voice whose root falls between two scale notes crossfades between them, so\nsweeping **root** or **spread** morphs smoothly from chord to chord;\n**crossfade** narrows the fade until the voices step from note to note.\n\n**crossFm** routes each voice's output into the others' phase (see\n**crossFmMode**), **phase** warps every oscillator's phase with a `$phase.*`\nwarp, and **fold**, **cheby** and **segment** shape every voice's waveform in\nthe order **effectOrder** gives. **balance** tilts the mix toward the low or\nhigh voices.\n\n**output** is the mix of every voice; the other outputs split the voices the\nway the hardware's stereo modes do.\n\n```js\n$ensemble('c3', 'C(minor)').out()\n$ensemble('c2', 'enosc.bp', { spread: 1, count: 6 }).out()\n```\n\n```js\n// Stereo: odd voices left, even voices right, with pulsar and cross FM\nconst e = $ensemble('a2', 'A(dorian)', {\n  spread: $sine('0.05hz').range(1, 3),\n  crossFm: 1.5,\n  phase: $phase.pulsar(2),\n  fold: 1,\n})\ne.odd.out({ pan: -5 })\ne.even.out({ pan: 5 })\n```",
+    "name": "$enosc",
+    "documentation": "A bank of sine voices on a scale, after the 4ms Ensemble Oscillator.\n\nEach channel is a whole ensemble of **count** voices playing **scale** from\n**pitch**. The lowest voice sits **root** above it, quantized to the scale;\neach voice above adds **spread** to the root before quantizing, so the\nvoices stack up the scale. **detune** pulls the voices apart by small,\ngrowing, alternating amounts.\n\n**scale** takes the hardware's 12-TET and Octave scale banks from\n`$enosc.scale.*`, or `$enosc.scale.custom` for your own. A scale repeats at\nits last note, so some (`fifths`, `harmOdd`) repeat at intervals other than\nthe octave.\n\nA voice whose root falls between two scale notes crossfades between them, so\nsweeping **root** or **spread** morphs smoothly from chord to chord;\n**crossfade** narrows the fade until the voices step from note to note.\n\n**crossFm** routes each voice's output into the others' phase (see\n**crossFmMode**), **phase** warps every oscillator's phase with a `$phase.*`\nwarp, and **waveDist** shapes every voice's waveform with the waveshaper\n**waveDistMode** picks. **balance** tilts the mix toward the low or high\nvoices.\n\n**output** is the mix of every voice; the other outputs split the voices the\nway the hardware's stereo modes do.\n\n```js\n$enosc('c3', $enosc.scale.minor).out()\n$enosc('c2', $enosc.scale.harm4to7, { spread: 1, count: 6 }).out()\n$enosc('c2', $enosc.scale.custom('0 2 3 7 9', true)).out()\n```\n\n```js\n// Stereo: odd voices left, even voices right, with pulsar and cross FM\nconst e = $enosc('a2', $enosc.scale.just6, {\n  spread: $sine('0.05hz').range(1, 3),\n  crossFm: 1.5,\n  phase: $phase.pulsar(2),\n  waveDist: 1,\n  waveDistMode: 'cheby',\n})\ne.odd.out({ pan: -5 })\ne.even.out({ pan: 5 })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "EnsembleParams",
+      "title": "EnoscParams",
       "type": "object",
       "properties": {
         "balance": {
           "description": "level tilt across the voices: negative favours the lowest, positive the\nhighest, 0 is even",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "cheby": {
-          "description": "Chebyshev waveshaping amount (0–5)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -10226,22 +10215,6 @@
             }
           ]
         },
-        "effectOrder": {
-          "description": "order of the fold (f), cheby (c) and segment (s) warps, e.g. \"fcs\"\n(default) or \"scf\"",
-          "$ref": "#/$defs/EffectOrder",
-          "default": "fcs"
-        },
-        "fold": {
-          "description": "wavefold amount (0–5)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "phase": {
           "description": "phase warp applied to every oscillator before its sine, built with\n`$phase.*`",
           "anyOf": [
@@ -10269,21 +10242,10 @@
           ]
         },
         "scale": {
-          "description": "the scale the voices sit on: an Ensemble Oscillator preset such as\n\"enosc.harm4-7\" or \"enosc.bp\", notes as one V/Oct pitch per channel, or\na spec string like \"C(major)\" / \"C[maj7]\". Only the intervals above the\nfirst note matter. Semitones if omitted.",
+          "description": "the scale the voices sit on, built with `$enosc.scale.*`. Every\nsemitone if omitted.",
           "anyOf": [
             {
-              "$ref": "#/$defs/EnsembleScale"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "segment": {
-          "description": "triangle-segment waveshaping amount (0–5)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
+              "$ref": "#/$defs/EnoscScale"
             },
             {
               "type": "null"
@@ -10300,6 +10262,22 @@
               "type": "null"
             }
           ]
+        },
+        "waveDist": {
+          "description": "waveshaping amount (0–5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "waveDistMode": {
+          "description": "the waveshaper **waveDist** drives: fold (default), cheby, or segment",
+          "$ref": "#/$defs/WaveDistMode",
+          "default": "fold"
         }
       },
       "required": [
@@ -10326,25 +10304,271 @@
             }
           ]
         },
-        "EffectOrder": {
-          "description": "The order the fold (`f`), cheby (`c`) and segment (`s`) warps run in.",
-          "type": "string",
-          "enum": [
-            "fcs",
-            "fsc",
-            "cfs",
-            "csf",
-            "sfc",
-            "scf"
-          ]
-        },
-        "EnsembleScale": {
-          "anyOf": [
+        "EnoscScale": {
+          "oneOf": [
             {
-              "$ref": "#/$defs/Preset"
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "octave"
+                }
+              },
+              "required": [
+                "type"
+              ]
             },
             {
-              "$ref": "#/$defs/ScaleSignal"
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "octaveFifth"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "major"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "minor"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "minorAdd4"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "quartal"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "miyako"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "fifths"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "fifthsMinor"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "chromatic"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "harm2to3"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "harm4to7"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "harm8to15"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "harmOdd"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "pythag3"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "pythag5"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "just4"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "just6"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "tet5"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "tet7"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "notes": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "format": "float"
+                  }
+                },
+                "repeatsOctave": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "custom"
+                }
+              },
+              "required": [
+                "type",
+                "notes",
+                "repeatsOctave"
+              ]
             }
           ]
         },
@@ -10525,124 +10749,6 @@
             }
           ]
         },
-        "Preset": {
-          "description": "The Ensemble Oscillator's Octave and Free scale banks. Each lists its notes\nin semitones from the first, and the interval at which the scale repeats.",
-          "oneOf": [
-            {
-              "description": "Harmonics 2–3: root and perfect fifth.",
-              "type": "string",
-              "const": "enosc.harm2-3"
-            },
-            {
-              "description": "Harmonics 4–7.",
-              "type": "string",
-              "const": "enosc.harm4-7"
-            },
-            {
-              "description": "Harmonics 8–15.",
-              "type": "string",
-              "const": "enosc.harm8-15"
-            },
-            {
-              "description": "The odd harmonics up to 15, repeating every three octaves.",
-              "type": "string",
-              "const": "enosc.harm-odd"
-            },
-            {
-              "description": "Pythagorean do, fa, so.",
-              "type": "string",
-              "const": "enosc.pythag3"
-            },
-            {
-              "description": "Pythagorean do, re, fa, so, la.",
-              "type": "string",
-              "const": "enosc.pythag5"
-            },
-            {
-              "description": "Just 1, 4/3, 3/2, 5/3.",
-              "type": "string",
-              "const": "enosc.just4"
-            },
-            {
-              "description": "Just 1, 5/4, 4/3, 3/2, 5/3, 7/4.",
-              "type": "string",
-              "const": "enosc.just6"
-            },
-            {
-              "description": "5 equal steps per octave.",
-              "type": "string",
-              "const": "enosc.5tet"
-            },
-            {
-              "description": "7 equal steps per octave.",
-              "type": "string",
-              "const": "enosc.7tet"
-            },
-            {
-              "description": "A spiral of just perfect fifths.",
-              "type": "string",
-              "const": "enosc.fifths"
-            },
-            {
-              "description": "Messiaen's first mode of limited transposition: the whole-tone scale.",
-              "type": "string",
-              "const": "enosc.mlt1"
-            },
-            {
-              "description": "Messiaen's second mode: half step, whole step.",
-              "type": "string",
-              "const": "enosc.mlt2"
-            },
-            {
-              "description": "Messiaen's third mode.",
-              "type": "string",
-              "const": "enosc.mlt3"
-            },
-            {
-              "description": "Messiaen's fourth mode.",
-              "type": "string",
-              "const": "enosc.mlt4"
-            },
-            {
-              "description": "The Bohlen–Pierce scale: 13 equal steps per tritave (3:1).",
-              "type": "string",
-              "const": "enosc.bp"
-            },
-            {
-              "description": "The Bohlen–Pierce major triad, repeating every tritave.",
-              "type": "string",
-              "const": "enosc.bp-major"
-            },
-            {
-              "description": "The Bohlen–Pierce minor triad, repeating every tritave.",
-              "type": "string",
-              "const": "enosc.bp-minor"
-            },
-            {
-              "description": "Wendy Carlos's alpha scale: equal steps of 78 cents.",
-              "type": "string",
-              "const": "enosc.alpha"
-            },
-            {
-              "description": "Wendy Carlos's beta scale: equal steps of 63.8 cents.",
-              "type": "string",
-              "const": "enosc.beta"
-            }
-          ]
-        },
-        "ScaleSignal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ScaleSpec"
-            },
-            {
-              "$ref": "#/$defs/PolySignal"
-            }
-          ]
-        },
-        "ScaleSpec": {
-          "type": "string"
-        },
         "Signal": {
           "anyOf": [
             {
@@ -10684,6 +10790,26 @@
                 "module",
                 "port"
               ]
+            }
+          ]
+        },
+        "WaveDistMode": {
+          "description": "Which waveshaper **waveDist** drives.",
+          "oneOf": [
+            {
+              "description": "Wavefolding.",
+              "type": "string",
+              "const": "fold"
+            },
+            {
+              "description": "Chebyshev polynomials, adding harmonics in turn.",
+              "type": "string",
+              "const": "cheby"
+            },
+            {
+              "description": "Triangle segments.",
+              "type": "string",
+              "const": "segment"
             }
           ]
         }
@@ -10806,24 +10932,8 @@
         "maxValue": 5.0
       },
       {
-        "name": "fold",
-        "description": "wavefold amount (0–5)",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 5.0
-      },
-      {
-        "name": "cheby",
-        "description": "Chebyshev waveshaping amount (0–5)",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 5.0
-      },
-      {
-        "name": "segment",
-        "description": "triangle-segment waveshaping amount (0–5)",
+        "name": "waveDist",
+        "description": "waveshaping amount (0–5)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,

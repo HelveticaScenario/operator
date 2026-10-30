@@ -27,13 +27,6 @@ const HYSTERESIS_VOCT: f64 = 10.0 / 1200.0;
 #[derive(Clone)]
 pub struct ScaleSignal(PolySignal);
 
-impl ScaleSignal {
-    /// The scale's notes, one V/Oct pitch per channel.
-    pub fn signal(&self) -> &PolySignal {
-        &self.0
-    }
-}
-
 impl Connect for ScaleSignal {
     fn apply_default_connections(&mut self) {
         self.0.apply_default_connections();

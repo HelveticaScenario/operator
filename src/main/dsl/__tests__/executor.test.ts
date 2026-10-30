@@ -1797,22 +1797,32 @@ describe('fx modules', () => {
         });
     });
 
-    test('$ensemble', () => {
+    test('$enosc', () => {
         const patch = execPatch(
-            '$ensemble("c3", "C(minor)", { spread: 2, phase: $phase.pulsar(2), effectOrder: "scf" }).odd.out()',
+            '$enosc("c3", $enosc.scale.minor, { spread: 2, phase: $phase.pulsar(2), waveDist: 1, waveDistMode: "cheby" }).odd.out()',
         );
-        const [ensemble] = findModules(patch, '$ensemble');
-        expect(ensemble.params.phase).toEqual({ type: 'pulsar', amount: 2 });
-        expect(ensemble.params.effectOrder).toBe('scf');
-        // The scale spec string becomes a $chord feeding the scale.
-        expect(findModules(patch, '$chord').length).toBe(1);
+        const [enosc] = findModules(patch, '$enosc');
+        expect(enosc.params.scale).toEqual({ type: 'minor' });
+        expect(enosc.params.phase).toEqual({ type: 'pulsar', amount: 2 });
+        expect(enosc.params.waveDistMode).toBe('cheby');
     });
 
-    test('$ensemble takes a preset scale as-is', () => {
-        const patch = execPatch('$ensemble("c2", "enosc.bp-minor").out()');
-        const [ensemble] = findModules(patch, '$ensemble');
-        expect(ensemble.params.scale).toBe('enosc.bp-minor');
-        expect(findModules(patch, '$chord').length).toBe(0);
+    test('$enosc.scale.custom parses its notes', () => {
+        const patch = execPatch(
+            '$enosc("c2", $enosc.scale.custom(" 0 3.5  7 ", false)).out()',
+        );
+        const [enosc] = findModules(patch, '$enosc');
+        expect(enosc.params.scale).toEqual({
+            type: 'custom',
+            notes: [0, 3.5, 7],
+            repeatsOctave: false,
+        });
+    });
+
+    test('$enosc.scale.custom rejects non-numeric notes', () => {
+        expect(() =>
+            execPatch('$enosc("c2", $enosc.scale.custom("0 b3 7", true)).out()'),
+        ).toThrow(/not a space-separated list of numbers/);
     });
 
     test('$fold', () => {

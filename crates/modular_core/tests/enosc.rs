@@ -1,4 +1,4 @@
-//! `$ensemble`: pitch, quantization, spread, the split outputs, and an
+//! `$enosc`: pitch, quantization, spread, the split outputs, and an
 //! allocation-free audio path across its routing and warp options.
 
 mod block_common;
@@ -17,11 +17,11 @@ fn semis(n: f32) -> f32 {
     n / 12.0
 }
 
-fn build_ensemble(params: Value) -> Patch {
+fn build_enosc(params: Value) -> Patch {
     build(
         ProcessingMode::Sample,
         ProcessingMode::Sample,
-        "$ensemble",
+        "$enosc",
         params,
     )
 }
@@ -70,24 +70,18 @@ fn assert_hz(got: f32, expected: f32) {
 
 #[test]
 fn single_voice_plays_its_root() {
-    let patch = build_ensemble(json!({ "pitch": 0.0, "count": 1 }));
+    let patch = build_enosc(json!({ "pitch": 0.0, "count": 1 }));
     assert_hz(frequency(&render_port(&patch, "output", 0)), C4_HZ);
 }
 
 #[test]
 fn root_quantizes_to_the_scale() {
     // Hard steps: a root between C and D lands on the nearer note.
-    let c_major = [
-        0.0,
-        semis(2.0),
-        semis(4.0),
-        semis(5.0),
-        semis(7.0),
-        semis(9.0),
-        semis(11.0),
-    ];
+    let c_major = json!({
+        "type": "custom", "notes": [0, 2, 4, 5, 7, 9, 11], "repeatsOctave": true,
+    });
     for (root, expected) in [(semis(0.9), 0.0), (semis(1.2), 2.0), (semis(6.6), 7.0)] {
-        let patch = build_ensemble(json!({
+        let patch = build_enosc(json!({
             "pitch": 0.0, "root": root, "scale": c_major, "count": 1, "crossfade": 0.0,
         }));
         let hz = frequency(&render_port(&patch, "output", 0));
@@ -97,8 +91,8 @@ fn root_quantizes_to_the_scale() {
 
 #[test]
 fn pitch_transposes_after_quantization() {
-    let patch = build_ensemble(json!({
-        "pitch": semis(1.0), "scale": [0.0, semis(7.0)], "count": 1,
+    let patch = build_enosc(json!({
+        "pitch": semis(1.0), "scale": { "type": "octaveFifth" }, "count": 1,
     }));
     assert_hz(
         frequency(&render_port(&patch, "output", 0)),
@@ -107,37 +101,34 @@ fn pitch_transposes_after_quantization() {
 }
 
 #[test]
-fn the_scale_is_relative_to_its_first_note() {
-    // A minor from A3: three semitones up is C4.
+fn custom_scales_measure_from_their_lowest_note() {
+    // A minor's notes from A: three semitones above the lowest is C.
     let a3 = semis(-3.0);
-    let a_minor: Vec<f32> = [9.0, 11.0, 12.0, 14.0, 16.0, 17.0, 19.0]
-        .iter()
-        .map(|&n| semis(n))
-        .collect();
-    let patch = build_ensemble(json!({
-        "pitch": a3, "root": semis(3.0), "scale": a_minor, "count": 1, "crossfade": 0.0,
+    let patch = build_enosc(json!({
+        "pitch": a3, "root": semis(3.0), "count": 1, "crossfade": 0.0,
+        "scale": { "type": "custom", "notes": [9, 11, 12, 14, 16, 17, 19], "repeatsOctave": true },
     }));
     assert_hz(frequency(&render_port(&patch, "output", 0)), C4_HZ);
 }
 
 #[test]
-fn free_presets_repeat_at_their_period() {
-    // A Bohlen–Pierce major triad an octave and a half up sits a tritave plus
-    // its first interval up: 19.02 + 8.78 semitones.
-    let patch = build_ensemble(json!({
-        "pitch": semis(-24.0), "root": semis(27.0), "scale": "enosc.bp-major",
+fn scales_repeat_at_their_last_note() {
+    // The odd harmonics repeat every three octaves: three octaves and a just
+    // fifth up is the second note of the second period.
+    let patch = build_enosc(json!({
+        "pitch": semis(-36.0), "root": semis(36.0 + 7.019_55), "scale": { "type": "harmOdd" },
         "count": 1, "crossfade": 0.0,
     }));
     assert_hz(
         frequency(&render_port(&patch, "output", 0)),
-        C4_HZ * 2f32.powf((-24.0 + 19.019_55 + 8.778_254) / 12.0),
+        C4_HZ * 2f32.powf(7.019_55 / 12.0),
     );
 }
 
 #[test]
 fn spread_stacks_voices_up_the_scale() {
     // Spread 14/3 is 7 semitones per voice: C then G.
-    let patch = build_ensemble(json!({ "pitch": 0.0, "count": 2, "spread": 14.0 / 3.0 }));
+    let patch = build_enosc(json!({ "pitch": 0.0, "count": 2, "spread": 14.0 / 3.0 }));
     let [root, other] = render_ports(&patch, ["root", "other"], 0);
     assert_hz(frequency(&root), C4_HZ);
     assert_hz(frequency(&other), C4_HZ * 2f32.powf(7.0 / 12.0));
@@ -145,9 +136,9 @@ fn spread_stacks_voices_up_the_scale() {
 
 #[test]
 fn split_outputs_sum_to_the_mix() {
-    let patch = build_ensemble(json!({
+    let patch = build_enosc(json!({
         "pitch": -1.0, "count": 5, "spread": 2.0, "detune": 2.0, "balance": 2.0,
-        "crossFm": 1.0, "fold": 1.0,
+        "crossFm": 1.0, "waveDist": 1.0,
     }));
     let [output, odd, even, low, high, root, other] = render_ports(
         &patch,
@@ -178,8 +169,8 @@ fn split_outputs_sum_to_the_mix() {
 
 #[test]
 fn widest_input_sets_the_channel_count() {
-    let patch = build_ensemble(json!({
-        "pitch": [0.0, 1.0], "spread": [1.0, 2.0, 3.0], "scale": [0.0, 0.1, 0.2, 0.3],
+    let patch = build_enosc(json!({
+        "pitch": [0.0, 1.0], "spread": [1.0, 2.0, 3.0],
     }));
     let module = &patch.sampleables["dut"];
     assert_eq!(module.port_channels("output"), 3);
@@ -187,7 +178,7 @@ fn widest_input_sets_the_channel_count() {
 
 #[test]
 fn outputs_stay_bounded_across_options() {
-    for mode in ["up", "chain", "down"] {
+    for (mode, dist) in [("up", "fold"), ("chain", "cheby"), ("down", "segment")] {
         for phase in [
             json!({ "type": "pulsar", "amount": 3.0 }),
             json!({ "type": "feedback", "amount": 5.0 }),
@@ -195,11 +186,10 @@ fn outputs_stay_bounded_across_options() {
                     "first": { "type": "crush", "amount": 2.0 },
                     "second": { "type": "feedback", "amount": 2.0 } }),
         ] {
-            let patch = build_ensemble(json!({
+            let patch = build_enosc(json!({
                 "pitch": poly_cable("src", CHANNELS), "count": 16, "spread": 5.0,
                 "detune": 5.0, "crossFm": 5.0, "crossFmMode": mode, "phase": phase,
-                "fold": 5.0, "cheby": 5.0, "segment": 5.0, "effectOrder": "scf",
-                "balance": -5.0,
+                "waveDist": 5.0, "waveDistMode": dist, "balance": -5.0,
             }));
             for sample in render_port(&patch, "output", 1) {
                 assert!(
@@ -212,9 +202,12 @@ fn outputs_stay_bounded_across_options() {
 }
 
 #[test]
-fn rejects_an_unknown_effect_order() {
+fn rejects_an_unknown_wave_dist_mode_or_scale() {
     let deserializers = modular_core::dsp::get_params_deserializers();
-    assert!(deserializers["$ensemble"](json!({ "pitch": 0.0, "effectOrder": "ffc" })).is_err());
+    let parse = &deserializers["$enosc"];
+    assert!(parse(json!({ "pitch": 0.0, "waveDistMode": "crush" })).is_err());
+    assert!(parse(json!({ "pitch": 0.0, "scale": { "type": "lydian" } })).is_err());
+    assert!(parse(json!({ "pitch": 0.0, "scale": [0.0, 0.25] })).is_err());
 }
 
 #[test]
@@ -222,16 +215,17 @@ fn allocation_free() {
     for params in [
         json!({ "pitch": 0.0 }),
         json!({
-            "pitch": poly_cable("src", CHANNELS), "scale": [0.0, 0.25, 0.5],
+            "pitch": poly_cable("src", CHANNELS),
+            "scale": { "type": "custom", "notes": [0, 3, 6], "repeatsOctave": false },
             "spread": cable("lfo", 0), "detune": 3.0, "crossFm": cable("lfo", 1),
             "crossFmMode": "chain", "count": 16,
             "phase": { "type": "pipe",
                        "first": { "type": "feedback", "amount": cable("lfo", 2) },
                        "second": { "type": "pulsar", "amount": 2.0 } },
-            "fold": 2.0, "cheby": 2.0, "segment": cable("lfo", 3),
+            "waveDist": cable("lfo", 3), "waveDistMode": "segment",
         }),
-        json!({ "pitch": cable("src", 0), "scale": poly_cable("lfo", CHANNELS), "crossFmMode": "down", "crossFm": 2.0 }),
+        json!({ "pitch": cable("src", 0), "scale": { "type": "harm8to15" }, "crossFmMode": "down", "crossFm": 2.0 }),
     ] {
-        assert_eq!(allocations_while_rendering("$ensemble", params), 0);
+        assert_eq!(allocations_while_rendering("$enosc", params), 0);
     }
 }
