@@ -31,7 +31,12 @@ int main(int argc, char** argv) {
   dc_blocker[0].Init();
   dc_blocker[1].Init();
 
+  if (argc < 2) return 1;
   FILE* f = fopen(argv[1], "wb");
+  if (!f) {
+    perror(argv[1]);
+    return 1;
+  }
   const int blocks = 600;
   for (int b = 0; b < blocks; ++b) {
     const float t = float(b) / blocks;

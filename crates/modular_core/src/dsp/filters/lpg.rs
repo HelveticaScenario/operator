@@ -222,7 +222,7 @@ impl Lpg {
 
             let input = self.params.input.get_value(ch);
             let s = input * cs.vactrol;
-            let lp = cs.filter.process(s).lp;
+            let lp = cs.filter.low_pass(s);
             let gated = lp + (s - lp) * hf_bleed;
             self.outputs
                 .sample

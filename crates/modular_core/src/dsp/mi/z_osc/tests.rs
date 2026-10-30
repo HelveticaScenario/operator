@@ -98,3 +98,21 @@ fn sounds_the_same_at_any_rate() {
         );
     }
 }
+
+/// A carrier stalled just below zero holds its waveform still.
+#[test]
+fn holds_still_just_below_zero() {
+    let state = ZOscState::new(48000.0);
+    let mut voice = Voice::default();
+    let knobs = Knobs {
+        cutoff: (2.0, mark()),
+        shape: (1.0, mark()),
+        mode: (1.0, mark()),
+    };
+    voice.tick(-1e-9, knobs, 12.0, &state);
+    let out: Vec<f32> = (0..64).map(|_| voice.step(-1e-9, &state)).collect();
+    let ripple = out[8..]
+        .windows(2)
+        .fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
+    assert!(ripple < 1e-3, "ripple {ripple}");
+}

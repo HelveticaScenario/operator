@@ -53,7 +53,9 @@ impl ZOscillator {
         // formant runs backward too and restarts at the phase a forward half
         // cycle ends on.
         let whole_cycle = (self.carrier_phase - 0.5).abs() >= 0.25;
-        if self.discontinuity_phase >= 1.0 {
+        // A backward wrap can round to exactly 1, so only a forward carrier
+        // resets at 1.
+        if self.discontinuity_phase >= 1.0 && f0 > 0.0 {
             self.discontinuity_phase -= 1.0;
             let reset_time = self.discontinuity_phase / (2.0 * f0);
             let (c_before, c_after) = if whole_cycle { (1.0, 0.0) } else { (0.5, 0.5) };

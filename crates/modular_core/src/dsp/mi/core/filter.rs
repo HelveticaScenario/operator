@@ -49,12 +49,6 @@ pub struct Svf {
     state_2: f32,
 }
 
-/// One sample of every [`Svf`] response.
-#[derive(Clone, Copy)]
-pub struct SvfOutputs {
-    pub lp: f32,
-}
-
 impl Svf {
     /// Sets the frequency from `g = tan(π f)` and the resonance `q`.
     #[inline]
@@ -65,12 +59,12 @@ impl Svf {
     }
 
     #[inline(always)]
-    pub fn process(&mut self, x: f32) -> SvfOutputs {
+    pub fn low_pass(&mut self, x: f32) -> f32 {
         let hp = (x - self.r * self.state_1 - self.g * self.state_1 - self.state_2) * self.h;
         let bp = self.g * hp + self.state_1;
         self.state_1 = self.g * hp + bp;
         let lp = self.g * bp + self.state_2;
         self.state_2 = self.g * bp + lp;
-        SvfOutputs { lp }
+        lp
     }
 }

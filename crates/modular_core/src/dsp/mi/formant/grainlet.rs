@@ -52,8 +52,9 @@ impl GrainletPair {
 
         self.carrier_phase += f0;
         // Backward, a grain plays in reverse: its formant runs backward too and
-        // restarts at the phase a forward grain ends on.
-        if self.carrier_phase >= 1.0 {
+        // restarts at the phase a forward grain ends on. A backward wrap can
+        // round to exactly 1, so only a forward carrier resets at 1.
+        if self.carrier_phase >= 1.0 && f0 > 0.0 {
             self.carrier_phase -= 1.0;
             let reset_time = self.carrier_phase / f0;
             let carrier_before = carrier(1.0, self.shape.subsample(1.0 - reset_time));
