@@ -8,11 +8,12 @@
  */
 
 import { describe, expect, test } from 'vitest';
-import type { PatchGraph } from '@modular/core';
+import type { ModuleSchema, PatchGraph } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { assertControlsPlaced } from '../controls';
 import { type DSLExecutionResult, executePatchScript } from '../executor';
 import { FIRST_LINE_COLUMN_OFFSET } from '../../../shared/dsl/spanTypes';
+import { enoscScalePresets } from '../../../shared/dsl/enoscScales';
 import {
     isBeatPattern,
     isFastPattern,
@@ -1847,6 +1848,46 @@ describe('fx modules', () => {
             first: { type: 'crush', amount: 3 },
             second: { type: 'feedback', amount: 1 },
         });
+    });
+
+    test('$enosc', () => {
+        const patch = execPatch(
+            '$enosc("c3", $enosc.scale.minor, { spread: 2, phase: $phase.pulsar(2), cheby: 1, effectOrder: "scf" }).odd.out()',
+        );
+        const [enosc] = findModules(patch, '$enosc');
+        expect(enosc.params.scale).toEqual({ type: 'minor' });
+        expect(enosc.params.phase).toEqual({ type: 'pulsar', amount: 2 });
+        expect(enosc.params.effectOrder).toBe('scf');
+    });
+
+    test('$enosc.scale.custom parses its notes', () => {
+        const patch = execPatch(
+            '$enosc("c2", $enosc.scale.custom(" 0 3.5  7 ", false)).out()',
+        );
+        const [enosc] = findModules(patch, '$enosc');
+        expect(enosc.params.scale).toEqual({
+            type: 'custom',
+            notes: [0, 3.5, 7],
+            repeatsOctave: false,
+        });
+    });
+
+    test('$enosc.scale offers every preset the engine accepts', () => {
+        const presets = enoscScalePresets(schemas as ModuleSchema[]);
+        expect(presets.length).toBe(20);
+        const source = presets
+            .map(({ name }) => `$enosc("c2", $enosc.scale.${name}).out()`)
+            .join('\n');
+        const scales = findModules(execPatch(source), '$enosc').map(
+            (m) => m.params.scale,
+        );
+        expect(scales).toEqual(presets.map(({ name }) => ({ type: name })));
+    });
+
+    test('$enosc.scale.custom rejects non-numeric notes', () => {
+        expect(() =>
+            execPatch('$enosc("c2", $enosc.scale.custom("0 b3 7", true)).out()'),
+        ).toThrow(/not a space-separated list of numbers/);
     });
 
     test('$fold', () => {
