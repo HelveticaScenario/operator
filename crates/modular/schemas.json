@@ -10350,6 +10350,54 @@
             {
               "type": "object",
               "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "pulsar"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "crush"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "feedback"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
                 "first": {
                   "$ref": "#/$defs/PhaseWarp"
                 },

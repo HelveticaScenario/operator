@@ -2773,7 +2773,10 @@ describe('$phase helpers', () => {
         const patch = execWithWavs(
             `const a = $wavetable(0, $wavs().wt, 0, { phase: $phase.sync(1) }).out()
              const b = $wavetable(0, $wavs().wt, 0, { phase: $phase.fold(0.2) }).out()
-             const c = $wavetable(0, $wavs().wt, 0, { phase: $phase.pwm(0.5) }).out()`,
+             const c = $wavetable(0, $wavs().wt, 0, { phase: $phase.pwm(0.5) }).out()
+             const d = $wavetable(0, $wavs().wt, 0, { phase: $phase.pulsar(1) }).out()
+             const e = $wavetable(0, $wavs().wt, 0, { phase: $phase.crush(2) }).out()
+             const f = $wavetable(0, $wavs().wt, 0, { phase: $phase.feedback(3) }).out()`,
         ).patch;
         const warps = findModules(patch, '$wavetable').map(
             (m) => m.params.phase,
@@ -2783,6 +2786,9 @@ describe('$phase helpers', () => {
                 { type: 'sync', ratio: 1 },
                 { type: 'fold', amount: 0.2 },
                 { type: 'pwm', width: 0.5 },
+                { type: 'pulsar', amount: 1 },
+                { type: 'crush', amount: 2 },
+                { type: 'feedback', amount: 3 },
             ]),
         );
     });

@@ -942,6 +942,9 @@ export function executePatchScript(
         sync: warpHelper('sync', 'ratio'),
         fold: warpHelper('fold', 'amount'),
         pwm: warpHelper('pwm', 'width'),
+        pulsar: warpHelper('pulsar', 'amount'),
+        crush: warpHelper('crush', 'amount'),
+        feedback: warpHelper('feedback', 'amount'),
     };
 
     const dslGlobals = {
